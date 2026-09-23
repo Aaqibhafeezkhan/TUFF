@@ -1026,28 +1026,30 @@ public actor ServerModelSession: ServerInferenceBackend {
         let decoder = Self.assistantDecoder(
             tokenizer: tokenizer, tools: request.tools,
             reasoning: request.reasoning)
-        var stopMatcher = StreamingStopMatcher(stops: request.generationConfig.stopStrings)
-        var content = ""
-        var calls: [ParsedToolCall] = []
-        var decodingError: Error?
-        var shouldStop = false
+        // Local Swift 6.4 fix: mutable per-request decode state lives in a box so the
+        // progress callback can be sent to runRawCompletion (see ServerDecodeState).
+        let state = ServerDecodeState(
+            stopMatcher: StreamingStopMatcher(stops: request.generationConfig.stopStrings))
 
-        func handle(_ events: [StructuredAssistantEvent]) {
+        // Local Swift 6.4 fix: a @Sendable closure instead of a local func, which
+        // would inherit the actor isolation and make the progress callback
+        // actor-isolated as well.
+        let handle: @Sendable ([StructuredAssistantEvent]) -> Void = { events in
             for event in events {
                 switch event {
                 case .content(let text):
-                    let visible = stopMatcher.push(text)
+                    let visible = state.stopMatcher.push(text)
                     if !visible.isEmpty {
-                        content += visible
+                        state.content += visible
                         onEvent(.content(visible))
                     }
-                    if stopMatcher.isStopped { shouldStop = true }
+                    if state.stopMatcher.isStopped { state.shouldStop = true }
                 case .thinking:
                     // The Chat Completions endpoint does not expose a thought
                     // channel. It remains separate from visible content.
                     break
                 case .toolCall(let call):
-                    calls.append(call)
+                    state.calls.append(call)
                     onEvent(.toolCall(call))
                 }
             }
@@ -1064,8 +1066,8 @@ public actor ServerModelSession: ServerInferenceBackend {
             scratch: scratch,
             prefillConfig: prefillConfig,
             start: completionStart,
-            shouldStop: { shouldStop }) { progress in
-                guard decodingError == nil else { return }
+            shouldStop: { state.shouldStop }) { @Sendable progress in
+                guard state.decodingError == nil else { return }
                 do {
                     switch progress {
                     case .prefill:
@@ -1083,8 +1085,8 @@ public actor ServerModelSession: ServerInferenceBackend {
                         handle(events)
                     }
                 } catch {
-                    decodingError = error
-                    shouldStop = true
+                    state.decodingError = error
+                    state.shouldStop = true
                 }
         }
         // Stop tokens are intentionally not emitted as `.token` progress by
@@ -1092,13 +1094,13 @@ public actor ServerModelSession: ServerInferenceBackend {
         // boundary; Harmony's `<|call|>` is both the tool-payload terminator and
         // a stop token, so the structured decoder must consume the recorded
         // boundary explicitly before `finish()` validates its state.
-        if decodingError == nil {
+        if state.decodingError == nil {
             do {
                 for tokenID in result.uncommittedBoundaryTokenIDs {
                     handle(try decoder.consume(tokenID: tokenID, delta: ""))
                 }
             } catch {
-                decodingError = error
+                state.decodingError = error
             }
         }
         func structuredFailure(
@@ -1113,15 +1115,15 @@ public actor ServerModelSession: ServerInferenceBackend {
                     effectivePromptIDs: effectivePromptIDs,
                     result: result,
                     maxCompletionTokens: config.maxNewTokens,
-                    decodedCalls: calls.count,
-                    visibleBytes: content.utf8.count,
-                    stopStringMatched: stopMatcher.isStopped,
+                    decodedCalls: state.calls.count,
+                    visibleBytes: state.content.utf8.count,
+                    stopStringMatched: state.stopMatcher.isStopped,
                     toolStartID: tokenizer.toolCallStartID,
                     toolEndID: tokenizer.toolCallEndID,
                     toolResponseID: tokenizer.toolResponseID,
                     toolResponseEndID: tokenizer.toolResponseEndID))
         }
-        if let decodingError {
+        if let decodingError = state.decodingError {
             throw structuredFailure(
                 kind: .decoderConsume,
                 cause: .classify(decodingError))
@@ -1133,16 +1135,16 @@ public actor ServerModelSession: ServerInferenceBackend {
                 kind: .decoderFinish,
                 cause: .classify(error))
         }
-        if needsToolTemplate, result.reason == .toolCalls, calls.isEmpty {
+        if needsToolTemplate, result.reason == .toolCalls, state.calls.isEmpty {
             throw structuredFailure(kind: .orphanToolResponse, cause: .none)
         }
-        let tail = stopMatcher.finish()
+        let tail = state.stopMatcher.finish()
         if !tail.isEmpty {
-            content += tail
+            state.content += tail
             onEvent(.content(tail))
         }
         let reason: String
-        if !calls.isEmpty {
+        if !state.calls.isEmpty {
             reason = "tool_calls"
         } else if result.reason == .maxTokens {
             reason = "length"
@@ -1157,15 +1159,15 @@ public actor ServerModelSession: ServerInferenceBackend {
             promptCache.publish(
                 domain: promptCacheDomain,
                 request: request,
-                content: content,
-                calls: calls,
+                content: state.content,
+                calls: state.calls,
                 result: result,
-                stopStringFiltered: stopMatcher.isStopped)
+                stopStringFiltered: state.stopMatcher.isStopped)
         }
         completed = true
         return ServerCompletion(
-            content: content,
-            toolCalls: calls,
+            content: state.content,
+            toolCalls: state.calls,
             finishReason: reason,
             usage: OpenAIUsage(promptTokens: result.prefillTokens,
                                completionTokens: result.newTokens,
@@ -1213,5 +1215,22 @@ public actor ServerModelSession: ServerInferenceBackend {
         !request.tools.isEmpty || request.messages.contains {
             $0.role == .developer || $0.role == .tool || !$0.toolCalls.isEmpty
         }
+    }
+}
+
+/// Local Swift 6.4 fix: mutable per-request decode state shared between the
+/// progress callback and `ServerModelSession`'s generate method. Accessed
+/// sequentially by one task (the callback runs synchronously inside
+/// `runRawCompletion` while the actor method awaits it). Mirrors the
+/// author's own `ProgressState` in RealInferenceClient.swift.
+private final class ServerDecodeState: @unchecked Sendable {
+    var stopMatcher: StreamingStopMatcher
+    var content = ""
+    var calls: [ParsedToolCall] = []
+    var decodingError: Error?
+    var shouldStop = false
+
+    init(stopMatcher: StreamingStopMatcher) {
+        self.stopMatcher = stopMatcher
     }
 }

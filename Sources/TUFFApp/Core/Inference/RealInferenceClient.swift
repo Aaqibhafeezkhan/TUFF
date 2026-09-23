@@ -699,13 +699,13 @@ actor RealInferenceSession {
                 allowedTools: Set(request.tools.map(\.name)),
                 promptOpensThinking: StructuredAssistantDecoder.promptOpensThinking(
                     tokenizer: tokenizer, reasoning: request.reasoning))
-            var assistantDecodeError: Error?
-            var responseText = ""
-            func publishAssistantEvents(
-                _ events: [StructuredAssistantEvent],
-                index: Int,
-                elapsed: Double
-            ) {
+            // Local Swift 6.4 fix: decode error and response text live in
+            // `progress` (the existing ProgressState box), and the publisher is
+            // a @Sendable closure instead of a local func, which would inherit
+            // the actor isolation and make the progress callback actor-isolated.
+            let publishAssistantEvents: @Sendable (
+                [StructuredAssistantEvent], Int, Double
+            ) -> Void = { events, index, elapsed in
                 for event in events {
                     let token = { (text: String) in AppTokenEvent(
                         index: index,
@@ -714,7 +714,7 @@ actor RealInferenceSession {
                     }
                     switch event {
                     case .content(let text):
-                        responseText += text
+                        progress.responseText += text
                         continuation.yield(.token(token(text)))
                     case .thinking(let text):
                         continuation.yield(.thinking(token(text)))
@@ -728,7 +728,7 @@ actor RealInferenceSession {
                 producer: runner, tokenizer: tokenizer, promptIds: promptIds,
                 multimodalInput: multimodalInput,
                 config: config, context: ctx, scratch: scratch,
-                prefillConfig: prefillConfig, start: completionStart) { event in
+                prefillConfig: prefillConfig, start: completionStart) { @Sendable event in
                 switch event {
                 case .prefill(let done, let total):
                     if done == total {
@@ -740,36 +740,36 @@ actor RealInferenceSession {
                     if progress.firstTokenDate == nil { progress.firstTokenDate = Date() }
                     progress.generated = index + 1
                     if index % 8 == 0 { _ = memorySampler.sample() }
-                    guard assistantDecodeError == nil else { break }
+                    guard progress.assistantDecodeError == nil else { break }
                     do {
                         publishAssistantEvents(
                             try assistantDecoder.consume(
                                 tokenID: tokenID, delta: delta),
-                            index: index,
-                            elapsed: progress.elapsedDecodeSeconds)
+                            index,
+                            progress.elapsedDecodeSeconds)
                     } catch {
-                        assistantDecodeError = error
+                        progress.assistantDecodeError = error
                     }
                 case .tail(let text):
-                    guard assistantDecodeError == nil else { break }
+                    guard progress.assistantDecodeError == nil else { break }
                     do {
                         publishAssistantEvents(
                             try assistantDecoder.consumeTail(text),
-                            index: max(progress.generated - 1, 0),
-                            elapsed: progress.elapsedDecodeSeconds)
+                            max(progress.generated - 1, 0),
+                            progress.elapsedDecodeSeconds)
                     } catch {
-                        assistantDecodeError = error
+                        progress.assistantDecodeError = error
                     }
                 }
             }
-            if let assistantDecodeError { throw assistantDecodeError }
+            if let assistantDecodeError = progress.assistantDecodeError { throw assistantDecodeError }
             try assistantDecoder.finish()
             // An awaited completion must not publish into a session that was
             // unloaded or replaced while that completion was in flight.
             if self.loadedKey == requestKey, self.runner === runner {
                 promptReuse.record(result, hasImages: multimodalInput != nil,
                     request: conversationTrim.droppedTurns == 0 ? request : nil,
-                    response: responseText)
+                    response: progress.responseText)
             }
 
             let diagnostics = makeDiagnostics(request: request,
@@ -920,6 +920,9 @@ private final class ProgressState: @unchecked Sendable {
     var decodeStart: Date?
     var firstTokenDate: Date?
     var countersAtDecodeStart: RunnerCounterSnapshot?
+    // Local Swift 6.4 fix: moved here from locals in the generate method.
+    var assistantDecodeError: Error?
+    var responseText = ""
 
     var elapsedDecodeSeconds: Double {
         guard let decodeStart else { return 0 }
