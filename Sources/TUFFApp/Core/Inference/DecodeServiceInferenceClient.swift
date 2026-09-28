@@ -34,6 +34,15 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
         DecodeUnixSocket.ignoreSIGPIPEProcessWide()
     }
 
+    /// Connect an existing transport without launching a helper process.
+    convenience init(input: FileHandle, output: FileHandle) {
+        self.init()
+        connection.withLock {
+            $0.input = input
+            $0.responses = DecodeServiceResponseRouter(output: output)
+        }
+    }
+
     public func ensureLoaded(modelDirectory: URL, maxContextTokens: Int,
                              options: AppRuntimeOptions, forceLogitsHead: Bool,
                              onState: @escaping @Sendable (AppModelLoadState) -> Void) async throws {
