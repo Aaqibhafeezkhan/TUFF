@@ -699,10 +699,6 @@ actor RealInferenceSession {
                 allowedTools: Set(request.tools.map(\.name)),
                 promptOpensThinking: StructuredAssistantDecoder.promptOpensThinking(
                     tokenizer: tokenizer, reasoning: request.reasoning))
-            // Local Swift 6.4 fix: decode error and response text live in
-            // `progress` (the existing ProgressState box), and the publisher is
-            // a @Sendable closure instead of a local func, which would inherit
-            // the actor isolation and make the progress callback actor-isolated.
             let publishAssistantEvents: @Sendable (
                 [StructuredAssistantEvent], Int, Double
             ) -> Void = { events, index, elapsed in
@@ -910,8 +906,8 @@ actor RealInferenceSession {
 }
 
 /// Mutable per-generation state shared between the progress callback and the
-/// surrounding actor method. Single-threaded: the callback runs synchronously
-/// inside `runRawCompletion` on the session actor's task.
+/// surrounding actor method. Access is sequential: the callback runs synchronously
+/// inside `runRawCompletion` while the actor method awaits it.
 private final class ProgressState: @unchecked Sendable {
     var generated = 0
     var promptTokenCount: Int?
@@ -920,7 +916,6 @@ private final class ProgressState: @unchecked Sendable {
     var decodeStart: Date?
     var firstTokenDate: Date?
     var countersAtDecodeStart: RunnerCounterSnapshot?
-    // Local Swift 6.4 fix: moved here from locals in the generate method.
     var assistantDecodeError: Error?
     var responseText = ""
 

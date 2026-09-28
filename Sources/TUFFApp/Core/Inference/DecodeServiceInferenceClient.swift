@@ -150,11 +150,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                     var expectedSequence: UInt64 = 1
                     var lastMetricYield = Date.distantPast
                     var hasYieldedVisibleText = false
-                    // Snapshot text deltas are incremental. Throttling only
-                    // governs how often they are published; the skipped text
-                    // must be carried forward, not dropped, or a consumer that
-                    // accumulates `.token` events (the loopback server) sees
-                    // only the first chunk.
+                    // Preserve incremental text between throttled publications.
                     var pendingVisibleText = ""
                     while true {
                         let event = try await handles.responses.next(matching: generationID)

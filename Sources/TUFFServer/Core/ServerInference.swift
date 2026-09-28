@@ -1026,14 +1026,9 @@ public actor ServerModelSession: ServerInferenceBackend {
         let decoder = Self.assistantDecoder(
             tokenizer: tokenizer, tools: request.tools,
             reasoning: request.reasoning)
-        // Local Swift 6.4 fix: mutable per-request decode state lives in a box so the
-        // progress callback can be sent to runRawCompletion (see ServerDecodeState).
         let state = ServerDecodeState(
             stopMatcher: StreamingStopMatcher(stops: request.generationConfig.stopStrings))
 
-        // Local Swift 6.4 fix: a @Sendable closure instead of a local func, which
-        // would inherit the actor isolation and make the progress callback
-        // actor-isolated as well.
         let handle: @Sendable ([StructuredAssistantEvent]) -> Void = { events in
             for event in events {
                 switch event {
@@ -1218,11 +1213,8 @@ public actor ServerModelSession: ServerInferenceBackend {
     }
 }
 
-/// Local Swift 6.4 fix: mutable per-request decode state shared between the
-/// progress callback and `ServerModelSession`'s generate method. Accessed
-/// sequentially by one task (the callback runs synchronously inside
-/// `runRawCompletion` while the actor method awaits it). Mirrors the
-/// author's own `ProgressState` in RealInferenceClient.swift.
+/// Access is sequential: callbacks run synchronously inside `runRawCompletion`
+/// while the actor method awaits it; only then does the actor read the state.
 private final class ServerDecodeState: @unchecked Sendable {
     var stopMatcher: StreamingStopMatcher
     var content = ""
