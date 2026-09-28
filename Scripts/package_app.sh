@@ -124,7 +124,11 @@ done
 # uses; it never sets `MathImage.font`. SwiftMath loads the font by name the
 # first time a formula is drawn and stops the app if the file is missing, so
 # check for it here rather than in someone's chat.
-math_fonts="$app/Contents/Resources/SwiftMath_SwiftMath.bundle/mathFonts.bundle"
+math_resources="$app/Contents/Resources/SwiftMath_SwiftMath.bundle"
+if [[ -d "$math_resources/Contents/Resources" ]]; then
+  math_resources="$math_resources/Contents/Resources"
+fi
+math_fonts="$math_resources/mathFonts.bundle"
 for extension in otf plist; do
   if [[ ! -s "$math_fonts/latinmodern-math.$extension" ]]; then
     echo "SwiftMath is missing latinmodern-math.$extension" >&2
