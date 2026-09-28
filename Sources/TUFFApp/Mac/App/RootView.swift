@@ -202,6 +202,12 @@ struct RootView: View {
                         reduceTransparency: reduceTransparency,
                         material: .regular))
                     .ignoresSafeArea(.container, edges: [.top, .bottom, .leading])
+            } else if !reduceTransparency {
+                // The floating glass sidebar only refracts the window behind
+                // it, which is opaque, so on its own it reads as a solid panel.
+                // A behind-window blur lets the desktop show through it.
+                BehindWindowBlur()
+                    .ignoresSafeArea()
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) { brandHeader }
@@ -369,6 +375,19 @@ struct RootView: View {
         .accessibilityHint("Opens Models")
     }
 
+}
+
+/// The desktop behind the window, blurred, with the sidebar material's tint.
+private struct BehindWindowBlur: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .sidebar
+        view.blendingMode = .behindWindow
+        view.state = .followsWindowActiveState
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }
 
 /// Reports whether the hosting window is in full screen.

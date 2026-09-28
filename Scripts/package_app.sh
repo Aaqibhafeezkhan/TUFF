@@ -37,8 +37,26 @@ ruby Scripts/check_brand_assets.rb
 # dependencies. Disabling SwiftPM's command sandbox keeps release packaging
 # usable in restricted developer shells where the manifest sandbox cannot
 # create its compiler module cache.
-swift build -c release --disable-sandbox
-binary_directory="$(swift build -c release --disable-sandbox --show-bin-path)"
+#
+# The link has to be told the SDK with `-isysroot`. SwiftPM's Swift Build
+# backend (Swift 6.4) links through clang with `--sysroot` only, and clang
+# then records the deployment target as the SDK version: 5.0.2 shipped
+# stamped "SDK 15.0", so macOS ran it with the pre-Tahoe look instead of
+# Liquid Glass.
+sdk_path="$(xcrun --sdk macosx --show-sdk-path)"
+build_flags=(
+  -c release --disable-sandbox
+  -Xswiftc -Xclang-linker -Xswiftc -isysroot
+  -Xswiftc -Xclang-linker -Xswiftc "$sdk_path"
+)
+swift build "${build_flags[@]}"
+binary_directory="$(swift build "${build_flags[@]}" --show-bin-path)"
+linked_sdk="$(otool -l "$binary_directory/TUFF" \
+  | awk '/LC_BUILD_VERSION/ { found = 1 } found && $1 == "sdk" { print $2; exit }')"
+if [[ "${linked_sdk%%.*}" -lt 26 ]]; then
+  echo "TUFF was linked against SDK ${linked_sdk:-unknown}; macOS would show the legacy appearance" >&2
+  exit 1
+fi
 
 required_binaries=(
   TUFF
