@@ -141,6 +141,12 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                     var expectedSequence: UInt64 = 1
                     var lastMetricYield = Date.distantPast
                     var hasYieldedVisibleText = false
+                    // Snapshot text deltas are incremental. Throttling only
+                    // governs how often they are published; the skipped text
+                    // must be carried forward, not dropped, or a consumer that
+                    // accumulates `.token` events (the loopback server) sees
+                    // only the first chunk.
+                    var pendingVisibleText = ""
                     while true {
                         let event = try await handles.responses.next(matching: generationID)
                         // Only when the event carries a figure: an event
@@ -185,6 +191,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                             }
                             generationTranscriptMailbox.append(event.textDelta)
                             if event.textDelta.isEmpty { continue }
+                            pendingVisibleText += event.textDelta
                             let now = Date()
                             let beginsVisibleText = !hasYieldedVisibleText
                                 && event.textDelta.contains { !$0.isWhitespace }
@@ -194,12 +201,20 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                                 hasYieldedVisibleText = hasYieldedVisibleText || beginsVisibleText
                                 continuation.yield(.token(AppTokenEvent(
                                     index: max(0, event.tokenCount - 1),
-                                    textDelta: beginsVisibleText ? event.textDelta : "",
+                                    textDelta: pendingVisibleText,
                                     elapsedDecodeSeconds: event.decodeSeconds)))
+                                pendingVisibleText = ""
                             }
                             continue
                         }
 
+                        if !pendingVisibleText.isEmpty {
+                            continuation.yield(.token(AppTokenEvent(
+                                index: max(0, event.tokenCount - 1),
+                                textDelta: pendingVisibleText,
+                                elapsedDecodeSeconds: event.decodeSeconds)))
+                            pendingVisibleText = ""
+                        }
                         let diagnostics = Self.diagnostics(
                             event, options: request.runtimeOptions)
                         switch event.kind {
