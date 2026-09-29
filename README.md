@@ -230,7 +230,7 @@ rather than one matrix-vector product per token: the dense and shared MLPs,
 every routed expert (each expert's tokens gathered and projected together),
 GPT-OSS's MXFP4 experts and K/V projections, and Qwen 3.8 Flash Next's group-32
 projections. Blocks under 32 tokens, including speculative verification, keep
-the decode kernels. Measured on a 16 GB M2 against 5.2, with the same output:
+the decode kernels. Measured on a 16 GB M2 against 5.2 during development:
 
 | Model | Prompt | 5.2 prefill | 6.0 prefill |
 | --- | ---: | ---: | ---: |
@@ -240,6 +240,18 @@ the decode kernels. Measured on a 16 GB M2 against 5.2, with the same output:
 | Qwen 3.6 35B-A3B | 4,087 tokens | 58 s | 31 s |
 | Gemma 4 26B-A4B | 4,160 tokens | 102 s | 62 s |
 | Qwen 3.8 Flash Next | 983 tokens | 66 s | 42 s |
+
+The release build also sizes each matmul tile to its rows. A routed expert sees
+a handful of a chunk's tokens, so a 64-row tile spent most of its work on
+padding; it now gets an 8-, 16- or 32-row tile, and every tile dequantizes 8
+weights per load. GPT-OSS applies RoPE and picks its experts once per chunk
+rather than once per token. In alternating runs on a 1,000-token prompt this cut
+prefill again: Gemma 4 E4B 7.9 to 4.8 s, Gemma 4 12B QAT 28 to 23 s, Gemma 4
+26B-A4B 75 to 29 s, Qwen 3.6 55 to 36 s, and GPT-OSS 20B 72 to 48 s.
+
+Output matches 5.2 on these prompts except on Qwen 3.6 and Gemma 4 E2B, where
+the batched kernels' different summation order changes a word or two of the
+continuation.
 
 Decode reads each layer's routed experts after its router has run, so on a
 model whose experts stream from SSD the next layer used to wait for the read.
