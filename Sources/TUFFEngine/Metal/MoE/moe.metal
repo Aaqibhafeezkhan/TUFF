@@ -158,9 +158,14 @@ kernel void gptoss_router_top4(
     device uint* output_indices [[buffer(1)]],
     device half* output_weights [[buffer(2)]],
     constant uint& num_experts [[buffer(3)]],
-    uint tid [[thread_position_in_threadgroup]]
+    uint tid [[thread_position_in_threadgroup]],
+    uint row [[threadgroup_position_in_grid]]
 ) {
     if (tid != 0u) return;
+    // One threadgroup per token row; decode dispatches one.
+    logits += row * num_experts;
+    output_indices += row * 4u;
+    output_weights += row * 4u;
     uint top_indices[4] = { 0u, 0u, 0u, 0u };
     float top_scores[4] = { -INFINITY, -INFINITY, -INFINITY, -INFINITY };
     for (uint expert = 0; expert < num_experts; ++expert) {

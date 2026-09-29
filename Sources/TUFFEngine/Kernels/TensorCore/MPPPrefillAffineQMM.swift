@@ -8,7 +8,9 @@ import Metal
 /// Prefill used to run the dense and shared MLPs, and every projection of a
 /// group-32 checkpoint, as one GEMV per token. On a 16 GB M2 that was 96% of
 /// Gemma 4 E4B's prefill GPU time and about 30% of Qwen 3.8 Flash Next's.
-/// This reads each weight tile once per 64 tokens instead.
+/// This reads each weight tile once per tile of tokens instead, choosing an
+/// 8-, 16-, 32- or 64-row tile by the row count so a routed expert with a
+/// handful of tokens does not pay for a 64-row matmul.
 ///
 /// Nil where the MSL 4 tensor pipeline does not build (macOS 15, or a GPU
 /// whose compiler rejects MPP cooperative tensors); callers keep their
@@ -20,20 +22,32 @@ final class MPPPrefillAffineQMM {
 
     let bits: Int
     let groupSize: Int
-    private let pso: MTLComputePipelineState
+    /// Pipelines by tile shape, smallest M first. A routed expert sees a
+    /// handful of rows per chunk, where a 64-row tile is mostly padding.
+    private let tiles: [(rows: Int, columns: Int, pso: MTLComputePipelineState)]
 
-    init?(context: MetalContext, bits: Int, groupSize: Int) {
-        guard [4, 8].contains(bits), [32, 64].contains(groupSize) else { return nil }
-        let name = "mpp_prefill_affine_qmm_f16_w\(bits)g\(groupSize)"
-        guard let library = try? MetalContext.privateLibrary(device: context.device,
-                                                             module: "tensorops"),
-              let function = library.makeFunction(name: name),
-              let pso = try? context.device.makeComputePipelineState(function: function)
+    init?(context: MetalContext, bits: Int, groupSize: Int,
+          shapes: [(suffix: String, rows: Int, columns: Int)] = MPPPrefillAffineQMM.shapes) {
+        guard [4, 8].contains(bits), [32, 64].contains(groupSize),
+              let library = try? MetalContext.privateLibrary(device: context.device,
+                                                             module: "tensorops")
         else { return nil }
+        var tiles: [(rows: Int, columns: Int, pso: MTLComputePipelineState)] = []
+        for shape in shapes {
+            let name = "mpp_prefill_affine_qmm_f16_w\(bits)g\(groupSize)\(shape.suffix)"
+            guard let function = library.makeFunction(name: name),
+                  let pso = try? context.device.makeComputePipelineState(function: function)
+            else { return nil }
+            tiles.append((shape.rows, shape.columns, pso))
+        }
         self.bits = bits
         self.groupSize = groupSize
-        self.pso = pso
+        self.tiles = tiles
     }
+
+    static let shapes: [(suffix: String, rows: Int, columns: Int)] = [
+        ("_m8", 8, 64), ("_m16", 16, 64), ("_m32", 32, 32), ("", tileM, tileN),
+    ]
 
     /// Whether a projection of this shape can run here. K must fill whole
     /// 64-wide tiles; X and Y rows must be contiguous.
@@ -87,7 +101,8 @@ final class MPPPrefillAffineQMM {
                 x: MTLBuffer, xOffset: Int,
                 y: MTLBuffer, yOffset: Int,
                 m: Int, n: Int, k: Int) {
-        encoder.setComputePipelineState(pso)
+        let tile = tiles.first { m <= $0.rows } ?? tiles[tiles.count - 1]
+        encoder.setComputePipelineState(tile.pso)
         encoder.setBuffer(weights, offset: weightsOffset, index: 0)
         encoder.setBuffer(scales, offset: scalesOffset, index: 1)
         encoder.setBuffer(biases, offset: biasesOffset, index: 2)
@@ -98,10 +113,10 @@ final class MPPPrefillAffineQMM {
         encoder.setBytes(&nValue, length: MemoryLayout<UInt32>.size, index: 6)
         encoder.setBytes(&kValue, length: MemoryLayout<UInt32>.size, index: 7)
         encoder.dispatchThreadgroups(
-            MTLSize(width: (n + Self.tileN - 1) / Self.tileN,
-                    height: (m + Self.tileM - 1) / Self.tileM,
+            MTLSize(width: (n + tile.columns - 1) / tile.columns,
+                    height: (m + tile.rows - 1) / tile.rows,
                     depth: 1),
-            threadsPerThreadgroup: MTLSize(width: pso.threadExecutionWidth * 4,
+            threadsPerThreadgroup: MTLSize(width: tile.pso.threadExecutionWidth * 4,
                                            height: 1, depth: 1))
     }
 }

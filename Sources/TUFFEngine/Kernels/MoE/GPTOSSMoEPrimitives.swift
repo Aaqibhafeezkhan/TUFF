@@ -142,7 +142,8 @@ final class GPTOSSMoEPrimitives {
                           outputIndicesOffset: Int = 0,
                           outputWeights: MTLBuffer,
                           outputWeightsOffset: Int = 0,
-                          numExperts: UInt32) {
+                          numExperts: UInt32,
+                          rows: Int = 1) {
         precondition((4...128).contains(numExperts),
                      "GPT-OSS supports 4...128 routed experts")
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return }
@@ -153,7 +154,7 @@ final class GPTOSSMoEPrimitives {
         var expertCount = numExperts
         encoder.setBytes(&expertCount, length: MemoryLayout<UInt32>.size, index: 3)
         encoder.dispatchThreadgroups(
-            MTLSize(width: 1, height: 1, depth: 1),
+            MTLSize(width: rows, height: 1, depth: 1),
             threadsPerThreadgroup: MTLSize(width: 32, height: 1, depth: 1))
         encoder.endEncoding()
     }

@@ -13,6 +13,11 @@ import TUFFValidationSupport
         (8, 64, 70, 45, 192),
         (8, 32, 1, 33, 128),
         (4, 32, 129, 96, 640),
+        // Rows that select the 16- and 32-row tiles.
+        (4, 64, 16, 45, 192),
+        (4, 32, 9, 70, 256),
+        (8, 64, 30, 33, 128),
+        (4, 64, 33, 64, 192),
     ])
     func matchesTheCPUReference(_ c: (Int, Int, Int, Int, Int)) throws {
         let (bits, group, m, n, k) = c
@@ -67,14 +72,18 @@ import TUFFValidationSupport
         }
 
         let device = context.device
-        let wBuf = try #require(device.makeBuffer(bytes: packed, length: packed.count))
+        // .gturbo tensors are not 4-byte aligned; start some cases mid-word.
+        let weightsOffset = m % 3
+        let wBuf = try #require(device.makeBuffer(
+            bytes: [UInt8](repeating: 0xA5, count: weightsOffset) + packed,
+            length: weightsOffset + packed.count))
         let sBuf = try #require(device.makeBuffer(bytes: scales, length: scales.count * 2))
         let bBuf = try #require(device.makeBuffer(bytes: biases, length: biases.count * 2))
         let xBuf = try #require(device.makeBuffer(bytes: x, length: x.count * 2))
         let yBuf = try #require(device.makeBuffer(length: m * n * 2, options: .storageModeShared))
         let cb = try #require(context.queue.makeCommandBuffer())
         #expect(qmm.encode(commandBuffer: cb,
-                           weights: wBuf, weightsOffset: 0,
+                           weights: wBuf, weightsOffset: weightsOffset,
                            scales: sBuf, scalesOffset: 0,
                            biases: bBuf, biasesOffset: 0,
                            x: xBuf, y: yBuf, m: m, n: n, k: k))

@@ -112,13 +112,17 @@ kernel void mpp_prefill_affine_threadgroup_f16(
     }
 }
 
-// The same tiled MPP matmul for the other affine layouts TUFF ships: INT4 at
-// group 32 (Qwen 3.8 Flash Next) and INT8 at group 64 (Gemma 4 12B and MiniMax
-// M2.7 dense and shared MLPs). A 64-wide K tile is dequantized per element, so
-// each weight takes the scale and bias of its own group and a group smaller
-// than the tile needs no second pass. Output is Y[M, N] = X[M, K] * W[N, K]^T,
+// The tiled MPP matmul for every affine layout TUFF ships: INT4 at group 32
+// (Qwen 3.8 Flash Next) or 64, and INT8 at group 64 (Gemma 4 12B and MiniMax
+// M2.7 dense and shared MLPs). Each thread dequantizes 8 consecutive weights of
+// a 64-wide K tile from one 4- or 8-byte run and one scale and bias, so a
+// group smaller than the tile needs no second pass, and the matmul accumulates
+// in place across K tiles. TileM is 64, 32, 16 or 8: routed experts see a
+// handful of rows each, and a 64-row tile would spend most of its matmul on
+// padding. On a 16 GB M2 the smaller tiles run a 26B expert's 16 rows 3.4x and
+// Qwen 3.6's 8 rows 4.4x faster than the 64-row tile. Output is Y[M, N] = X[M, K] * W[N, K]^T,
 // the layout of the INT4 group-64 kernel above, which stays as it is.
-template <uint Bits, uint GroupSize>
+template <uint Bits, uint GroupSize, int TileM, int TileN>
 static inline void mpp_prefill_affine_qmm_f16_impl(
     device const uint8_t* packedWeights,
     device const bfloat* scales,
@@ -129,8 +133,9 @@ static inline void mpp_prefill_affine_qmm_f16_impl(
     uint3 tgid, uint lid, uint threads,
     threadgroup half* weightTile) {
     constexpr auto descriptor = matmul2d_descriptor(
-        kMPPAffineTileM, kMPPAffineTileN, kMPPAffineTileK,
-        false, true, false);
+        TileM, TileN, kMPPAffineTileK,
+        false, true, false,
+        matmul2d_descriptor::mode::multiply_accumulate);
     matmul2d<descriptor, execution_simdgroups<4>> operation;
 
     using device_half_tensor = tensor<device half, dextents<int32_t, 2>, tensor_inline>;
@@ -138,16 +143,14 @@ static inline void mpp_prefill_affine_qmm_f16_impl(
 
     threadgroup_half_tensor tileB(
         weightTile,
-        dextents<int32_t, 2>(kMPPAffineTileK, kMPPAffineTileN),
+        dextents<int32_t, 2>(kMPPAffineTileK, TileN),
         array<int32_t, 2>({1, kMPPAffineTileK}));
     device_half_tensor firstA(
         activations,
         dextents<int32_t, 2>(kMPPAffineTileK, M),
         array<int32_t, 2>({1, int32_t(K)}));
-    auto firstTileA = firstA.slice(0, int32_t(tgid.y) * kMPPAffineTileM);
+    auto firstTileA = firstA.slice(0, int32_t(tgid.y) * TileM);
     auto accumulator = operation.template get_destination_cooperative_tensor<
-        decltype(firstTileA), decltype(tileB), float>();
-    auto tileProduct = operation.template get_destination_cooperative_tensor<
         decltype(firstTileA), decltype(tileB), float>();
     for (int element = 0; element < accumulator.get_capacity(); ++element) {
         accumulator[element] = 0.0f;
@@ -156,29 +159,39 @@ static inline void mpp_prefill_affine_qmm_f16_impl(
     const uint rowBytes = K * Bits / 8u;
     const uint groupsPerRow = K / GroupSize;
     const uint kTiles = K / uint(kMPPAffineTileK);
+    constexpr uint chunksPerRow = uint(kMPPAffineTileK) / 8u;
     for (uint tile = 0; tile < kTiles; ++tile) {
-        for (int element = 0; element < tileProduct.get_capacity(); ++element) {
-            tileProduct[element] = 0.0f;
-        }
-        for (uint linear = lid;
-             linear < uint(kMPPAffineTileN * kMPPAffineTileK);
-             linear += threads) {
-            const uint localN = linear / uint(kMPPAffineTileK);
-            const uint localK = linear % uint(kMPPAffineTileK);
-            const uint globalN = tgid.x * uint(kMPPAffineTileN) + localN;
+        for (uint chunk = lid; chunk < uint(TileN) * chunksPerRow; chunk += threads) {
+            const uint localN = chunk / chunksPerRow;
+            const uint localK = (chunk % chunksPerRow) * 8u;
+            const uint globalN = tgid.x * uint(TileN) + localN;
+            threadgroup half4* destination =
+                (threadgroup half4*)(weightTile + localN * uint(kMPPAffineTileK) + localK);
             if (globalN < N) {
                 const uint globalK = tile * uint(kMPPAffineTileK) + localK;
-                uint q;
-                if (Bits == 4u) {
-                    const uint8_t packed = packedWeights[globalN * rowBytes + (globalK >> 1)];
-                    q = (globalK & 1u) == 0u ? uint(packed & 0x0fu) : uint(packed >> 4);
-                } else {
-                    q = uint(packedWeights[globalN * rowBytes + globalK]);
-                }
                 const uint group = globalN * groupsPerRow + globalK / GroupSize;
-                weightTile[linear] = half(fma(float(q), float(scales[group]), float(biases[group])));
+                const float scale = float(scales[group]);
+                const float bias = float(biases[group]);
+                float4 low, high;
+                if (Bits == 4u) {
+                    // Byte-aligned: .gturbo tensors are not 4-byte aligned.
+                    const uint packed = as_type<uint>(uchar4(*(device const packed_uchar4*)(
+                        packedWeights + globalN * rowBytes + (globalK >> 1))));
+                    low = float4(float(packed & 0xfu), float((packed >> 4) & 0xfu),
+                                 float((packed >> 8) & 0xfu), float((packed >> 12) & 0xfu));
+                    high = float4(float((packed >> 16) & 0xfu), float((packed >> 20) & 0xfu),
+                                  float((packed >> 24) & 0xfu), float(packed >> 28));
+                } else {
+                    device const packed_uchar4* packed = (device const packed_uchar4*)(
+                        packedWeights + globalN * rowBytes + globalK);
+                    low = float4(uchar4(packed[0]));
+                    high = float4(uchar4(packed[1]));
+                }
+                destination[0] = half4(fma(low, scale, bias));
+                destination[1] = half4(fma(high, scale, bias));
             } else {
-                weightTile[linear] = half(0.0f);
+                destination[0] = half4(0.0h);
+                destination[1] = half4(0.0h);
             }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -187,26 +200,23 @@ static inline void mpp_prefill_affine_qmm_f16_impl(
             activations + tile * uint(kMPPAffineTileK),
             dextents<int32_t, 2>(kMPPAffineTileK, M),
             array<int32_t, 2>({1, int32_t(K)}));
-        auto tileA = tileSourceA.slice(0, int32_t(tgid.y) * kMPPAffineTileM);
-        operation.run(tileA, tileB, tileProduct);
-        for (int element = 0; element < accumulator.get_capacity(); ++element) {
-            accumulator[element] += tileProduct[element];
-        }
+        auto tileA = tileSourceA.slice(0, int32_t(tgid.y) * TileM);
+        operation.run(tileA, tileB, accumulator);
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
     for (int element = 0; element < accumulator.get_capacity(); ++element) {
         if (!accumulator.is_valid_element(element)) continue;
         const auto position = accumulator.get_multidimensional_index(element);
-        const uint globalN = tgid.x * uint(kMPPAffineTileN) + uint(position[0]);
-        const uint globalM = tgid.y * uint(kMPPAffineTileM) + uint(position[1]);
+        const uint globalN = tgid.x * uint(TileN) + uint(position[0]);
+        const uint globalM = tgid.y * uint(TileM) + uint(position[1]);
         if (globalM < M && globalN < N) {
             output[globalM * N + globalN] = half(accumulator[element]);
         }
     }
 }
 
-#define TUFF_MPP_AFFINE_QMM_KERNEL(NAME, BITS, GROUP)                          \
+#define TUFF_MPP_AFFINE_QMM_KERNEL(NAME, BITS, GROUP, TM, TN)                  \
 kernel void NAME(                                                              \
     device const uint8_t* packedWeights [[buffer(0)]],                         \
     device const bfloat* scales         [[buffer(1)]],                         \
@@ -219,17 +229,24 @@ kernel void NAME(                                                              \
     uint3 tgid                          [[threadgroup_position_in_grid]],      \
     uint3 lid3                          [[thread_position_in_threadgroup]],    \
     uint3 threads3                      [[threads_per_threadgroup]]) {         \
-    threadgroup half weightTile[kMPPAffineTileN * kMPPAffineTileK];            \
-    mpp_prefill_affine_qmm_f16_impl<BITS, GROUP>(                              \
+    threadgroup half weightTile[(TN) * kMPPAffineTileK];                        \
+    mpp_prefill_affine_qmm_f16_impl<BITS, GROUP, TM, TN>(                      \
         packedWeights, scales, biases, activations, output, M, N, K,           \
         tgid, lid3.x, threads3.x, weightTile);                                 \
 }
 
-TUFF_MPP_AFFINE_QMM_KERNEL(mpp_prefill_affine_qmm_f16_w4g32, 4u, 32u)
-TUFF_MPP_AFFINE_QMM_KERNEL(mpp_prefill_affine_qmm_f16_w4g64, 4u, 64u)
-TUFF_MPP_AFFINE_QMM_KERNEL(mpp_prefill_affine_qmm_f16_w8g64, 8u, 64u)
-TUFF_MPP_AFFINE_QMM_KERNEL(mpp_prefill_affine_qmm_f16_w8g32, 8u, 32u)
+#define TUFF_MPP_AFFINE_QMM_LAYOUT(NAME, BITS, GROUP)                          \
+    TUFF_MPP_AFFINE_QMM_KERNEL(NAME, BITS, GROUP, 64, 32)                      \
+    TUFF_MPP_AFFINE_QMM_KERNEL(NAME##_m32, BITS, GROUP, 32, 32)                \
+    TUFF_MPP_AFFINE_QMM_KERNEL(NAME##_m16, BITS, GROUP, 16, 64)                \
+    TUFF_MPP_AFFINE_QMM_KERNEL(NAME##_m8, BITS, GROUP, 8, 64)
 
+TUFF_MPP_AFFINE_QMM_LAYOUT(mpp_prefill_affine_qmm_f16_w4g32, 4u, 32u)
+TUFF_MPP_AFFINE_QMM_LAYOUT(mpp_prefill_affine_qmm_f16_w4g64, 4u, 64u)
+TUFF_MPP_AFFINE_QMM_LAYOUT(mpp_prefill_affine_qmm_f16_w8g64, 8u, 64u)
+TUFF_MPP_AFFINE_QMM_LAYOUT(mpp_prefill_affine_qmm_f16_w8g32, 8u, 32u)
+
+#undef TUFF_MPP_AFFINE_QMM_LAYOUT
 #undef TUFF_MPP_AFFINE_QMM_KERNEL
 
 // GPT-OSS MXFP4 experts as a batched MPP matmul: Y[M, N] = X[M, K] * W[N, K]^T
@@ -242,40 +259,37 @@ static inline float mpp_mxfp4_e2m1(uint code) {
     return (code & 8u) == 0u ? value : -value;
 }
 
-kernel void mpp_prefill_mxfp4_qmm_f16(
-    device const uint8_t* packedWeights [[buffer(0)]],
-    device const uint8_t* scales        [[buffer(1)]],
-    device const bfloat* bias           [[buffer(2)]],
-    device half* activations            [[buffer(3)]],
-    device half* output                 [[buffer(4)]],
-    constant uint& M                    [[buffer(5)]],
-    constant uint& N                    [[buffer(6)]],
-    constant uint& K                    [[buffer(7)]],
-    constant uint& hasBias              [[buffer(8)]],
-    uint3 tgid                          [[threadgroup_position_in_grid]],
-    uint3 lid3                          [[thread_position_in_threadgroup]],
-    uint3 threads3                      [[threads_per_threadgroup]]) {
+// GPT-OSS experts: 8 codes per thread from one 4-byte run and one UE8M0
+// scale, accumulated in place, at the same M tiles as the affine kernels.
+template <int TileM, int TileN>
+static inline void mpp_prefill_mxfp4_qmm_f16_impl(
+    device const uint8_t* packedWeights,
+    device const uint8_t* scales,
+    device const bfloat* bias,
+    device half* activations,
+    device half* output,
+    uint M, uint N, uint K, uint hasBias,
+    uint3 tgid, uint lid, uint threads,
+    threadgroup half* weightTile) {
     constexpr auto descriptor = matmul2d_descriptor(
-        kMPPAffineTileM, kMPPAffineTileN, kMPPAffineTileK,
-        false, true, false);
+        TileM, TileN, kMPPAffineTileK,
+        false, true, false,
+        matmul2d_descriptor::mode::multiply_accumulate);
     matmul2d<descriptor, execution_simdgroups<4>> operation;
 
     using device_half_tensor = tensor<device half, dextents<int32_t, 2>, tensor_inline>;
     using threadgroup_half_tensor = tensor<threadgroup half, dextents<int32_t, 2>, tensor_inline>;
 
-    threadgroup half weightTile[kMPPAffineTileN * kMPPAffineTileK];
     threadgroup_half_tensor tileB(
         weightTile,
-        dextents<int32_t, 2>(kMPPAffineTileK, kMPPAffineTileN),
+        dextents<int32_t, 2>(kMPPAffineTileK, TileN),
         array<int32_t, 2>({1, kMPPAffineTileK}));
     device_half_tensor firstA(
         activations,
         dextents<int32_t, 2>(kMPPAffineTileK, M),
         array<int32_t, 2>({1, int32_t(K)}));
-    auto firstTileA = firstA.slice(0, int32_t(tgid.y) * kMPPAffineTileM);
-    auto accumulator = operation.get_destination_cooperative_tensor<
-        decltype(firstTileA), decltype(tileB), float>();
-    auto tileProduct = operation.get_destination_cooperative_tensor<
+    auto firstTileA = firstA.slice(0, int32_t(tgid.y) * TileM);
+    auto accumulator = operation.template get_destination_cooperative_tensor<
         decltype(firstTileA), decltype(tileB), float>();
     for (int element = 0; element < accumulator.get_capacity(); ++element) {
         accumulator[element] = 0.0f;
@@ -283,27 +297,31 @@ kernel void mpp_prefill_mxfp4_qmm_f16(
 
     const uint rowBytes = K / 2u;
     const uint blocksPerRow = K / 32u;
-    const uint lid = lid3.x;
-    const uint threads = threads3.x;
+    constexpr uint chunksPerRow = uint(kMPPAffineTileK) / 8u;
     for (uint tile = 0; tile < K / uint(kMPPAffineTileK); ++tile) {
-        for (int element = 0; element < tileProduct.get_capacity(); ++element) {
-            tileProduct[element] = 0.0f;
-        }
-        for (uint linear = lid;
-             linear < uint(kMPPAffineTileN * kMPPAffineTileK);
-             linear += threads) {
-            const uint localN = linear / uint(kMPPAffineTileK);
-            const uint localK = linear % uint(kMPPAffineTileK);
-            const uint globalN = tgid.x * uint(kMPPAffineTileN) + localN;
+        for (uint chunk = lid; chunk < uint(TileN) * chunksPerRow; chunk += threads) {
+            const uint localN = chunk / chunksPerRow;
+            const uint localK = (chunk % chunksPerRow) * 8u;
+            const uint globalN = tgid.x * uint(TileN) + localN;
+            threadgroup half4* destination =
+                (threadgroup half4*)(weightTile + localN * uint(kMPPAffineTileK) + localK);
             if (globalN < N) {
                 const uint globalK = tile * uint(kMPPAffineTileK) + localK;
-                const uint packed = uint(packedWeights[globalN * rowBytes + (globalK >> 1)]);
-                const uint code = (globalK & 1u) == 0u ? packed & 0x0fu : packed >> 4;
+                const uint packed = as_type<uint>(uchar4(*(device const packed_uchar4*)(
+                    packedWeights + globalN * rowBytes + (globalK >> 1))));
                 const float scale = as_type<float>(
                     uint(scales[globalN * blocksPerRow + globalK / 32u]) << 23u);
-                weightTile[linear] = half(mpp_mxfp4_e2m1(code) * scale);
+                destination[0] = half4(float4(mpp_mxfp4_e2m1(packed),
+                                              mpp_mxfp4_e2m1(packed >> 4),
+                                              mpp_mxfp4_e2m1(packed >> 8),
+                                              mpp_mxfp4_e2m1(packed >> 12)) * scale);
+                destination[1] = half4(float4(mpp_mxfp4_e2m1(packed >> 16),
+                                              mpp_mxfp4_e2m1(packed >> 20),
+                                              mpp_mxfp4_e2m1(packed >> 24),
+                                              mpp_mxfp4_e2m1(packed >> 28)) * scale);
             } else {
-                weightTile[linear] = half(0.0f);
+                destination[0] = half4(0.0h);
+                destination[1] = half4(0.0h);
             }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -312,19 +330,16 @@ kernel void mpp_prefill_mxfp4_qmm_f16(
             activations + tile * uint(kMPPAffineTileK),
             dextents<int32_t, 2>(kMPPAffineTileK, M),
             array<int32_t, 2>({1, int32_t(K)}));
-        auto tileA = tileSourceA.slice(0, int32_t(tgid.y) * kMPPAffineTileM);
-        operation.run(tileA, tileB, tileProduct);
-        for (int element = 0; element < accumulator.get_capacity(); ++element) {
-            accumulator[element] += tileProduct[element];
-        }
+        auto tileA = tileSourceA.slice(0, int32_t(tgid.y) * TileM);
+        operation.run(tileA, tileB, accumulator);
         threadgroup_barrier(mem_flags::mem_threadgroup);
     }
 
     for (int element = 0; element < accumulator.get_capacity(); ++element) {
         if (!accumulator.is_valid_element(element)) continue;
         const auto position = accumulator.get_multidimensional_index(element);
-        const uint globalN = tgid.x * uint(kMPPAffineTileN) + uint(position[0]);
-        const uint globalM = tgid.y * uint(kMPPAffineTileM) + uint(position[1]);
+        const uint globalN = tgid.x * uint(TileN) + uint(position[0]);
+        const uint globalM = tgid.y * uint(TileM) + uint(position[1]);
         if (globalM < M && globalN < N) {
             const float withBias = accumulator[element]
                 + (hasBias != 0u ? float(bias[globalN]) : 0.0f);
@@ -332,6 +347,33 @@ kernel void mpp_prefill_mxfp4_qmm_f16(
         }
     }
 }
+
+#define TUFF_MPP_MXFP4_QMM_KERNEL(NAME, TM, TN)                                \
+kernel void NAME(                                                              \
+    device const uint8_t* packedWeights [[buffer(0)]],                         \
+    device const uint8_t* scales        [[buffer(1)]],                         \
+    device const bfloat* bias           [[buffer(2)]],                         \
+    device half* activations            [[buffer(3)]],                         \
+    device half* output                 [[buffer(4)]],                         \
+    constant uint& M                    [[buffer(5)]],                         \
+    constant uint& N                    [[buffer(6)]],                         \
+    constant uint& K                    [[buffer(7)]],                         \
+    constant uint& hasBias              [[buffer(8)]],                         \
+    uint3 tgid                          [[threadgroup_position_in_grid]],      \
+    uint3 lid3                          [[thread_position_in_threadgroup]],    \
+    uint3 threads3                      [[threads_per_threadgroup]]) {         \
+    threadgroup half weightTile[(TN) * kMPPAffineTileK];                        \
+    mpp_prefill_mxfp4_qmm_f16_impl<TM, TN>(                                    \
+        packedWeights, scales, bias, activations, output, M, N, K, hasBias,    \
+        tgid, lid3.x, threads3.x, weightTile);                                 \
+}
+
+TUFF_MPP_MXFP4_QMM_KERNEL(mpp_prefill_mxfp4_qmm_f16, 64, 32)
+TUFF_MPP_MXFP4_QMM_KERNEL(mpp_prefill_mxfp4_qmm_f16_m32, 32, 32)
+TUFF_MPP_MXFP4_QMM_KERNEL(mpp_prefill_mxfp4_qmm_f16_m16, 16, 64)
+TUFF_MPP_MXFP4_QMM_KERNEL(mpp_prefill_mxfp4_qmm_f16_m8, 8, 64)
+
+#undef TUFF_MPP_MXFP4_QMM_KERNEL
 
 kernel void mpp_prefill_affine_threadgroup_f16_input_bf16_output(
     device const uint8_t* packedWeights [[buffer(0)]],

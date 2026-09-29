@@ -178,11 +178,9 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
     private let prefillHyperConnection: PrefillHyperConnection?
     private let prefillRMS: PrefillRMSNorm
     private let prefillQMM: PrefillInt4QMM
-    private let prefillMPPAffineInt4: MPPPrefillInt4QMM?
-    /// Batched projections for a checkpoint whose INT4 group is not 64
-    /// (Qwen 3.8 Flash Next uses 32), which `prefillMPPAffineInt4` cannot
-    /// decode. Without it those projections ran as one GEMV per token.
-    private let prefillMPPAffineGrouped: MPPPrefillAffineQMM?
+    /// Batched MPP projections at the checkpoint's INT4 group (64, or 32 for
+    /// Qwen 3.8 Flash Next). Nil where MSL 4 tensors are unavailable.
+    private let prefillMPPAffine: MPPPrefillAffineQMM?
     private let prefillQKVEpilogue: PrefillQKVEpilogue
     private let prefillAttention: PrefillAttention
     private let prefillPostAttention: PrefillPostAttentionSetup
@@ -452,16 +450,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
         self.prefillRMS = try PrefillRMSNorm(context: context)
         self.prefillQMM = try PrefillInt4QMM(context: context,
                                              groupSize: int4Groups)
-        // `tensorops.metal` hardcodes a 64-value quantization group and is
-        // compiled as a private library, where a function constant would force
-        // every pipeline through the specialized-function API. A group-32
-        // checkpoint therefore has to take the ordinary INT4 path instead of
-        // being silently mis-decoded by the tensor-ops one.
-        self.prefillMPPAffineInt4 = int4Groups == Quantization.groupSize
-            ? MPPPrefillInt4QMM(context: context) : nil
-        self.prefillMPPAffineGrouped = int4Groups == Quantization.groupSize
-            ? nil
-            : MPPPrefillAffineQMM(context: context, bits: 4, groupSize: int4Groups)
+        self.prefillMPPAffine = MPPPrefillAffineQMM(context: context, bits: 4,
+                                                    groupSize: int4Groups)
         self.prefillQKVEpilogue = try PrefillQKVEpilogue(context: context)
         self.prefillAttention = try PrefillAttention(context: context)
         self.prefillPostAttention = try PrefillPostAttentionSetup(context: context)
@@ -1500,31 +1490,13 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                                   tokenCount: Int,
                                   xStrideElements: Int,
                                   yStrideElements: Int) {
+            // Every dense projection with contiguous rows takes the MPP
+            // path; a shape MPP cannot tile falls through to the QMM below.
             if tokenCount >= 32,
-               family == .q || family == .kv || family == .o,
-               let candidate = prefillMPPAffineInt4 {
-                let metadata = candidate.encode(
-                    commandBuffer: commandBuffer,
-                    weights: weights.buffer,
-                    weightsOffset: Int(weights.offset),
-                    scales: weights.buffer,
-                    scalesOffset: Int(weights.scaleOffset),
-                    biases: weights.buffer,
-                    biasesOffset: Int(weights.biasOffset),
-                    x: x,
-                    y: y,
-                    m: tokenCount,
-                    n: rows,
-                    k: columns)
-                if metadata.path == .affineThreadgroupF16 {
-                    return
-                }
-            }
-            if tokenCount >= 32,
-               family == .q || family == .kv || family == .o,
+               family != .routed,
                xStrideElements == columns, yStrideElements == rows,
-               let grouped = prefillMPPAffineGrouped,
-               grouped.encode(commandBuffer: commandBuffer,
+               let mpp = prefillMPPAffine,
+               mpp.encode(commandBuffer: commandBuffer,
                               weights: weights.buffer,
                               weightsOffset: Int(weights.offset),
                               scales: weights.buffer,

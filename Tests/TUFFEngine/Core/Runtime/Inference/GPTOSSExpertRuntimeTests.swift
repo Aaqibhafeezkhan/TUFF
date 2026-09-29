@@ -297,7 +297,16 @@ import TUFFValidationSupport
         }
         let input = (0..<(queries * hidden)).map { Float16(Float(($0 * 13) % 37 - 18) / 64) }
         let inputBuffer = try #require(Fp16Buffer.make(context.device, halves: input))
-        func expert(token: Int, rank: Int) -> Int { (token * 5 + rank * 2) % expertCount }
+        // Uneven loads, so every tile height serves some expert: 40 rows
+        // (experts 0 and 5), 24, 16, 6 and 34.
+        func expert(token: Int, rank: Int) -> Int {
+            switch rank {
+            case 0: 0
+            case 1: token < 24 ? 1 : 2
+            case 2: token < 6 ? 3 : 4
+            default: 5
+            }
+        }
 
         var pairs: [PrefillTokenExpertPair] = []
         for token in 0..<queries {

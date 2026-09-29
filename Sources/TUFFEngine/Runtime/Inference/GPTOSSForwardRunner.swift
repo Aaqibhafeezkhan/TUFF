@@ -491,8 +491,6 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
         let qRows = config.numHeads * config.headDim
         let kvRows = config.numKVHeads * config.headDim
         let halfBytes = MemoryLayout<Float16>.stride
-        let floatBytes = MemoryLayout<Float>.stride
-        let indexBytes = MemoryLayout<UInt32>.stride
 
         let cb1 = context.queue.makeCommandBuffer()!
 
@@ -546,6 +544,12 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
             batchCount: queryCount,
             rows: kvRows,
             columns: hiddenSize)
+        // RoPE runs over the whole chunk: Q in place, K in its staging rows
+        // before they are copied to their slots.
+        encodeRoPE(commandBuffer: cb1, data: query, dataOffset: 0,
+                   position: startPosition, heads: config.numHeads, tokens: queryCount)
+        encodeRoPE(commandBuffer: cb1, data: kStage, dataOffset: 0,
+                   position: startPosition, heads: config.numKVHeads, tokens: queryCount)
         if let blit = cb1.makeBlitCommandEncoder() {
             let rowBytes = kvRows * halfBytes
             precondition(kv.stride(layer: layer) == rowBytes,
@@ -566,12 +570,6 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
             let queryOffset = row * qRows * halfBytes
             let kSlot = kv.kSlot(layer: layer, position: position)
             let vSlot = kv.vSlot(layer: layer, position: position)
-            encodeRoPE(commandBuffer: cb1, data: query,
-                       dataOffset: queryOffset,
-                       position: position, heads: config.numHeads)
-            encodeRoPE(commandBuffer: cb1, data: kSlot.buffer,
-                       dataOffset: kSlot.offset,
-                       position: position, heads: config.numKVHeads)
 
             let sequenceLength = UInt32(position + 1)
             if config.layerIsFull(layer) {
@@ -647,19 +645,14 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
             batchCount: queryCount,
             rows: config.numExperts,
             columns: hiddenSize)
-        for row in 0..<queryCount {
-            let routerOffset = row * config.numExperts * floatBytes
-            let routeOffset = row * config.topKExperts
-            moePrimitives.encodeRouterTop4(
-                commandBuffer: cb1,
-                logits: routerLogits,
-                logitsOffset: routerOffset,
-                outputIndices: routedIndices,
-                outputIndicesOffset: routeOffset * indexBytes,
-                outputWeights: expertScratch.routeWeights,
-                outputWeightsOffset: routeOffset * halfBytes,
-                numExperts: UInt32(config.numExperts))
-        }
+        precondition(config.topKExperts == 4, "GPT-OSS routes each token to 4 experts")
+        moePrimitives.encodeRouterTop4(
+            commandBuffer: cb1,
+            logits: routerLogits,
+            outputIndices: routedIndices,
+            outputWeights: expertScratch.routeWeights,
+            numExperts: UInt32(config.numExperts),
+            rows: queryCount)
         cb1.commit()
         try waitForCompletion(cb1)
 
@@ -1118,7 +1111,8 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
                             data: MTLBuffer,
                             dataOffset: Int,
                             position: Int,
-                            heads: Int) {
+                            heads: Int,
+                            tokens: Int = 1) {
         let yarn = config.yarnRope!
         rope.encodeYaRNNeox(
             commandBuffer: commandBuffer,
@@ -1127,6 +1121,7 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
             position: UInt32(position),
             headDim: UInt32(config.headDim),
             numHeads: UInt32(heads),
+            numTokens: UInt32(tokens),
             theta: Float(config.ropeTheta),
             originalContextLength: UInt32(yarn.originalContextLength),
             scalingFactor: Float(yarn.scalingFactor),
