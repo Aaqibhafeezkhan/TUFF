@@ -52,6 +52,8 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
     private let expertScratch: GPTOSSExpertScratchBuffers
     /// Batched MPP experts for prefill; nil where MPP is unavailable.
     private let batchedExperts: GPTOSSBatchedExperts?
+    /// Batched MPP BF16 projections for prefill; nil where MPP is unavailable.
+    private let prefillProjection: MPPPrefillBF16MM?
     /// Decode lookahead: the next layer's predicted experts, read ahead.
     private var lookahead = ExpertLookahead()
     private lazy var lookaheadIndices: MTLBuffer = context.device.makeBuffer(
@@ -211,6 +213,7 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
         batchedExperts = GPTOSSBatchedExperts(context: context,
                                               hiddenSize: hiddenSize,
                                               intermediateSize: config.moeIntermediateSize)
+        prefillProjection = MPPPrefillBF16MM(context: context)
     }
 
     func reset() {
@@ -493,6 +496,29 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
         let halfBytes = MemoryLayout<Float16>.stride
 
         let cb1 = context.queue.makeCommandBuffer()!
+        // Below the batched threshold (every speculative verification block)
+        // the decode kernels keep decode's numerics.
+        let batchedChunk = queryCount >= PrefillSharedExpert.minimumBatchedTokens
+
+        func project(_ weights: TensorView, bias: TensorView, input: MTLBuffer,
+                     output: MTLBuffer, rows: Int, columns: Int) {
+            if batchedChunk, let mpp = prefillProjection,
+               mpp.encode(commandBuffer: cb1, weights: weights, bias: bias,
+                          x: input, y: output, m: queryCount, n: rows, k: columns) {
+                return
+            }
+            bf16.encodeHalfRows(
+                commandBuffer: cb1,
+                weights: weights,
+                input: input,
+                inputStrideElements: columns,
+                output: output,
+                outputStrideElements: rows,
+                bias: bias,
+                batchCount: queryCount,
+                rows: rows,
+                columns: columns)
+        }
 
         // Normalize and project all candidate rows through the resident
         // weights with bounded 2-D dispatches. K and V are projected into
@@ -510,40 +536,13 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
             rows: queryCount,
             d: UInt32(hiddenSize),
             eps: 1e-5)
-        bf16.encodeHalfRows(
-            commandBuffer: cb1,
-            weights: views.qWeight,
-            input: normed,
-            inputStrideElements: hiddenSize,
-            output: query,
-            outputStrideElements: qRows,
-            bias: views.qBias,
-            batchCount: queryCount,
-            rows: qRows,
-            columns: hiddenSize)
+        project(views.qWeight, bias: views.qBias, input: normed,
+                output: query, rows: qRows, columns: hiddenSize)
 
-        bf16.encodeHalfRows(
-            commandBuffer: cb1,
-            weights: views.kWeight,
-            input: normed,
-            inputStrideElements: hiddenSize,
-            output: kStage,
-            outputStrideElements: kvRows,
-            bias: views.kBias,
-            batchCount: queryCount,
-            rows: kvRows,
-            columns: hiddenSize)
-        bf16.encodeHalfRows(
-            commandBuffer: cb1,
-            weights: views.vWeight,
-            input: normed,
-            inputStrideElements: hiddenSize,
-            output: vStage,
-            outputStrideElements: kvRows,
-            bias: views.vBias,
-            batchCount: queryCount,
-            rows: kvRows,
-            columns: hiddenSize)
+        project(views.kWeight, bias: views.kBias, input: normed,
+                output: kStage, rows: kvRows, columns: hiddenSize)
+        project(views.vWeight, bias: views.vBias, input: normed,
+                output: vStage, rows: kvRows, columns: hiddenSize)
         // RoPE runs over the whole chunk: Q in place, K in its staging rows
         // before they are copied to their slots.
         encodeRoPE(commandBuffer: cb1, data: query, dataOffset: 0,
@@ -605,17 +604,8 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
             }
         }
 
-        bf16.encodeHalfRows(
-            commandBuffer: cb1,
-            weights: views.oWeight,
-            input: attentionOutput,
-            inputStrideElements: qRows,
-            output: projectedAttention,
-            outputStrideElements: hiddenSize,
-            bias: views.oBias,
-            batchCount: queryCount,
-            rows: hiddenSize,
-            columns: qRows)
+        project(views.oWeight, bias: views.oBias, input: attentionOutput,
+                output: projectedAttention, rows: hiddenSize, columns: qRows)
         // Rows are contiguous in both buffers, so one dispatch covers the
         // chunk instead of one per token.
         elementwise.encodeFloatResidualAdd(

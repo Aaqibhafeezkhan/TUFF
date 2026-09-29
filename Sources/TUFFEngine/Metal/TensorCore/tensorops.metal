@@ -465,6 +465,114 @@ kernel void mpp_prefill_affine_threadgroup_f16_input_bf16_output(
     }
 }
 
+// GPT-OSS's resident BF16 projections (q, k, v, o) for a prefill chunk.
+// The batched GEMV gave each (token, output row) its own SIMD group, so every
+// weight row was re-read once per token. Here each weight tile is read once
+// per tile of tokens: 8 BF16 weights per thread, widened to FP16 in
+// threadgroup memory, with the bias added at the store.
+template <int TileM, int TileN>
+static inline void mpp_prefill_bf16_mm_f16_impl(
+    device const uint8_t* weightBytes,
+    device const bfloat* bias,
+    device half* activations,
+    device half* output,
+    uint M, uint N, uint K, uint hasBias,
+    uint3 tgid, uint lid, uint threads,
+    threadgroup half* weightTile) {
+    constexpr auto descriptor = matmul2d_descriptor(
+        TileM, TileN, kMPPAffineTileK,
+        false, true, false,
+        matmul2d_descriptor::mode::multiply_accumulate);
+    matmul2d<descriptor, execution_simdgroups<4>> operation;
+
+    using device_half_tensor = tensor<device half, dextents<int32_t, 2>, tensor_inline>;
+    using threadgroup_half_tensor = tensor<threadgroup half, dextents<int32_t, 2>, tensor_inline>;
+
+    threadgroup_half_tensor tileB(
+        weightTile,
+        dextents<int32_t, 2>(kMPPAffineTileK, TileN),
+        array<int32_t, 2>({1, kMPPAffineTileK}));
+    device_half_tensor firstA(
+        activations,
+        dextents<int32_t, 2>(kMPPAffineTileK, M),
+        array<int32_t, 2>({1, int32_t(K)}));
+    auto firstTileA = firstA.slice(0, int32_t(tgid.y) * TileM);
+    auto accumulator = operation.template get_destination_cooperative_tensor<
+        decltype(firstTileA), decltype(tileB), float>();
+    for (int element = 0; element < accumulator.get_capacity(); ++element) {
+        accumulator[element] = 0.0f;
+    }
+
+    constexpr uint chunksPerRow = uint(kMPPAffineTileK) / 8u;
+    for (uint tile = 0; tile < K / uint(kMPPAffineTileK); ++tile) {
+        for (uint chunk = lid; chunk < uint(TileN) * chunksPerRow; chunk += threads) {
+            const uint localN = chunk / chunksPerRow;
+            const uint localK = (chunk % chunksPerRow) * 8u;
+            const uint globalN = tgid.x * uint(TileN) + localN;
+            threadgroup half4* destination =
+                (threadgroup half4*)(weightTile + localN * uint(kMPPAffineTileK) + localK);
+            if (globalN < N) {
+                const uint globalK = tile * uint(kMPPAffineTileK) + localK;
+                // Byte-aligned reads: BF16 tensors are only 2-byte aligned.
+                device const packed_ushort4* source = (device const packed_ushort4*)(
+                    weightBytes + (ulong(globalN) * K + globalK) * 2u);
+                const uint4 low = uint4(ushort4(source[0])) << 16u;
+                const uint4 high = uint4(ushort4(source[1])) << 16u;
+                destination[0] = half4(as_type<float4>(low));
+                destination[1] = half4(as_type<float4>(high));
+            } else {
+                destination[0] = half4(0.0h);
+                destination[1] = half4(0.0h);
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        device_half_tensor tileSourceA(
+            activations + tile * uint(kMPPAffineTileK),
+            dextents<int32_t, 2>(kMPPAffineTileK, M),
+            array<int32_t, 2>({1, int32_t(K)}));
+        auto tileA = tileSourceA.slice(0, int32_t(tgid.y) * TileM);
+        operation.run(tileA, tileB, accumulator);
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+    }
+
+    for (int element = 0; element < accumulator.get_capacity(); ++element) {
+        if (!accumulator.is_valid_element(element)) continue;
+        const auto position = accumulator.get_multidimensional_index(element);
+        const uint globalN = tgid.x * uint(TileN) + uint(position[0]);
+        const uint globalM = tgid.y * uint(TileM) + uint(position[1]);
+        if (globalM < M && globalN < N) {
+            const float withBias = accumulator[element]
+                + (hasBias != 0u ? float(bias[globalN]) : 0.0f);
+            output[globalM * N + globalN] = half(withBias);
+        }
+    }
+}
+
+#define TUFF_MPP_BF16_MM_KERNEL(NAME, TM, TN)                                  \
+kernel void NAME(                                                              \
+    device const uint8_t* weights       [[buffer(0)]],                         \
+    device const bfloat* bias           [[buffer(1)]],                         \
+    device half* activations            [[buffer(2)]],                         \
+    device half* output                 [[buffer(3)]],                         \
+    constant uint& M                    [[buffer(4)]],                         \
+    constant uint& N                    [[buffer(5)]],                         \
+    constant uint& K                    [[buffer(6)]],                         \
+    constant uint& hasBias              [[buffer(7)]],                         \
+    uint3 tgid                          [[threadgroup_position_in_grid]],      \
+    uint3 lid3                          [[thread_position_in_threadgroup]],    \
+    uint3 threads3                      [[threads_per_threadgroup]]) {         \
+    threadgroup half weightTile[(TN) * kMPPAffineTileK];                        \
+    mpp_prefill_bf16_mm_f16_impl<TM, TN>(                                      \
+        weights, bias, activations, output, M, N, K, hasBias,                  \
+        tgid, lid3.x, threads3.x, weightTile);                                 \
+}
+
+TUFF_MPP_BF16_MM_KERNEL(mpp_prefill_bf16_mm_f16, 64, 32)
+TUFF_MPP_BF16_MM_KERNEL(mpp_prefill_bf16_mm_f16_m32, 32, 32)
+
+#undef TUFF_MPP_BF16_MM_KERNEL
+
 #if defined(TUFF_VISION_TENSOROPS)
 
 kernel void mpp_vision_linear_bf16(
