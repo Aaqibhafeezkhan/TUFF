@@ -216,12 +216,16 @@ import TUFFValidationSupport
         }
     }
 
-    /// A variant that fails to build falls back silently to the much slower
-    /// tiled kernel, so on an MSL 4 system every one must be present. This is
-    /// also what keeps the guarded tests above from passing vacuously.
+    /// A variant that fails to build falls back to the much slower tiled
+    /// kernel, so on Apple8-or-newer hardware with MSL 4 every one must be
+    /// present. This is also what keeps the guarded tests above from passing
+    /// vacuously there. The hosted CI runner's virtual GPU is below Apple8 and
+    /// its compiler rejects MPP cooperative tensors, so it checks the fallback.
     @Test func everyVariantBuildsWhereMSL4IsAvailable() throws {
         guard #available(macOS 26.0, *) else { return }
-        let attention = try PrefillAttention(context: try MetalContext())
+        let context = try MetalContext()
+        guard context.device.supportsFamily(.apple8) else { return }
+        let attention = try PrefillAttention(context: context)
         for variant in PrefillTensorOpsVariant.all {
             #expect(attention.tensorOpsAvailable(variant), "\(variant.functionName)")
         }

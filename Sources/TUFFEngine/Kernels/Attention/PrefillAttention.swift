@@ -119,10 +119,11 @@ final class PrefillAttention {
         self.context = context
         self.psoCausalTiled = try context.pipeline("attention_prefill_causal_tiled")
         self.psoParamsSmoke = try context.pipeline("prefill_attention_params_smoke")
-        // Capability is whether the MSL 4 pipeline builds, not the GPU
-        // family: it compiles and dispatches on the Apple8 M2 as well as on
-        // Apple10. macOS 15 compiles MSL 3.2, where these kernels are absent
-        // and the tiled path is used.
+        // Capability is whether the MSL 4 pipeline builds, not a family
+        // check: it compiles and dispatches on the Apple8 M2 as well as on
+        // Apple10. macOS 15 compiles MSL 3.2, where these kernels are absent,
+        // and a virtual GPU below Apple8 rejects them at pipeline build; both
+        // use the tiled path.
         var pipelines: [PrefillTensorOpsVariant: MTLComputePipelineState] = [:]
         if !simulatingMissingTensorOps {
             for variant in PrefillTensorOpsVariant.all {
