@@ -180,13 +180,13 @@ final class PrefillAttention {
         let variant = requestsTensorOps
             ? PrefillTensorOpsVariant.select(params: effectiveParams)
             : nil
-        let tensorOpsPipeline = variant.flatMap {
-            tensorOpsPipeline($0, kvRingCapacity: kvRingCapacity)
+        let tensorOpsPSO = variant.flatMap {
+            self.tensorOpsPipeline($0, kvRingCapacity: kvRingCapacity)
         }
-        let useTensorOps = tensorOpsPipeline != nil
+        let useTensorOps = tensorOpsPSO != nil
         let pipeline: MTLComputePipelineState
-        if let tensorOpsPipeline {
-            pipeline = tensorOpsPipeline
+        if let tensorOpsPSO {
+            pipeline = tensorOpsPSO
         } else if let variant, path == .fullTensorOps2DValidityV2 {
             preconditionFailure(
                 "TensorOps 2D prefill attention pipeline \(variant.functionName) "
