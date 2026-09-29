@@ -130,4 +130,4 @@ Packaged CLI SHA-256:
 `ab185100ef5a5b60491b17766322977393bfce998892a87099bda44f65093c70`.
 
 The final package includes the cache lifecycle guard and was used for the
-[nine-model Paris and six-model photo checks](V5_MODEL_VALIDATION.md).
+[nine-model Paris and six-model photo checks](MODEL_VALIDATION.md).

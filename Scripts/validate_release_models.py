@@ -3,6 +3,8 @@
 
 Keep output under benchmark-results/: photo paths and model responses are private.
 Resume is allowed only with the same runner, harness, photo, and run settings.
+Without --image only the Paris runs are made; a later --resume that adds
+--image runs the photo checks against the same runner.
 """
 import argparse
 import hashlib
@@ -40,7 +42,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--app', required=True, type=Path)
     parser.add_argument('--model-root', required=True, type=Path)
-    parser.add_argument('--image', required=True, type=Path)
+    parser.add_argument('--image', type=Path)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--repeat', type=int, default=1)
     parser.add_argument('--timeout', type=int, default=1200)
@@ -49,7 +51,7 @@ def main():
     if args.repeat < 1 or args.timeout < 1:
         parser.error('repeat and timeout must be positive')
     cli = args.app.resolve() / 'Contents/Resources/bin/TUFFCLI'
-    image = args.image.resolve()
+    image = args.image.resolve() if args.image else None
     model_root = args.model_root.resolve()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -65,13 +67,19 @@ def main():
                         for p in sorted(args.app.resolve().rglob('*'))
                         if p.suffix in {'.metal', '.metallib'}).encode()).hexdigest(),
                     model_table_sha256=digest(ROOT / 'Scripts/benchmark_models.rb'),
-                    image_sha256=digest(image), model_root=str(model_root), repeat=args.repeat,
+                    image_sha256=digest(image) if image else None, model_root=str(model_root), repeat=args.repeat,
                     timeout=args.timeout, prompt_sha256=digest(ROOT / 'docs/benchmark-prompts/capital-of-france.json'))
     result_path = output / 'results.json'
     if result_path.exists():
         report = json.loads(result_path.read_text())
-        if not args.resume or report['identity'] != identity:
+        previous = dict(report['identity'])
+        # A Paris-only sweep may gain its photo later; nothing else may change.
+        if previous.get('image_sha256') is None:
+            previous['image_sha256'] = identity['image_sha256']
+        if not args.resume or previous != identity:
             parser.error('existing results require --resume and identical inputs/binary')
+        report['identity'] = identity
+        report.pop('finished', None)
     else:
         report = dict(identity=identity, started=time.time(),
                       commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
@@ -90,7 +98,7 @@ def main():
                 parser.error('installed image pack metadata changed since the previous run')
     for kind in ('paris', 'vision'):
         for model, config in metadata['models'].items():
-            if kind == 'vision' and model not in VISION_MODELS:
+            if kind == 'vision' and (model not in VISION_MODELS or image is None):
                 continue
             model_dir = model_root / Path(config['path']).name
             manifest = model_dir / 'manifest.json'
@@ -152,7 +160,10 @@ def main():
                 report['results'].append(row)
                 atomic_json(result_path, report)
                 print(f"{kind} {model}: {row['status']}, prefill={row.get('prefill_seconds', '?')}s, TPS={row.get('tps', '?')}", flush=True)
-    report['finished'] = time.time()
+    if image is not None:
+        report['finished'] = time.time()
+    else:
+        print('Paris runs finished; resume with --image to add the photo checks.', flush=True)
     atomic_json(result_path, report)
     return 0 if all(r['status'] == 'passed' for r in report['results']) else 1
 

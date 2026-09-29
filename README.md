@@ -310,7 +310,7 @@ python3 Scripts/validate_release_models.py \
   --output benchmark-results/release-validation
 ```
 
-The harness saves each command, response, timing, model manifest hash, and runner identity; `--resume` refuses changed inputs. See [the release validation report](docs/V5_MODEL_VALIDATION.md) for per-model status and [the runner report](docs/QWEN38_RUNNER_PERFORMANCE.md) for the separate preprocessing comparison.
+The harness saves each command, response, timing, model manifest hash, and runner identity; `--resume` refuses changed inputs. See [the release validation report](docs/MODEL_VALIDATION.md) for per-model status and [the runner report](docs/QWEN38_RUNNER_PERFORMANCE.md) for the separate preprocessing comparison.
 
 #### What v4.0.0 changed about decode
 
