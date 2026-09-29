@@ -9,6 +9,8 @@ import TUFFServerCore
 // its whole life and printed "ready" only as it exited - exactly inverted from
 // what an operator needs. Line buffering puts the line where it is useful.
 setvbuf(stdout, nil, _IOLBF, 0)
+// Before anything in this process creates a Metal device.
+MetalContext.relaxInteractivityWatchdog()
 
 let arguments: ServerArguments
 let runtimeConfiguration: RuntimeConfiguration

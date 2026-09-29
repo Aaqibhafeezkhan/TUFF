@@ -27,7 +27,7 @@ import TUFFValidationSupport
                       count: values.count, output: output)
         command.commit()
         command.waitUntilCompleted()
-        try checkCommandBufferError(command.error)
+        try checkCommandBufferError(command)
 
         #expect(output.contents().load(as: UInt32.self) == (allInvalid ? 0 : 37))
     }

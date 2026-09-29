@@ -398,10 +398,17 @@ void attention_decode_combine(
 // threadgroup read the same K and V rows in the same cycle, so those loads
 // coalesce in cache instead of multiplying device traffic.
 //
-// Requires head_dim % 32 == 0 and q_per_kv <= kAttnSimdMaxQPerKV; the caller
-// falls back to the kernels above otherwise. The partial layout
-// (m/d per head-chunk, o per head-chunk-element) is unchanged, so
-// `attention_decode_combine` merges these partials as before.
+// A KV head shared by more than kAttnSimdMaxQPerKV query heads (Gemma 4 12B's
+// full layers: 16; Qwen 3.8 Flash Next: 12) is split into equal blocks of at
+// most that many heads, one threadgroup per (kv_head, block, chunk). The
+// blocks re-read the same K/V rows, which stay in cache; that is far cheaper
+// than the per-head kernel's two barriers per position. With one block the
+// indexing is exactly the single-group form.
+//
+// Requires head_dim % 32 == 0 and q_per_kv divisible into equal blocks of at
+// most kAttnSimdMaxQPerKV; the caller falls back to the kernels above
+// otherwise. The partial layout (m/d per head-chunk, o per head-chunk-element)
+// is unchanged, so `attention_decode_combine` merges these partials as before.
 // ============================================================================
 
 constant constexpr uint kAttnSimdMaxQPerKV   = 8;
@@ -433,11 +440,15 @@ void attention_decode_simd_partial(
     const uint NC = attn_fc_num_chunks(num_chunks);
     const uint q_per_kv = NQ / NKV;
     const uint per_lane = HD / 32u;
+    const uint blocks = (q_per_kv + kAttnSimdMaxQPerKV - 1u) / kAttnSimdMaxQPerKV;
+    const uint heads_per_block = q_per_kv / blocks;
 
-    const uint kv_head = tg_id / NC;
+    const uint group   = tg_id / NC;
+    const uint kv_head = group / blocks;
+    const uint block   = group % blocks;
     const uint chunk   = tg_id % NC;
-    if (simd_group_id >= q_per_kv) { return; }
-    const uint q_head = kv_head * q_per_kv + simd_group_id;
+    if (simd_group_id >= heads_per_block) { return; }
+    const uint q_head = kv_head * q_per_kv + block * heads_per_block + simd_group_id;
 
     const uint p_start = kv_start + chunk * chunk_len;
     uint p_end = p_start + chunk_len;

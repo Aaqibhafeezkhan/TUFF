@@ -98,7 +98,7 @@ import TUFFValidationSupport
             eps: Self.eps)
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
-        try checkCommandBufferError(commandBuffer.error)
+        try checkCommandBufferError(commandBuffer)
 
         let values = Fp16Buffer.read(output, count: d + 2)
         #expect(Array(values.prefix(2)) == [9, -9])
@@ -166,7 +166,7 @@ import TUFFValidationSupport
             eps: Self.eps)
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
-        try checkCommandBufferError(commandBuffer.error)
+        try checkCommandBufferError(commandBuffer)
 
         let scalar = Fp16Buffer.read(scalarOutput, count: 2 + rows * outStride)
         let block = Fp16Buffer.read(blockOutput, count: 2 + rows * outStride)

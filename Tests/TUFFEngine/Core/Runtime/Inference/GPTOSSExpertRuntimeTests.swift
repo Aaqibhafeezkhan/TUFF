@@ -218,7 +218,7 @@ import TUFFValidationSupport
             queryCount: queries - 1)
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
-        try checkCommandBufferError(commandBuffer.error)
+        try checkCommandBufferError(commandBuffer)
 
         var expected = [Float](repeating: 0, count: queries * hidden)
         for query in 0..<queries {

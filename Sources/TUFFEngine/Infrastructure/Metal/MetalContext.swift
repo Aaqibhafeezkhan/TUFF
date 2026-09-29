@@ -7,6 +7,7 @@ enum MetalError: Error, CustomStringConvertible {
     case missingShaderResource(String)
     case missingFunction(String)
     case libraryCompileFailed(String)
+    case commandBufferFailed(String)
 
     public var description: String {
         switch self {
@@ -15,14 +16,58 @@ enum MetalError: Error, CustomStringConvertible {
         case .missingShaderResource(let n): return "Shader resource missing: \(n)"
         case .missingFunction(let n):     return "Metal function missing in library: \(n)"
         case .libraryCompileFailed(let s):return "Metal library compile failed: \(s)"
+        case .commandBufferFailed(let s): return "Metal command buffer failed: \(s)"
         }
     }
 }
 
-func checkCommandBufferError(_ error: (any Error)?) throws {
-    if let error {
-        throw error
+func metalCommandBufferStatusName(_ status: MTLCommandBufferStatus) -> String {
+    switch status {
+    case .notEnqueued: return "notEnqueued"
+    case .enqueued:    return "enqueued"
+    case .committed:   return "committed"
+    case .scheduled:   return "scheduled"
+    case .completed:   return "completed"
+    case .error:       return "error"
+    @unknown default:  return "unknown(\(status.rawValue))"
     }
+}
+
+/// The diagnostic for a command buffer that did not complete, or nil when it
+/// did. Status is checked on its own because a failed buffer is not
+/// guaranteed to carry an error object. `userInfo` values are not included:
+/// only their keys, so a driver payload cannot leak into a chat error.
+func metalCommandBufferFailureDetail(label: String?,
+                                     status: MTLCommandBufferStatus,
+                                     error: (any Error)?) -> String? {
+    if status == .completed && error == nil { return nil }
+
+    var parts = ["label=\(label.map { $0.isEmpty ? "<empty>" : $0 } ?? "<none>")"]
+    parts.append("status=\(metalCommandBufferStatusName(status))")
+    if let error {
+        let nsError = error as NSError
+        parts.append("domain=\(nsError.domain)")
+        parts.append("code=\(nsError.code)")
+        parts.append("description=\(nsError.localizedDescription)")
+        if !nsError.userInfo.isEmpty {
+            parts.append("userInfoKeys=\(nsError.userInfo.keys.sorted().joined(separator: ","))")
+        }
+    } else {
+        parts.append("error=<none>")
+    }
+    return parts.joined(separator: " ")
+}
+
+/// Call after `waitUntilCompleted()`. Throws when the buffer failed, naming
+/// its label so a long prefill that the GPU watchdog killed says which layer
+/// and phase it was in.
+func checkCommandBufferError(_ commandBuffer: MTLCommandBuffer) throws {
+    guard let detail = metalCommandBufferFailureDetail(label: commandBuffer.label,
+                                                       status: commandBuffer.status,
+                                                       error: commandBuffer.error) else {
+        return
+    }
+    throw MetalError.commandBufferFailed(detail)
 }
 
 public struct MetalFunctionConstant: Hashable, Sendable {
@@ -62,8 +107,30 @@ public final class MetalContext: @unchecked Sendable {
     private var pipelineCache: [PipelineCacheKey: MTLComputePipelineState] = [:]
     private let pipelineCacheLock = NSLock()
 
+    /// Environment variable the AGX driver reads once, at the first device
+    /// creation in a process.
+    static let interactivityWatchdogVariable = "AGX_RELAX_CDM_CTXSTORE_TIMEOUT"
+
+    /// Long prefill dispatches (full attention over tens of thousands of
+    /// keys) can otherwise be killed with `ImpactingInteractivity` while a
+    /// display is active. This relaxes the deadline; it does not guarantee a
+    /// dispatch survives. An operator who sets the variable, including to 0
+    /// for stock behavior, is not overridden.
+    public static func relaxInteractivityWatchdog() {
+        #if os(macOS)
+        setenv(interactivityWatchdogVariable, "1", 0)
+        #endif
+    }
+
+    /// Every production device creation goes through here so the watchdog
+    /// mitigation is in place before the driver reads it.
+    public static func makeSystemDefaultDevice() -> MTLDevice? {
+        relaxInteractivityWatchdog()
+        return MTLCreateSystemDefaultDevice()
+    }
+
     public init() throws {
-        guard let dev = MTLCreateSystemDefaultDevice() else { throw MetalError.noDevice }
+        guard let dev = Self.makeSystemDefaultDevice() else { throw MetalError.noDevice }
         guard let q   = dev.makeCommandQueue()           else { throw MetalError.noQueue }
         self.device  = dev
         self.queue   = q
@@ -125,17 +192,39 @@ public final class MetalContext: @unchecked Sendable {
     ]
 
     private static let shaderBundle: Bundle = {
-        if let resources = Bundle.main.resourceURL,
-           let packaged = Bundle(
-               url: resources.appendingPathComponent(
-                   "TUFF_TUFFEngine.bundle",
-                   isDirectory: true
-               )
-           ) {
-            return packaged
+        for resources in packagedResourceDirectories(
+            mainResourceURL: Bundle.main.resourceURL,
+            executableURL: Bundle.main.executableURL) {
+            if let packaged = Bundle(
+                url: resources.appendingPathComponent(
+                    "TUFF_TUFFEngine.bundle",
+                    isDirectory: true
+                )
+            ) {
+                return packaged
+            }
         }
+        // SwiftPM's accessor falls back to the absolute build directory and
+        // traps when that is absent, so it is reached only from a clone.
         return Bundle.module
     }()
+
+    /// Where a packaged engine bundle can sit. The app finds it in its own
+    /// `Contents/Resources`; the command-line tools shipped in
+    /// `Contents/Resources/bin` are bare executables whose main bundle is
+    /// `bin` itself, so their resources are one directory up.
+    static func packagedResourceDirectories(mainResourceURL: URL?,
+                                            executableURL: URL?) -> [URL] {
+        var directories: [URL] = []
+        if let mainResourceURL { directories.append(mainResourceURL) }
+        if let executableURL {
+            let executableDirectory = executableURL.deletingLastPathComponent()
+            if executableDirectory.lastPathComponent == "bin" {
+                directories.append(executableDirectory.deletingLastPathComponent())
+            }
+        }
+        return directories
+    }
 
     private static func shaderURL(module: String) -> URL? {
         guard let subdirectory = shaderSubdirectories[module] else { return nil }

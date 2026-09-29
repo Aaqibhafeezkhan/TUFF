@@ -31,7 +31,7 @@ import Foundation
         e.setBytes(&p, length: MemoryLayout.size(ofValue: p), index: 2)
         e.dispatchThreadgroups(.init(width: 1, height: 1, depth: 1), threadsPerThreadgroup: .init(width: 256, height: 1, depth: 1))
         e.endEncoding(); cb.commit(); cb.waitUntilCompleted()
-        try checkCommandBufferError(cb.error)
+        try checkCommandBufferError(cb)
         let actual = Set(UnsafeBufferPointer(start: selected.contents().assumingMemoryBound(to: UInt32.self), count: top).map(Int.init))
         let expected = Set((0..<blocks).sorted { values[$0] == values[$1] ? $0 < $1 : values[$0] > values[$1] }.prefix(top))
         #expect(actual == expected)
@@ -67,7 +67,7 @@ import Foundation
                 threadsPerThreadgroup: .init(width: 128, height: 1, depth: 1))
             e.endEncoding()
         }
-        cb.commit(); cb.waitUntilCompleted(); try checkCommandBufferError(cb.error)
+        cb.commit(); cb.waitUntilCompleted(); try checkCommandBufferError(cb)
         func reference(_ x: [Float], token: Int) -> [Float] {
             let inv = 1 / sqrt(x.reduce(Float(0)) { $0 + $1 * $1 } / Float(dim) + 1e-6)
             let normalized = x.enumerated().map { d, v in Float(Float16(v * inv * (1 + Quantization.bf16ToFloat(normValues[d])))) }
@@ -129,7 +129,7 @@ import Foundation
             e.dispatchThreadgroups(.init(width: heads, height: tokens, depth: name == "partial" ? 16 : 1), threadsPerThreadgroup: .init(width: 32, height: 1, depth: 1))
             e.endEncoding()
         }
-        cb.commit(); cb.waitUntilCompleted(); try checkCommandBufferError(cb.error)
+        cb.commit(); cb.waitUntilCompleted(); try checkCommandBufferError(cb)
         let actual = output.contents().assumingMemoryBound(to: Float16.self)
         var maxError: Float = 0
         for t in 0..<tokens {

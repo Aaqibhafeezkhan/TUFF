@@ -1126,10 +1126,17 @@ kernel void attention_prefill_causal_tiled(
 
 #if defined(__HAVE_TENSOR__)
 
+// One threadgroup computes eight output rows that all read one KV head, so
+// each K and V tile is loaded once for the whole group. TUFF's full-attention
+// shapes differ per family (Gemma 4 uses 512-wide heads, Qwen 256-wide;
+// 16, 12, 8 or 4 query heads per KV head). MPP needs a multiple of eight rows,
+// so a group of four heads covers two query tokens: row r is head
+// r % HeadsPerGroup of token r / HeadsPerGroup. The Swift selector dispatches
+// a variant only when HeadsPerGroup divides the query-per-KV ratio.
 constant constexpr int kPrefillTensorOpsOutputs = 8;
 constant constexpr int kPrefillTensorOpsKeys = 64;
-constant constexpr int kPrefillTensorOpsHeadDim = 512;
 
+template <int kPrefillTensorOpsHeadDim, int kPrefillTensorOpsHeadsPerGroup>
 static inline void attention_prefill_full_tensorops_2d_validity_v2_impl(
     device const half* Q,
     device half* K,
@@ -1166,10 +1173,13 @@ static inline void attention_prefill_full_tensorops_2d_validity_v2_impl(
     using threadgroup_float_tensor =
         tensor<threadgroup float, dextents<int32_t, 2>, tensor_inline>;
 
-    const uint query_start = tg.x;
-    const uint qh_start = tg.y * uint(kPrefillTensorOpsOutputs);
-    const uint valid_query_rows =
-        min(1u, p.queryCount - min(query_start, p.queryCount));
+    constexpr uint heads_per_group = uint(kPrefillTensorOpsHeadsPerGroup);
+    constexpr uint tokens_per_group =
+        uint(kPrefillTensorOpsOutputs) / heads_per_group;
+    const uint query_start = tg.x * tokens_per_group;
+    const uint qh_start = tg.y * heads_per_group;
+    const uint valid_tokens =
+        min(tokens_per_group, p.queryCount - min(query_start, p.queryCount));
     const uint q_per_kv = p.numQHeads / p.numKVHeads;
     const uint kvh = qh_start / q_per_kv;
 
@@ -1179,10 +1189,11 @@ static inline void attention_prefill_full_tensorops_2d_validity_v2_impl(
         const uint output_row =
             linear / uint(kPrefillTensorOpsHeadDim);
         const uint d = linear % uint(kPrefillTensorOpsHeadDim);
-        if (valid_query_rows != 0u) {
+        const uint token = output_row / heads_per_group;
+        if (token < valid_tokens) {
             query_tile[linear] = Q[
-                query_start * p.qTokenStrideElements
-                + (qh_start + output_row) * p.headDim
+                (query_start + token) * p.qTokenStrideElements
+                + (qh_start + output_row % heads_per_group) * p.headDim
                 + d];
         } else {
             query_tile[linear] = half(0.0f);
@@ -1223,7 +1234,7 @@ static inline void attention_prefill_full_tensorops_2d_validity_v2_impl(
     auto query_slice = query_tensor.slice(0, 0);
     auto first_value_slice = value_tensor.slice(0, 0);
     auto output_accumulator =
-        pv_op.get_destination_cooperative_tensor<
+        pv_op.template get_destination_cooperative_tensor<
             decltype(weight_tensor), decltype(first_value_slice), float>();
     #pragma clang loop unroll(full)
     for (int element = 0;
@@ -1237,13 +1248,13 @@ static inline void attention_prefill_full_tensorops_2d_validity_v2_impl(
     // This full-attention kernel starts at key zero and ignores slidingWindow.
     // The Swift selector must dispatch it only when every prior key is visible.
     const uint last =
-        min(p.kvValidCount, p.startPosition + query_start + valid_query_rows);
+        min(p.kvValidCount, p.startPosition + query_start + valid_tokens);
     for (uint key_start = 0u;
          key_start < last;
          key_start += uint(kPrefillTensorOpsKeys)) {
         auto key_slice = key_tensor.slice(0, int32_t(key_start));
         auto score_product =
-            qk_op.get_destination_cooperative_tensor<
+            qk_op.template get_destination_cooperative_tensor<
                 decltype(query_slice), decltype(key_slice), float>();
         #pragma clang loop unroll(full)
         for (int element = 0;
@@ -1272,8 +1283,9 @@ static inline void attention_prefill_full_tensorops_2d_validity_v2_impl(
 
         if (lid < uint(kPrefillTensorOpsOutputs)) {
             const uint output_row = lid;
-            const uint causal_last = valid_query_rows != 0u
-                ? min(p.kvValidCount, p.startPosition + query_start + 1u)
+            const uint token = output_row / heads_per_group;
+            const uint causal_last = token < valid_tokens
+                ? min(p.kvValidCount, p.startPosition + query_start + token + 1u)
                 : 0u;
             const uint visible =
                 causal_last > key_start
@@ -1314,7 +1326,7 @@ static inline void attention_prefill_full_tensorops_2d_validity_v2_impl(
 
         auto value_slice = value_tensor.slice(0, int32_t(key_start));
         auto output_product =
-            pv_op.get_destination_cooperative_tensor<
+            pv_op.template get_destination_cooperative_tensor<
                 decltype(weight_tensor), decltype(value_slice), float>();
         #pragma clang loop unroll(full)
         for (int element = 0;
@@ -1354,11 +1366,12 @@ static inline void attention_prefill_full_tensorops_2d_validity_v2_impl(
             output_accumulator.get_multidimensional_index(element);
         const uint d = uint(position[0]);
         const uint output_row = uint(position[1]);
-        if (valid_query_rows != 0u) {
+        const uint token = output_row / heads_per_group;
+        if (token < valid_tokens) {
             const float denominator = row_sum[output_row];
             O[
-                query_start * p.oTokenStrideElements
-                + (qh_start + output_row) * p.headDim
+                (query_start + token) * p.oTokenStrideElements
+                + (qh_start + output_row % heads_per_group) * p.headDim
                 + d] = denominator > 0.0f
                     ? half(output_accumulator[element] / denominator)
                     : half(0.0f);
@@ -1366,30 +1379,40 @@ static inline void attention_prefill_full_tensorops_2d_validity_v2_impl(
     }
 }
 
-kernel void attention_prefill_full_tensorops_2d_validity_v2(
-    device const half* Q [[buffer(0)]],
-    device half* K [[buffer(1)]],
-    device half* V [[buffer(2)]],
-    device half* O [[buffer(3)]],
-    constant PrefillAttentionParams& p [[buffer(4)]],
-    uint3 tg [[threadgroup_position_in_grid]],
-    uint lid [[thread_index_in_threadgroup]],
-    uint3 threads3 [[threads_per_threadgroup]]
-) {
-    threadgroup half query_tile[
-        kPrefillTensorOpsOutputs * kPrefillTensorOpsHeadDim];
-    threadgroup float score_tile[
-        kPrefillTensorOpsOutputs * kPrefillTensorOpsKeys];
-    threadgroup float weight_tile[
-        kPrefillTensorOpsOutputs * kPrefillTensorOpsKeys];
-    threadgroup float row_max[kPrefillTensorOpsOutputs];
-    threadgroup float row_sum[kPrefillTensorOpsOutputs];
-    threadgroup float row_old_scale[kPrefillTensorOpsOutputs];
-    attention_prefill_full_tensorops_2d_validity_v2_impl(
-        Q, K, V, O, p, tg, lid, threads3.x,
-        query_tile, score_tile, weight_tile,
-        row_max, row_sum, row_old_scale);
+#define TUFF_PREFILL_TENSOROPS_KERNEL(NAME, HEAD_DIM, HEADS_PER_GROUP)     \
+kernel void NAME(                                                          \
+    device const half* Q [[buffer(0)]],                                    \
+    device half* K [[buffer(1)]],                                          \
+    device half* V [[buffer(2)]],                                          \
+    device half* O [[buffer(3)]],                                          \
+    constant PrefillAttentionParams& p [[buffer(4)]],                      \
+    uint3 tg [[threadgroup_position_in_grid]],                             \
+    uint lid [[thread_index_in_threadgroup]],                              \
+    uint3 threads3 [[threads_per_threadgroup]]                             \
+) {                                                                        \
+    threadgroup half query_tile[kPrefillTensorOpsOutputs * (HEAD_DIM)];    \
+    threadgroup float score_tile[                                          \
+        kPrefillTensorOpsOutputs * kPrefillTensorOpsKeys];                 \
+    threadgroup float weight_tile[                                         \
+        kPrefillTensorOpsOutputs * kPrefillTensorOpsKeys];                 \
+    threadgroup float row_max[kPrefillTensorOpsOutputs];                   \
+    threadgroup float row_sum[kPrefillTensorOpsOutputs];                   \
+    threadgroup float row_old_scale[kPrefillTensorOpsOutputs];             \
+    attention_prefill_full_tensorops_2d_validity_v2_impl<                  \
+        HEAD_DIM, HEADS_PER_GROUP>(                                        \
+        Q, K, V, O, p, tg, lid, threads3.x,                                \
+        query_tile, score_tile, weight_tile,                               \
+        row_max, row_sum, row_old_scale);                                  \
 }
+
+// The original Gemma 4 26B-A4B shape keeps its name so benchmark and
+// diagnostic paths that reference it are unchanged.
+TUFF_PREFILL_TENSOROPS_KERNEL(attention_prefill_full_tensorops_2d_validity_v2, 512, 8)
+TUFF_PREFILL_TENSOROPS_KERNEL(attention_prefill_full_tensorops_2d_g4_d512, 512, 4)
+TUFF_PREFILL_TENSOROPS_KERNEL(attention_prefill_full_tensorops_2d_g8_d256, 256, 8)
+TUFF_PREFILL_TENSOROPS_KERNEL(attention_prefill_full_tensorops_2d_g4_d256, 256, 4)
+
+#undef TUFF_PREFILL_TENSOROPS_KERNEL
 
 #endif
 

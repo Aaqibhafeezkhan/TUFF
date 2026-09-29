@@ -50,7 +50,7 @@ import TUFFValidationSupport
             rows: UInt32(rows), columns: UInt32(columns))
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
-        try checkCommandBufferError(commandBuffer.error)
+        try checkCommandBufferError(commandBuffer)
 
         let actual = Fp16Buffer.read(outputBuffer, count: rows)
         let relative = RelError.compute(actual: actual, reference: biasedReference)

@@ -131,6 +131,25 @@ import TUFFValidationSupport
         }
     }
 
+    /// Full-attention shapes of the TUFF models the grouped TensorOps kernel
+    /// serves, with each model's attention scale.
+    private static let tensorOpsModelShapes:
+        [(label: String, headDim: Int, qHeads: Int, kvHeads: Int, scale: Float,
+          variant: PrefillTensorOpsVariant)] = [
+        ("gemma4-26b-a4b", 512, 16, 2, 1.0,
+         PrefillTensorOpsVariant(headsPerGroup: 8, headDim: 512)),
+        ("gemma4-12b-qat", 512, 16, 1, 1.0,
+         PrefillTensorOpsVariant(headsPerGroup: 8, headDim: 512)),
+        ("gemma4-e2b", 512, 8, 1, 1.0,
+         PrefillTensorOpsVariant(headsPerGroup: 8, headDim: 512)),
+        ("gemma4-e4b", 512, 8, 2, 1.0,
+         PrefillTensorOpsVariant(headsPerGroup: 4, headDim: 512)),
+        ("qwen36-35b-a3b", 256, 16, 2, 0.0625,
+         PrefillTensorOpsVariant(headsPerGroup: 8, headDim: 256)),
+        ("qwen3.8-flash-next", 256, 24, 2, 0.0625,
+         PrefillTensorOpsVariant(headsPerGroup: 4, headDim: 256)),
+    ]
+
     @Test(arguments: [
         1,
         63, 64, 65,
@@ -140,9 +159,11 @@ import TUFFValidationSupport
     ])
     func tensorOps2DFullAttentionMatchesReferenceAtTileBoundaries(_ visibleKeys: Int) throws {
         let context = try MetalContext()
-        // Hosted CI has no Apple10 GPU, so it returns without dispatching this
-        // kernel. Run this suite on Apple10 before changing the TensorOps path.
-        guard context.device.supportsFamily(.apple10) else { return }
+        let attention = try PrefillAttention(context: context)
+        let variant = PrefillTensorOpsVariant(headsPerGroup: 8, headDim: 512)
+        // GPU family is not the capability test: the pipeline compiles and
+        // dispatches on the Apple8 M2. It is absent only below MSL 4.
+        guard attention.tensorOpsAvailable(variant) else { return }
         let fixture = Self.makeFixture(start: visibleKeys - 1,
                                        chunk: 1,
                                        window: 0,
@@ -167,8 +188,90 @@ import TUFFValidationSupport
                 "TensorOps 2D rel=\(rel) maxAbs=\(maxAbs) keys=\(visibleKeys)")
     }
 
+    /// Every model shape, a multi-token chunk (causal inside the chunk) that
+    /// crosses a 64-key tile, against the CPU reference.
+    @Test(arguments: 0..<6)
+    func tensorOpsMatchesReferenceForEveryTUFFModelShape(_ index: Int) throws {
+        let shape = Self.tensorOpsModelShapes[index]
+        let context = try MetalContext()
+        let attention = try PrefillAttention(context: context)
+        guard attention.tensorOpsAvailable(shape.variant) else { return }
+
+        for (start, chunk) in [(0, 5), (61, 7), (190, 3)] {
+            var fixture = Self.makeFixture(start: start,
+                                           chunk: chunk,
+                                           window: 0,
+                                           seed: 0xA900 + UInt64(index * 16 + chunk),
+                                           headDim: shape.headDim,
+                                           qHeads: shape.qHeads,
+                                           kvHeads: shape.kvHeads)
+            fixture.scale = shape.scale
+            let candidate = try Self.runKernel(fixture, path: .fullTensorOps2DValidityV2)
+            let reference = Self.reference(fixture)
+            let maxAbs = RelError.maxAbsDiff(candidate, reference)
+            let rel = RelError.compute(actual: candidate, reference: reference)
+            let label = "\(shape.label) start=\(start) chunk=\(chunk)"
+            #expect(maxAbs <= 2e-2, "\(label) maxAbs=\(maxAbs) rel=\(rel)")
+            #expect(rel <= 2e-2, "\(label) rel=\(rel) maxAbs=\(maxAbs)")
+        }
+    }
+
+    /// A variant that fails to build falls back silently to the much slower
+    /// tiled kernel, so on an MSL 4 system every one must be present. This is
+    /// also what keeps the guarded tests above from passing vacuously.
+    @Test func everyVariantBuildsWhereMSL4IsAvailable() throws {
+        guard #available(macOS 26.0, *) else { return }
+        let attention = try PrefillAttention(context: try MetalContext())
+        for variant in PrefillTensorOpsVariant.all {
+            #expect(attention.tensorOpsAvailable(variant), "\(variant.functionName)")
+        }
+    }
+
+    @Test func selectorPicksTheLargestGroupThatSharesOneKVHead() {
+        for shape in Self.tensorOpsModelShapes {
+            let params = Self.selectorParams(headDim: shape.headDim,
+                                             qHeads: shape.qHeads,
+                                             kvHeads: shape.kvHeads)
+            #expect(PrefillTensorOpsVariant.select(params: params,
+                                                   kvRingCapacity: 0,
+                                                   layerKind: .full) == shape.variant,
+                    "\(shape.label)")
+        }
+    }
+
+    @Test func selectorRejectsShapesAndVisibilityTheKernelCannotComputeExactly() {
+        let eligible = Self.selectorParams(headDim: 512, qHeads: 16, kvHeads: 2)
+        #expect(PrefillTensorOpsVariant.select(params: eligible, kvRingCapacity: 0,
+                                               layerKind: .full) != nil)
+
+        // MiniMax M2.7: six query heads per KV head, 128-wide.
+        #expect(PrefillTensorOpsVariant.select(
+            params: Self.selectorParams(headDim: 128, qHeads: 48, kvHeads: 8),
+            kvRingCapacity: 0, layerKind: .full) == nil)
+        // Gemma 4 sliding layers: two query heads per KV head.
+        #expect(PrefillTensorOpsVariant.select(
+            params: Self.selectorParams(headDim: 256, qHeads: 16, kvHeads: 8),
+            kvRingCapacity: 0, layerKind: .full) == nil)
+        #expect(PrefillTensorOpsVariant.select(params: eligible, kvRingCapacity: 0,
+                                               layerKind: .slidingWindow) == nil)
+        #expect(PrefillTensorOpsVariant.select(params: eligible, kvRingCapacity: 1_024,
+                                               layerKind: .full) == nil)
+
+        var clipping = eligible
+        clipping.slidingWindow = clipping.kvValidCount - 1
+        #expect(PrefillTensorOpsVariant.select(params: clipping, kvRingCapacity: 0,
+                                               layerKind: .full) == nil)
+
+        var image = eligible
+        image.bidirectionalBlockStart = 4
+        image.bidirectionalBlockEnd = 9
+        #expect(PrefillTensorOpsVariant.select(params: image, kvRingCapacity: 0,
+                                               layerKind: .full) == nil)
+    }
+
     @Test func preferredTensorOpsPathUsesSafeHardwareFallback() throws {
         let context = try MetalContext()
+        let attention = try PrefillAttention(context: context)
         let fixture = Self.makeFixture(start: 128,
                                        chunk: 1,
                                        window: 0,
@@ -186,10 +289,63 @@ import TUFFValidationSupport
                 "preferred TensorOps maxAbs=\(maxAbs) rel=\(rel)")
         #expect(rel <= 2e-2,
                 "preferred TensorOps rel=\(rel) maxAbs=\(maxAbs)")
-        if !context.device.supportsFamily(.apple10) {
+        if attention.tensorOpsAvailable(
+            PrefillTensorOpsVariant(headsPerGroup: 8, headDim: 512)) {
+            let explicit = try Self.runKernel(fixture, path: .fullTensorOps2DValidityV2)
+            #expect(preferred == explicit)
+        } else {
             let baseline = try Self.runKernel(fixture, path: .causalTiled)
             #expect(preferred == baseline)
         }
+    }
+
+    @Test func preferredPathUsesTiledWhenTensorOpsIsUnavailable() throws {
+        let fixture = Self.makeFixture(start: 128,
+                                       chunk: 8,
+                                       window: 0,
+                                       seed: 0xA873,
+                                       headDim: 512,
+                                       qHeads: 16,
+                                       kvHeads: 2)
+        let preferred = try Self.runKernel(fixture,
+                                           path: .fullTensorOps2DPreferred,
+                                           simulatingMissingTensorOps: true)
+        let tiled = try Self.runKernel(fixture, path: .causalTiled)
+        #expect(preferred == tiled)
+    }
+
+    /// A full-attention layer whose window would clip must not reach the
+    /// kernel, which reads every key from zero.
+    @Test func preferredPathRejectsAWindowThatActuallyClips() throws {
+        let fixture = Self.makeFixture(start: 40,
+                                       chunk: 8,
+                                       window: 16,
+                                       seed: 0xA877,
+                                       headDim: 512,
+                                       qHeads: 16,
+                                       kvHeads: 2)
+        let preferred = try Self.runKernel(fixture,
+                                           path: .fullTensorOps2DPreferred,
+                                           layerKindOverride: .full)
+        let tiled = try Self.runKernel(fixture,
+                                       path: .causalTiled,
+                                       layerKindOverride: .full)
+        #expect(preferred == tiled)
+    }
+
+    private static func selectorParams(headDim: Int, qHeads: Int, kvHeads: Int)
+        -> PrefillAttentionParams {
+        PrefillAttentionParams(startPosition: 100,
+                               queryCount: 8,
+                               headDim: UInt32(headDim),
+                               numQHeads: UInt32(qHeads),
+                               numKVHeads: UInt32(kvHeads),
+                               kvValidCount: 108,
+                               slidingWindow: 108,
+                               kvTokenStrideElements: UInt32(kvHeads * headDim),
+                               qTokenStrideElements: UInt32(qHeads * headDim),
+                               oTokenStrideElements: UInt32(qHeads * headDim),
+                               scale: 1.0)
     }
 
     private static func makeFixture(start: Int,
@@ -315,10 +471,13 @@ import TUFFValidationSupport
     private static func runKernel(
         _ fixture: Fixture,
         kvRingCapacity: UInt32 = 0,
-        path: RuntimePrefillAttentionPath = .causalTiled
+        path: RuntimePrefillAttentionPath = .causalTiled,
+        simulatingMissingTensorOps: Bool = false,
+        layerKindOverride: PrefillAttentionLayerKind? = nil
     ) throws -> [Float] {
         let ctx = try MetalContext()
-        let prefill = try PrefillAttention(context: ctx)
+        let prefill = try PrefillAttention(
+            context: ctx, simulatingMissingTensorOps: simulatingMissingTensorOps)
         let qPrefix = 17
         let kPrefix = 19
         let vPrefix = 23
@@ -363,10 +522,12 @@ import TUFFValidationSupport
                              outOffset: oPrefix * MemoryLayout<Float16>.size,
                              params: params,
                              kvRingCapacity: kvRingCapacity,
-                             layerKind: fixture.window == 0 ? .full : .slidingWindow,
+                             layerKind: layerKindOverride
+                                 ?? (fixture.window == 0 ? .full : .slidingWindow),
                              path: path)
         cb.commit()
         cb.waitUntilCompleted()
+        try checkCommandBufferError(cb)
 
         let out = Fp16Buffer.read(outBuf, count: outCount)
         var compact = [Float](repeating: 0, count: fixture.chunk * fixture.qHeads * fixture.headDim)

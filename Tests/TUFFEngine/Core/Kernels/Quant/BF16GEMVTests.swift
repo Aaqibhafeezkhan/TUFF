@@ -86,7 +86,7 @@ import TUFFValidationSupport
                            columns: columns)
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
-        try checkCommandBufferError(commandBuffer.error)
+        try checkCommandBufferError(commandBuffer)
 
         let halfPointer = halfOutput.contents()
             .assumingMemoryBound(to: Float16.self)
@@ -128,7 +128,7 @@ import TUFFValidationSupport
             hiddenSize: hidden)
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
-        try checkCommandBufferError(commandBuffer.error)
+        try checkCommandBufferError(commandBuffer)
 
         let values = Fp16Buffer.read(output, count: hidden + 2)
         #expect(Array(values[0..<2]) == [42, -42])
@@ -172,7 +172,7 @@ import TUFFValidationSupport
             hiddenSize: hidden)
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
-        try checkCommandBufferError(commandBuffer.error)
+        try checkCommandBufferError(commandBuffer)
 
         let pointer = output.contents().assumingMemoryBound(to: Float.self)
         #expect(pointer[0] == 42)
@@ -253,7 +253,7 @@ import TUFFValidationSupport
             columns: columns)
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
-        try checkCommandBufferError(commandBuffer.error)
+        try checkCommandBufferError(commandBuffer)
 
         let oldPointer = oldTokens.contents().assumingMemoryBound(to: UInt32.self)
         let newPointer = newTokens.contents().assumingMemoryBound(to: UInt32.self)
@@ -357,7 +357,7 @@ import TUFFValidationSupport
                                columns: columns)
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
-        try checkCommandBufferError(commandBuffer.error)
+        try checkCommandBufferError(commandBuffer)
 
         let scalarHalfValues = Fp16Buffer.read(scalarHalf,
                                                count: batch * halfOutputStride)

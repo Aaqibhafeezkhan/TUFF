@@ -24,7 +24,7 @@ import TUFFValidationSupport
             count: UInt32(gate.count))
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
-        try checkCommandBufferError(commandBuffer.error)
+        try checkCommandBufferError(commandBuffer)
 
         let actual = Fp16Buffer.read(output, count: gate.count)
         let reference = GPTOSSMoERef.cappedSwiGLU(
@@ -71,7 +71,7 @@ import TUFFValidationSupport
             numExperts: UInt32(numExperts))
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
-        try checkCommandBufferError(commandBuffer.error)
+        try checkCommandBufferError(commandBuffer)
 
         let pointer = indices.contents().bindMemory(to: UInt32.self, capacity: 4)
         #expect(pointer[0] == 0)

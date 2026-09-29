@@ -972,6 +972,6 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
         _ commandBuffer: MTLCommandBuffer
     ) throws {
         commandBuffer.waitUntilCompleted()
-        try checkCommandBufferError(commandBuffer.error)
+        try checkCommandBufferError(commandBuffer)
     }
 }

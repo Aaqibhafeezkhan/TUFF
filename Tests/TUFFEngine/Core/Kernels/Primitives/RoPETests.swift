@@ -132,7 +132,7 @@ import TUFFValidationSupport
             betaSlow: 1)
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
-        try checkCommandBufferError(commandBuffer.error)
+        try checkCommandBufferError(commandBuffer)
 
         let actual = Fp16Buffer.read(buffer, count: count)
         let reference = RopeRef.applyYaRNNeox(

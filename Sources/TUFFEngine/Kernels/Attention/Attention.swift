@@ -53,9 +53,20 @@ final class Attention {
         var ringCapacity: UInt32
     }
 
-    /// Largest `numQHeads / numKVHeads` the SIMD-per-head kernel accepts; it
-    /// gives each query head one of the threadgroup's SIMD groups.
+    /// Most query heads one SIMD-per-head threadgroup serves; it gives each
+    /// query head one of the threadgroup's SIMD groups. Mirrors
+    /// `kAttnSimdMaxQPerKV` in attention.metal.
     static let maxSIMDPerHeadQPerKV = 8
+
+    /// How many threadgroups split one KV head's query heads, or nil when the
+    /// heads cannot be divided into equal blocks of at most
+    /// `maxSIMDPerHeadQPerKV`. 16 heads (Gemma 4 12B full layers) are two
+    /// blocks of 8; 12 (Qwen 3.8 Flash Next) are two blocks of 6.
+    static func simdPerHeadBlocks(qPerKV: Int) -> Int? {
+        guard qPerKV > 0 else { return nil }
+        let blocks = (qPerKV + maxSIMDPerHeadQPerKV - 1) / maxSIMDPerHeadQPerKV
+        return qPerKV % blocks == 0 ? blocks : nil
+    }
 
 
     /// Mirrors `kAttnThreads` in `attention.metal`. The kernel was authored
@@ -165,11 +176,12 @@ final class Attention {
         // The SIMD-per-head kernel is the default wherever its shape rules
         // hold: it drops the per-position threadgroup barriers and lets the
         // query heads of one KV head share their K/V reads.
+        let simdBlocks = Self.simdPerHeadBlocks(qPerKV: qPerKV)
         let useSIMDPerHead = headDim > 0
             && headDim % 32 == 0
             && Int(headDim) <= maxHeadDim
             && numQHeads % numKVHeads == 0
-            && qPerKV <= maxSIMDPerHeadQPerKV
+            && simdBlocks != nil
         let useSWAGQAPartial = !useSIMDPerHead && preferGQASWA && qPerKV <= 2
         let effectiveLength = Int(seqLen) - Int(kvStart)
         let baseChunks = Self.chunkCount(effLen: effectiveLength,
@@ -182,8 +194,10 @@ final class Attention {
             ? max(baseChunks, min(Self.maxChunks, baseChunks * qPerKV))
             : baseChunks
         let chunkLength = (max(1, effectiveLength) + numChunks - 1) / numChunks
-        let partialHeadGroups = (useSWAGQAPartial || useSIMDPerHead)
-            ? Int(numKVHeads) : Int(numQHeads)
+        let blocks = useSIMDPerHead ? simdBlocks! : 1
+        let partialHeadGroups = useSIMDPerHead
+            ? Int(numKVHeads) * blocks
+            : (useSWAGQAPartial ? Int(numKVHeads) : Int(numQHeads))
         return AttentionSplitGeometry(effectiveLength: effectiveLength,
                                       numChunks: numChunks,
                                       chunkLength: chunkLength,
@@ -191,7 +205,7 @@ final class Attention {
                                       useSWAGroupedPartial: useSWAGQAPartial,
                                       useSIMDPerHeadPartial: useSIMDPerHead,
                                       partialThreadgroupWidth: useSIMDPerHead
-                                          ? 32 * qPerKV
+                                          ? 32 * (qPerKV / blocks)
                                           : threadsPerGroup)
     }
 

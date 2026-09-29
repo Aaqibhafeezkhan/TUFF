@@ -46,6 +46,51 @@ import TUFFValidationSupport
         #expect(!full.useSWAGroupedPartial)
     }
 
+    /// Decode shapes of TUFF's models. Groups wider than eight query heads per
+    /// KV head split into equal SIMD blocks instead of dropping to the
+    /// per-head kernel with two barriers per position.
+    @Test func simdPerHeadGeometryCoversEveryTUFFDecodeShape() {
+        let shapes: [(label: String, headDim: UInt32, q: UInt32, kv: UInt32,
+                      blocks: Int, width: Int)] = [
+            ("gemma4-26b full", 512, 16, 2, 1, 256),
+            ("gemma4 sliding", 256, 16, 8, 1, 64),
+            ("gemma4-12b full", 512, 16, 1, 2, 256),
+            ("gemma4-e2b full", 512, 8, 1, 1, 256),
+            ("gemma4-e4b full", 512, 8, 2, 1, 128),
+            ("qwen36 full", 256, 16, 2, 1, 256),
+            ("qwen3.8 flash full", 256, 24, 2, 2, 192),
+            ("minimax full", 128, 48, 8, 1, 192),
+            ("gpt-oss", 64, 64, 8, 1, 256),
+        ]
+        for shape in shapes {
+            let geometry = Attention.splitGeometry(numQHeads: shape.q,
+                                                   numKVHeads: shape.kv,
+                                                   seqLen: 4_096,
+                                                   kvStart: 0,
+                                                   preferGQASWA: false,
+                                                   headDim: shape.headDim)
+            #expect(geometry.useSIMDPerHeadPartial, "\(shape.label)")
+            #expect(geometry.partialThreadgroupWidth == shape.width, "\(shape.label)")
+            #expect(geometry.partialThreadgroups
+                        == Int(shape.kv) * shape.blocks * geometry.numChunks,
+                    "\(shape.label)")
+        }
+    }
+
+    @Test func unevenWideGroupsFallBackToThePerHeadKernel() {
+        #expect(Attention.simdPerHeadBlocks(qPerKV: 16) == 2)
+        #expect(Attention.simdPerHeadBlocks(qPerKV: 12) == 2)
+        #expect(Attention.simdPerHeadBlocks(qPerKV: 24) == 3)
+        #expect(Attention.simdPerHeadBlocks(qPerKV: 9) == nil)
+        #expect(Attention.simdPerHeadBlocks(qPerKV: 17) == nil)
+
+        let nine = Attention.splitGeometry(numQHeads: 9, numKVHeads: 1,
+                                           seqLen: 512, kvStart: 0,
+                                           preferGQASWA: false, headDim: 64)
+        #expect(!nine.useSIMDPerHeadPartial)
+        #expect(nine.partialThreadgroups == 9 * nine.numChunks)
+    }
+
     // MARK: - Gemma 4 scale=1.0 path
 
     /// Gemma 4 uses an attention scale of 1.0. Verify the kernel honours the
@@ -385,6 +430,26 @@ import TUFFValidationSupport
     @Test func attentionFull_realShape() throws {
         try Self.runAndCompare(headDim: 512, numQHeads: 16, numKVHeads: 2,
                                seqLen: 128, mode: .full, seed: 0x175)
+    }
+
+    /// Gemma 4 12B's full layers: sixteen query heads on one KV head, split
+    /// into two SIMD blocks.
+    @Test func attentionFull_gemma12BWideGroupMatchesReference() throws {
+        try Self.runAndCompare(headDim: 512, numQHeads: 16, numKVHeads: 1,
+                               seqLen: 300, mode: .full, seed: 0x178)
+    }
+
+    /// Qwen 3.8 Flash Next: twelve query heads per KV head, two blocks of six.
+    @Test func attentionFull_flashNextWideGroupMatchesReference() throws {
+        try Self.runAndCompare(headDim: 256, numQHeads: 24, numKVHeads: 2,
+                               seqLen: 257, mode: .full, seed: 0x179,
+                               scale: 0.0625)
+    }
+
+    /// Nine heads cannot split evenly and take the per-head kernel.
+    @Test func attentionFull_unevenWideGroupMatchesReference() throws {
+        try Self.runAndCompare(headDim: 64, numQHeads: 9, numKVHeads: 1,
+                               seqLen: 131, mode: .full, seed: 0x17A)
     }
 
     @Test func gptOssAttentionSinksMatchReferenceAtProductionHeadShape() throws {

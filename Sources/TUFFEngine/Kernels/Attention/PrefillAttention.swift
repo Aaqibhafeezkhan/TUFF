@@ -51,19 +51,110 @@ struct PrefillAttentionParams: Sendable, Equatable {
 }
 
 
+/// One compiled shape of the grouped TensorOps full-attention kernel. Each
+/// threadgroup computes eight rows: `headsPerGroup` query heads that read the
+/// same KV head, for `tokensPerGroup` query tokens.
+struct PrefillTensorOpsVariant: Hashable, Sendable {
+    static let rowsPerThreadgroup = 8
+
+    var headsPerGroup: Int
+    var headDim: Int
+
+    var tokensPerGroup: Int { Self.rowsPerThreadgroup / headsPerGroup }
+
+    /// Every shape TUFF's full-attention layers use: Gemma 4 26B-A4B and
+    /// 12B (512, groups of 8 and 16), E2B (512/8), E4B (512/4), Qwen 3.6
+    /// (256/8) and Qwen 3.8 Flash Next (256/12). MiniMax (128/6) and GPT-OSS
+    /// (sinks, separate runner) stay on their existing paths.
+    static let all: [PrefillTensorOpsVariant] = [
+        PrefillTensorOpsVariant(headsPerGroup: 8, headDim: 512),
+        PrefillTensorOpsVariant(headsPerGroup: 4, headDim: 512),
+        PrefillTensorOpsVariant(headsPerGroup: 8, headDim: 256),
+        PrefillTensorOpsVariant(headsPerGroup: 4, headDim: 256),
+    ]
+
+    var functionName: String {
+        if headsPerGroup == 8 && headDim == 512 {
+            return "attention_prefill_full_tensorops_2d_validity_v2"
+        }
+        return "attention_prefill_full_tensorops_2d_g\(headsPerGroup)_d\(headDim)"
+    }
+
+    /// The variant for a dispatch, or nil when TensorOps cannot compute it
+    /// exactly. The kernel starts every key loop at zero and has no ring or
+    /// bidirectional-block addressing, so these are visibility guards as well
+    /// as shape checks.
+    static func select(params: PrefillAttentionParams,
+                       kvRingCapacity: UInt32,
+                       layerKind: PrefillAttentionLayerKind) -> PrefillTensorOpsVariant? {
+        guard layerKind == .full,
+              kvRingCapacity == 0,
+              params.slidingWindow == 0 || params.slidingWindow >= params.kvValidCount,
+              params.bidirectionalBlockEnd <= params.bidirectionalBlockStart,
+              params.numKVHeads > 0,
+              params.numQHeads % params.numKVHeads == 0 else {
+            return nil
+        }
+        let queryHeadsPerKV = Int(params.numQHeads / params.numKVHeads)
+        // Larger groups read each K/V tile for more heads, so prefer them.
+        return all
+            .filter { $0.headDim == Int(params.headDim)
+                && queryHeadsPerKV % $0.headsPerGroup == 0 }
+            .max { $0.headsPerGroup < $1.headsPerGroup }
+    }
+}
+
 final class PrefillAttention {
     private let context: MetalContext
     private let psoCausalTiled: MTLComputePipelineState
     private let psoParamsSmoke: MTLComputePipelineState
-    private let psoFullTensorOps2DValidityV2: MTLComputePipelineState?
+    private let tensorOpsPipelines: [PrefillTensorOpsVariant: MTLComputePipelineState]
 
-    init(context: MetalContext) throws {
+    convenience init(context: MetalContext) throws {
+        try self.init(context: context, simulatingMissingTensorOps: false)
+    }
+
+    /// Tests can force the tiled fallback on a host where TensorOps builds.
+    init(context: MetalContext, simulatingMissingTensorOps: Bool) throws {
         self.context = context
         self.psoCausalTiled = try context.pipeline("attention_prefill_causal_tiled")
         self.psoParamsSmoke = try context.pipeline("prefill_attention_params_smoke")
-        self.psoFullTensorOps2DValidityV2 = context.device.supportsFamily(.apple10)
-            ? try? context.pipeline("attention_prefill_full_tensorops_2d_validity_v2")
-            : nil
+        // Capability is whether the MSL 4 pipeline builds, not the GPU
+        // family: it compiles and dispatches on the Apple8 M2 as well as on
+        // Apple10. macOS 15 compiles MSL 3.2, where these kernels are absent
+        // and the tiled path is used.
+        var pipelines: [PrefillTensorOpsVariant: MTLComputePipelineState] = [:]
+        if !simulatingMissingTensorOps {
+            for variant in PrefillTensorOpsVariant.all {
+                do {
+                    pipelines[variant] = try context.pipeline(variant.functionName)
+                } catch {
+                    Self.reportUnavailable(variant, error: error)
+                }
+            }
+        }
+        self.tensorOpsPipelines = pipelines
+    }
+
+    func tensorOpsAvailable(_ variant: PrefillTensorOpsVariant) -> Bool {
+        tensorOpsPipelines[variant] != nil
+    }
+
+    private static let reportLock = NSLock()
+    private static nonisolated(unsafe) var reportedUnavailable: Set<PrefillTensorOpsVariant> = []
+
+    /// Once per variant per process, so a variant that should have built is
+    /// visible in logs without repeating for every runner. macOS 15 compiles
+    /// MSL 3.2, where these kernels are absent by design, so it stays quiet.
+    private static func reportUnavailable(_ variant: PrefillTensorOpsVariant, error: any Error) {
+        guard #available(macOS 26.0, iOS 26.0, *) else { return }
+        reportLock.lock()
+        let first = reportedUnavailable.insert(variant).inserted
+        reportLock.unlock()
+        guard first else { return }
+        FileHandle.standardError.write(Data(
+            ("PrefillAttention: \(variant.functionName) unavailable; "
+             + "using causal-tiled fallback: \(error)\n").utf8))
     }
 
     func encodeCausal(commandBuffer: MTLCommandBuffer,
@@ -88,26 +179,24 @@ final class PrefillAttention {
 
         let requestsTensorOps = path == .fullTensorOps2DPreferred
             || path == .fullTensorOps2DValidityV2
-        // The pinned model uses 512/16/2 only for full attention; its
-        // sliding-window layers use 256/16/8. A future model that reuses this
-        // shape for sliding attention must add a full-visibility check here.
-        let tensorOpsShape = requestsTensorOps
-            && kvRingCapacity == 0
-            && effectiveParams.headDim == 512
-            && effectiveParams.numQHeads == 16
-            && effectiveParams.numKVHeads == 2
-            && effectiveParams.scale == 1.0
-        let tensorOpsPipeline = tensorOpsShape ? psoFullTensorOps2DValidityV2 : nil
+        let variant = requestsTensorOps
+            ? PrefillTensorOpsVariant.select(params: effectiveParams,
+                                             kvRingCapacity: kvRingCapacity,
+                                             layerKind: layerKind)
+            : nil
+        let tensorOpsPipeline = variant.flatMap { tensorOpsPipelines[$0] }
         let useTensorOps = tensorOpsPipeline != nil
         let pipeline: MTLComputePipelineState
         if let tensorOpsPipeline {
             pipeline = tensorOpsPipeline
-        } else if tensorOpsShape && path == .fullTensorOps2DValidityV2 {
+        } else if let variant, path == .fullTensorOps2DValidityV2 {
             preconditionFailure(
-                "TensorOps 2D prefill attention requires Apple10 MPP tensor support")
+                "TensorOps 2D prefill attention pipeline \(variant.functionName) "
+                + "is unavailable on this Metal stack")
         } else {
-            // Explicit mode also falls back for incompatible shapes. Benchmark
-            // fixtures must use 512/16/2 to prove that TensorOps ran.
+            // Explicit mode also falls back for ineligible shapes. Benchmark
+            // fixtures must use an eligible full-attention shape to prove
+            // that TensorOps ran.
             pipeline = causalTiledPipeline(kvRingCapacity: kvRingCapacity)
         }
         let headDim = Int(effectiveParams.headDim)
@@ -127,8 +216,9 @@ final class PrefillAttention {
         var p = effectiveParams
         enc.setBytes(&p, length: MemoryLayout<PrefillAttentionParams>.stride, index: 4)
         let groups = useTensorOps
-            ? MTLSize(width: Int(effectiveParams.queryCount),
-                      height: Int(effectiveParams.numQHeads) / 8,
+            ? MTLSize(width: (Int(effectiveParams.queryCount) + variant!.tokensPerGroup - 1)
+                          / variant!.tokensPerGroup,
+                      height: Int(effectiveParams.numQHeads) / variant!.headsPerGroup,
                       depth: 1)
             : MTLSize(width: Int(effectiveParams.queryCount),
                       height: Int(effectiveParams.numQHeads),

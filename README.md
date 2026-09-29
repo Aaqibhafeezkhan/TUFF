@@ -379,6 +379,15 @@ should not be proxied, tunneled, or exposed to another machine. Point any
 OpenAI-compatible client at `http://127.0.0.1:<port>/v1` with any API key value;
 `GET /v1/models` reports the identifier to send as `model`.
 
+Like the OpenAI API, the server refuses a top-level request field it does not
+recognize, with a 400 `unknown_parameter` naming it, rather than silently
+generating under settings you did not ask for. A near miss such as `max_token`
+gets a suggestion, and `chat_template_kwargs` points at `enable_thinking`. Real
+OpenAI parameters TUFF cannot honour, such as `logit_bias` or a JSON
+`response_format`, return `unsupported_value`. `user`, `store`, `metadata`,
+`service_tier`, `prompt_cache_key`, and `safety_identifier` are accepted and
+ignored, and any field sent as `null` counts as absent.
+
 ## Build it yourself
 
 You need macOS 15+, Swift 6.2+, Metal 3.2+, and an Apple Silicon Mac.
@@ -393,7 +402,7 @@ swift build -c release
 To build the complete app bundle, embedded updater, ZIP, and checksum:
 
 ```bash
-Scripts/package_app.sh 5.0.3
+Scripts/package_app.sh 5.1.0
 open dist/TUFF.app
 ```
 
@@ -466,6 +475,12 @@ understand instead of misreading the model.
 The file format, memory ownership, Metal kernels, prefill, expert streaming,
 prompt reuse, and image companions are documented in the source, which is the
 copy that stays current.
+
+Long prompt prefill runs large GPU dispatches. On macOS 26 TUFF sets
+`AGX_RELAX_CDM_CTXSTORE_TIMEOUT=1` before it creates a Metal device, which
+relaxes the driver's interactivity deadline so a display-active Mac is less
+likely to kill a long prefill with `ImpactingInteractivity`. Set the variable
+yourself, for example to `0`, and TUFF leaves your value alone.
 
 ## Tests
 

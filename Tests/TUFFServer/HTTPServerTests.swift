@@ -423,6 +423,31 @@ struct HTTPServerTests {
         try await server.shutdown()
     }
 
+    @Test func misspelledFieldReturnsHTTP400BeforeSSEStarts() async throws {
+        let server = TUFFHTTPServer(
+            modelID: "test-model",
+            queueLimit: 1,
+            backend: ScriptedServerBackend())
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        var request = URLRequest(
+            url: URL(string: "http://127.0.0.1:\(port)/v1/chat/completions")!)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "content-type")
+        request.httpBody = Data(#"""
+        {"model":"test-model","messages":[{"role":"user","content":"hi"}],
+         "stream":true,"max_token":16}
+        """#.utf8)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 400)
+        let text = String(decoding: data, as: UTF8.self)
+        #expect(text.contains(#""code":"unknown_parameter""#))
+        #expect(text.contains(#""param":"max_token""#))
+        #expect(!text.contains("data:"))
+
+        try await server.shutdown()
+    }
+
     @Test func streamingRequestErrorUsesEnvelopeAndCompletesTransport() async throws {
         let server = TUFFHTTPServer(
             modelID: "test-model",

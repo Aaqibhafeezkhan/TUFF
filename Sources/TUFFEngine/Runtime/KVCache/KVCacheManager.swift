@@ -236,7 +236,7 @@ public final class KVCacheManager {
         blit.endEncoding()
         cb.commit()
         cb.waitUntilCompleted()
-        try checkCommandBufferError(cb.error)
+        try checkCommandBufferError(cb)
         for replacement in replacements {
             kBuffers[replacement.layer] = replacement.k
             vBuffers[replacement.layer] = replacement.v

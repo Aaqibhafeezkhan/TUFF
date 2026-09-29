@@ -965,8 +965,11 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
         }
     }
 
-    private func makePrefillCommandBuffer() -> MTLCommandBuffer? {
+    /// The label is what a watchdog or driver failure reports, so it names
+    /// the chunk, layer and phase that was running.
+    private func makePrefillCommandBuffer(_ label: String) -> MTLCommandBuffer? {
         let commandBuffer = ctx.queue.makeCommandBuffer()
+        commandBuffer?.label = label
         if collectingSpeculativeMetrics, commandBuffer != nil {
             speculativeTargetCommandBuffers &+= 1
         }
@@ -1567,7 +1570,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
 
         prefillChunkState.markDirty(startPosition: startPosition, tokenCount: tokens.count)
 
-        guard var cb = makePrefillCommandBuffer() else {
+        guard var cb = makePrefillCommandBuffer(
+            "prefill start=\(startPosition) count=\(tokens.count) layer=0 phase=embed_attention") else {
             throw ModelError.residentBufferWrapFailed
         }
         let residualStreams = cfg.hyperConnection.isEnabled
@@ -2359,7 +2363,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                         tileExpertCount: routeTileExpertCount,
                         expertSortKeys: model.routedExpertPhysicalOffsets(layer: L))
 
-                    guard let sharedCB = makePrefillCommandBuffer() else {
+                    guard let sharedCB = makePrefillCommandBuffer(
+                        "prefill start=\(startPosition) count=\(tokens.count) layer=\(L) phase=shared_expert") else {
                         throw ModelError.residentBufferWrapFailed
                     }
                     if let sharedProj = sharedExpertProjections[L] {
@@ -2535,7 +2540,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                             hiddenStrideElements: UInt32(D),
                             binding: fetch.binding,
                             offsets: routedOffsets)
-                        guard let tileCB = makePrefillCommandBuffer() else {
+                        guard let tileCB = makePrefillCommandBuffer(
+                            "prefill start=\(startPosition) count=\(tokens.count) layer=\(L) phase=routed_tile") else {
                             throw ModelError.residentBufferWrapFailed
                         }
                         _ = prefillGroupedMoE.encodeStreamedBatched(
@@ -2561,7 +2567,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                     while !pendingTiles.isEmpty {
                         try drainOldestPendingTile()
                     }
-                    guard let tailCB = makePrefillCommandBuffer() else {
+                    guard let tailCB = makePrefillCommandBuffer(
+                        "prefill start=\(startPosition) count=\(tokens.count) layer=\(L) phase=routed_tail") else {
                         throw ModelError.residentBufferWrapFailed
                     }
                     prefillMoE.encodeReduceTokenMajor(commandBuffer: tailCB,
@@ -2627,7 +2634,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                                                           streams: streams))
                     }
                     if L + 1 < cfg.numLayers {
-                        guard let nextCB = makePrefillCommandBuffer() else {
+                        guard let nextCB = makePrefillCommandBuffer(
+                            "prefill start=\(startPosition) count=\(tokens.count) layer=\(L + 1) phase=attention") else {
                             throw ModelError.residentBufferWrapFailed
                         }
                         cb = nextCB
@@ -2642,7 +2650,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
 
         if writeFinalHead {
             let lm = model.lmHead
-            guard let finalCB = makePrefillCommandBuffer() else {
+            guard let finalCB = makePrefillCommandBuffer(
+                "prefill start=\(startPosition) count=\(tokens.count) phase=final_head") else {
                 throw ModelError.residentBufferWrapFailed
             }
             if usesHyperConnections {
@@ -2776,12 +2785,12 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                 waitUntilCompleted(pending.cb)
             }
             if let sharedCB = pending.sharedCB {
-                try checkCommandBufferError(sharedCB.error)
+                try checkCommandBufferError(sharedCB)
             }
             if let phase1HitCB = pending.phase1HitCB {
-                try checkCommandBufferError(phase1HitCB.error)
+                try checkCommandBufferError(phase1HitCB)
             }
-            try checkCommandBufferError(pending.cb.error)
+            try checkCommandBufferError(pending.cb)
             totalGPURoutedNanos &+= UInt64(max(0, (pending.cb.gpuEndTime - pending.cb.gpuStartTime) * 1e9))
             if let sharedCB = pending.sharedCB {
                 totalGPUSharedNanos &+= UInt64(max(0, (sharedCB.gpuEndTime - sharedCB.gpuStartTime) * 1e9))
@@ -2853,7 +2862,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
             if let first = firstLayerCommandBuffer {
                 first.commit()
                 waitUntilCompleted(first)
-                try checkCommandBufferError(first.error)
+                try checkCommandBufferError(first)
                 firstLayerCommandBuffer = nil
             }
         }
@@ -3210,7 +3219,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                 try finishPendingRoutedCommand(pending, waitIfNeeded: false)
                 pendingRoutedCommand = nil
             }
-            try checkCommandBufferError(cb.error)
+            try checkCommandBufferError(cb)
             totalGPULayerNanos &+= UInt64(max(0, (cb.gpuEndTime - cb.gpuStartTime) * 1e9))
             totalGPULayerCommandBuffers &+= 1
             totalCb1Nanos &+= clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - tCb1Start - waitNanos
@@ -3537,7 +3546,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                 epilogue?(cb)
                 cb.commit()
                 waitUntilCompleted(cb)
-                try checkCommandBufferError(cb.error)
+                try checkCommandBufferError(cb)
                 totalGPULayerNanos &+= UInt64(max(0, (cb.gpuEndTime - cb.gpuStartTime) * 1e9))
                 totalGPULayerCommandBuffers &+= 1
             } else {
@@ -3552,7 +3561,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
         } else if let cb = pendingTokenCommandBuffer {
             cb.commit()
             waitUntilCompleted(cb)
-            try checkCommandBufferError(cb.error)
+            try checkCommandBufferError(cb)
             totalGPULayerNanos &+= UInt64(max(0, (cb.gpuEndTime - cb.gpuStartTime) * 1e9))
             totalGPULayerCommandBuffers &+= 1
         }
@@ -4111,7 +4120,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
 
     private nonisolated func waitForCompletion(_ cb: MTLCommandBuffer) throws {
         waitUntilCompleted(cb)
-        try checkCommandBufferError(cb.error)
+        try checkCommandBufferError(cb)
     }
 
     private nonisolated func waitUntilCompleted(_ cb: MTLCommandBuffer) {
@@ -4170,7 +4179,7 @@ extension RealForwardRunner {
                 for _ in 0..<repetitions { try body(timed) }
                 timed.commit()
                 timed.waitUntilCompleted()
-                try checkCommandBufferError(timed.error)
+                try checkCommandBufferError(timed)
                 best = min(best, timed.gpuEndTime - timed.gpuStartTime)
             }
             report += String(format: "%-34@ %9.1f us  %7.1f GB/s  (%.1f MB)\n",

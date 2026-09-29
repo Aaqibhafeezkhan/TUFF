@@ -159,8 +159,11 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
     /// GPT-OSS graded reasoning control. Harmony defaults to Medium when this
     /// field is absent; other model families reject it.
     public let reasoningEffort: GPTOSSReasoningEffort?
+    /// Kept as raw JSON so a value of any shape reaches the validator as a
+    /// request error rather than as malformed JSON. Only `type` is read.
+    public let responseFormat: JSONValue?
 
-    enum CodingKeys: String, CodingKey {
+    enum CodingKeys: String, CodingKey, CaseIterable {
         case model, messages, stream, temperature, stop, seed, tools, n, logprobs
         case streamOptions = "stream_options"
         case topP = "top_p"
@@ -174,7 +177,192 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
         case frequencyPenalty = "frequency_penalty"
         case enableThinking = "enable_thinking"
         case reasoningEffort = "reasoning_effort"
+        case responseFormat = "response_format"
     }
+
+    /// Top-level keys accepted and ignored: caller-side bookkeeping that
+    /// cannot change what the model generates. Every other undeclared key is
+    /// a 400, so a misspelled option such as `max_token` cannot silently run
+    /// under settings the caller did not ask for.
+    static let toleratedKeys: Set<String> = [
+        "user",
+        "store",
+        "metadata",
+        "service_tier",
+        "prompt_cache_key",
+        "safety_identifier",
+    ]
+
+    /// Real OpenAI parameters TUFF cannot honour, refused as unsupported
+    /// rather than unknown so a caller is not told a real parameter looks
+    /// like a typo. `reasoning_effort` is not here: TUFF honours it for
+    /// GPT-OSS and the validator refuses it per model family.
+    static let unsupportedKeys: [String: String] = [
+        "logit_bias": "logit_bias is not supported",
+        "top_logprobs": "top_logprobs is not supported",
+        "verbosity": "verbosity is not supported",
+        "modalities": "only text output is supported",
+        "audio": "audio output is not supported",
+        "prediction": "predicted outputs are not supported",
+        "web_search_options": "web search is not supported",
+        "functions": "legacy functions are not supported; use tools",
+        "function_call": "legacy function_call is not supported; use tools and tool_choice",
+    ]
+
+    /// Keys other local servers accept that have a TUFF equivalent. Refused
+    /// like any unknown key, with the field to use instead.
+    static let equivalentKeys: [String: String] = [
+        "chat_template_kwargs": "enable_thinking",
+        "max_new_tokens": "max_tokens",
+        "num_predict": "max_tokens",
+        "reasoning": "enable_thinking or, for GPT-OSS, reasoning_effort",
+    ]
+
+    /// Reads the request object's keys as written. The `CodingKeys` container
+    /// reports only the keys it declares, so an undeclared key would be gone
+    /// before validation could see it.
+    private struct AnyKey: CodingKey {
+        let stringValue: String
+        var intValue: Int? { nil }
+
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { nil }
+    }
+
+    private static let maximumNamedKeyLength = 64
+    private static let maximumNamedKeys = 8
+
+    public init(from decoder: any Decoder) throws {
+        // Swept before any typed decode, so a misspelled key is named as
+        // itself rather than answered with whatever DecodingError another
+        // field raises first.
+        let anyKeys = try decoder.container(keyedBy: AnyKey.self)
+        // A key set to null asks for nothing: openai-python sends an unset
+        // option as an explicit null, and declared keys read null as absent.
+        let written = try anyKeys.allKeys
+            .filter { try !anyKeys.decodeNil(forKey: $0) }
+            .map(\.stringValue)
+        // Sorted so the answer never depends on the order keys arrived in.
+        if let unsupported = written.filter({ Self.unsupportedKeys[$0] != nil }).sorted().first {
+            throw ServerRequestError.invalid(
+                message: Self.unsupportedKeys[unsupported]!,
+                param: unsupported,
+                code: "unsupported_value")
+        }
+        let unknown = written
+            .filter { CodingKeys(stringValue: $0) == nil && !Self.toleratedKeys.contains($0) }
+            .sorted()
+        if let first = unknown.first {
+            throw ServerRequestError.invalid(
+                message: Self.unknownKeyMessage(unknown),
+                param: boundedForDisplay(first, maxLength: Self.maximumNamedKeyLength),
+                code: "unknown_parameter")
+        }
+
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        model = try container.decode(String.self, forKey: .model)
+        messages = try container.decode([OpenAIChatMessage].self, forKey: .messages)
+        stream = try container.decodeIfPresent(Bool.self, forKey: .stream)
+        streamOptions = try container.decodeIfPresent(
+            OpenAIStreamOptions.self, forKey: .streamOptions)
+        temperature = try container.decodeIfPresent(Float.self, forKey: .temperature)
+        topP = try container.decodeIfPresent(Float.self, forKey: .topP)
+        maxTokens = try container.decodeIfPresent(Int.self, forKey: .maxTokens)
+        maxCompletionTokens = try container.decodeIfPresent(
+            Int.self, forKey: .maxCompletionTokens)
+        stop = try container.decodeIfPresent(OpenAIStop.self, forKey: .stop)
+        seed = try container.decodeIfPresent(UInt64.self, forKey: .seed)
+        tools = try container.decodeIfPresent([OpenAITool].self, forKey: .tools)
+        toolChoice = try container.decodeIfPresent(JSONValue.self, forKey: .toolChoice)
+        parallelToolCalls = try container.decodeIfPresent(
+            Bool.self, forKey: .parallelToolCalls)
+        topK = try container.decodeIfPresent(Int.self, forKey: .topK)
+        repetitionPenalty = try container.decodeIfPresent(
+            Float.self, forKey: .repetitionPenalty)
+        n = try container.decodeIfPresent(Int.self, forKey: .n)
+        logprobs = try container.decodeIfPresent(Bool.self, forKey: .logprobs)
+        presencePenalty = try container.decodeIfPresent(
+            Float.self, forKey: .presencePenalty)
+        frequencyPenalty = try container.decodeIfPresent(
+            Float.self, forKey: .frequencyPenalty)
+        enableThinking = try container.decodeIfPresent(Bool.self, forKey: .enableThinking)
+        reasoningEffort = try container.decodeIfPresent(
+            GPTOSSReasoningEffort.self, forKey: .reasoningEffort)
+        responseFormat = try container.decodeIfPresent(
+            JSONValue.self, forKey: .responseFormat)
+    }
+
+    /// Names at most eight keys, each bounded, and for a single key suggests
+    /// the declared field it most likely meant.
+    private static func unknownKeyMessage(_ unknown: [String]) -> String {
+        let shown = unknown.prefix(maximumNamedKeys).map {
+            String(reflecting: boundedForDisplay($0, maxLength: maximumNamedKeyLength))
+        }
+        var message = "unrecognized request field\(unknown.count == 1 ? "" : "s") "
+            + shown.joined(separator: ", ")
+        if unknown.count > shown.count {
+            message += ", and \(unknown.count - shown.count) more"
+        }
+        if unknown.count == 1 {
+            if let equivalent = equivalentKeys[unknown[0]] {
+                message += "; use \(equivalent)"
+            } else if let suggestion = closestDeclaredKey(to: unknown[0]) {
+                message += "; did you mean \(suggestion)?"
+            }
+        }
+        return message
+    }
+
+    /// The declared key within two edits of `key`, if exactly one is closest.
+    /// Only short keys are compared, so a hostile key costs nothing.
+    static func closestDeclaredKey(to key: String) -> String? {
+        let candidate = Array(key.utf8)
+        guard (2...maximumNamedKeyLength).contains(candidate.count) else { return nil }
+        var best: (key: String, distance: Int)?
+        var tied = false
+        for declared in CodingKeys.allCases.map(\.stringValue) {
+            let distance = editDistance(candidate, Array(declared.utf8))
+            guard distance <= 2 else { continue }
+            if best == nil || distance < best!.distance {
+                best = (declared, distance)
+                tied = false
+            } else if distance == best!.distance {
+                tied = true
+            }
+        }
+        return tied ? nil : best?.key
+    }
+
+    private static func editDistance(_ a: [UInt8], _ b: [UInt8]) -> Int {
+        var previous = Array(0...b.count)
+        for (i, x) in a.enumerated() {
+            var current = [i + 1] + Array(repeating: 0, count: b.count)
+            for (j, y) in b.enumerated() {
+                current[j + 1] = Swift.min(previous[j + 1] + 1,
+                                           current[j] + 1,
+                                           previous[j] + (x == y ? 0 : 1))
+            }
+            previous = current
+        }
+        return previous[b.count]
+    }
+}
+
+/// Bounds text a rejection echoes back. The request body cap is 5 MiB, so a
+/// caller must not be able to have an arbitrary slice of its request quoted.
+/// Counted in UTF-8 bytes, not Characters: one Character can carry megabytes
+/// of combining marks.
+func boundedForDisplay(_ text: String, maxLength: Int) -> String {
+    var bytes = 0
+    var head = String.UnicodeScalarView()
+    for scalar in text.unicodeScalars {
+        bytes += scalar.utf8.count
+        if bytes > maxLength {
+            return String(head) + "..."
+        }
+        head.append(scalar)
+    }
+    return text
 }
 
 public struct OpenAIUsage: Codable, Equatable, Sendable {
@@ -362,10 +550,8 @@ private enum OpenAIToolName {
     }
 
     static func validationMessage(for name: String) -> String {
-        let prefix = name.prefix(maximumLength + 1)
-        let displayed = String(prefix.prefix(maximumLength))
-            + (prefix.count > maximumLength ? "..." : "")
-        return "tool name \(String(reflecting: displayed)) must contain 1 to 64 ASCII letters, numbers, underscores, or hyphens"
+        let displayed = String(reflecting: boundedForDisplay(name, maxLength: maximumLength))
+        return "tool name \(displayed) must contain 1 to 64 ASCII letters, numbers, underscores, or hyphens"
     }
 }
 
@@ -403,6 +589,7 @@ public enum OpenAIRequestValidator {
             throw invalid("parallel_tool_calls=false is not supported",
                           "parallel_tool_calls", "unsupported_value")
         }
+        try validateResponseFormat(request.responseFormat)
 
         let temperature = request.temperature ?? 0.2
         guard temperature >= 0, temperature <= 2 else {
@@ -503,6 +690,35 @@ public enum OpenAIRequestValidator {
                                     reasoningEffort: reasoningEffort,
                                     harmonyCurrentDate: harmonyCurrentDate,
                                     attachmentLeases: validatedMessages.leases)
+    }
+
+    /// `{"type": "text"}` is what TUFF already produces. Structured output is
+    /// refused rather than ignored, so a caller relying on JSON mode is not
+    /// handed free text it will fail to parse.
+    private static func validateResponseFormat(_ format: JSONValue?) throws {
+        guard let format else { return }
+        guard case .object(let fields) = format else {
+            throw invalid(#"response_format must be an object such as {"type": "text"}"#,
+                          "response_format", "invalid_value")
+        }
+        switch fields["type"] {
+        case .string("text")?:
+            return
+        case .string("json_object")?, .string("json_schema")?:
+            throw invalid("structured output is not supported",
+                          "response_format", "unsupported_value")
+        case .string(let type)?:
+            throw invalid(
+                "response_format type \(String(reflecting: boundedForDisplay(type, maxLength: 64))) "
+                    + "is not recognized",
+                "response_format", "invalid_value")
+        case nil, .null?:
+            throw invalid("response_format.type is required",
+                          "response_format", "invalid_value")
+        default:
+            throw invalid("response_format.type must be a string",
+                          "response_format", "invalid_value")
+        }
     }
 
     private static func validateTool(_ tool: OpenAITool,

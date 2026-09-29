@@ -27,7 +27,7 @@ import TUFFValidationSupport
             count: hidden.count)
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
-        try checkCommandBufferError(commandBuffer.error)
+        try checkCommandBufferError(commandBuffer)
 
         let pointer = hiddenBuffer.contents().assumingMemoryBound(to: Float.self)
         #expect(pointer[0] == 31)
