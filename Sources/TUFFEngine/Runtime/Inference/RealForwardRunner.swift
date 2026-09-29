@@ -279,6 +279,18 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
     private let zeroResidual: MTLBuffer  // [D] FP16 zeros — for routed branch base
     private let outIndices: MTLBuffer    // [topK] UInt32
     private let outWeights: MTLBuffer    // [topK] FP16
+    /// Decode lookahead: the next layer's predicted experts, read ahead.
+    private var lookahead = ExpertLookahead()
+    private lazy var lookaheadIndices: MTLBuffer = ctx.device.makeBuffer(
+        length: max(1, cfg.topKExperts) * MemoryLayout<UInt32>.stride,
+        options: .storageModeShared)!
+    private lazy var lookaheadWeights: MTLBuffer = ctx.device.makeBuffer(
+        length: max(1, cfg.topKExperts) * MemoryLayout<Float16>.stride,
+        options: .storageModeShared)!
+    /// Decode lookahead counters for TUFF_PHASES.
+    public var lookaheadPrecision: Double { lookahead.precision }
+    public var lookaheadReadsIssued: Int { lookahead.readsIssued }
+    public var lookaheadEnabled: Bool { lookahead.enabled }
     // Persistent MoE scratch, allocated once; about 56 KiB at production shape.
     private let moeActs: MTLBuffer       // [topK * FmoE] FP16
     private let moeHitActiveSlots: MTLBuffer // [topK] UInt32
@@ -747,6 +759,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
     }
 
     public func reset() {
+        _ = lookahead.drain()
         kv?.reset()
         gdnState?.reset()
         resetNgramState()
@@ -1320,6 +1333,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                 "chunked prefill range [\(startPosition), \(startPosition + tokens.count)) exceeds maxContext \(maxContext)")
         }
         try kv?.ensureCapacity(through: startPosition + tokens.count, on: ctx.queue)
+        _ = lookahead.drain()
         guard tokens.count <= scratch.layout.chunkTokens else {
             throw PrefillError.chunkedUnsupported(
                 "chunked prefill token count \(tokens.count) exceeds scratch chunk size \(scratch.layout.chunkTokens)")
@@ -2828,6 +2842,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                 "produce position \(position) exceeds maxContext \(maxContext)")
         }
         try kv?.ensureCapacity(through: position + 1, on: ctx.queue)
+        // A token that threw midway can leave the next layer's read in flight.
+        _ = lookahead.drain()
         let D    = UInt32(cfg.hiddenSize)
         let FmoE = UInt32(cfg.moeIntermediateSize)
         let eps: Float = 1e-6
@@ -3280,6 +3296,56 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                 outIndices: outIndices, outWeights: outWeights,
                 numExperts: UInt32(cfg.numExperts), d: D, topK: UInt32(cfg.topKExperts))
             }
+            // Lookahead: layer L+1's router over this layer's feed-forward
+            // input predicts L+1's experts, so their reads overlap this
+            // layer's work. See `ExpertLookahead`.
+            var lookaheadEncoded = false
+            var lookaheadDispatch: (() -> Void)?
+            func fireLookahead() {
+                lookaheadDispatch?()
+                lookaheadDispatch = nil
+            }
+            // Whatever path leaves this layer, including a throw, releases a
+            // read that was registered but not yet started, so no drain can
+            // wait on it forever.
+            defer { fireLookahead() }
+            if lookahead.enabled, L + 1 < cfg.numLayers,
+               let nextRouter = try? model.router(layer: L + 1) {
+                if cfg.usesSigmoidCorrectionRouter {
+                    let correction = try model.routerCorrectionBias(layer: L + 1)
+                    moe.encodeRouterMiniMax(commandBuffer: cb,
+                        weights: nextRouter.buffer, weightsOffset: Int(nextRouter.offset),
+                        scales: nextRouter.buffer, scalesOffset: Int(nextRouter.scaleOffset),
+                        biases: nextRouter.buffer, biasesOffset: Int(nextRouter.biasOffset),
+                        hidden: ffnInput,
+                        effectiveScale: effectiveScaleBuffers[L + 1],
+                        correctionBias: correction.buffer,
+                        correctionBiasOffset: Int(correction.offset),
+                        outIndices: lookaheadIndices, outWeights: lookaheadWeights,
+                        numExperts: UInt32(cfg.numExperts), d: D,
+                        topK: UInt32(cfg.topKExperts))
+                } else {
+                    let nextScale: (buffer: MTLBuffer, offset: Int)
+                    if cfg.routerScaled {
+                        let view = try model.routerPerExpertScale(layer: L + 1)
+                        nextScale = (view.buffer, Int(view.offset))
+                    } else {
+                        nextScale = (onesPerExpertScale!, 0)
+                    }
+                    moe.encodeRouterGemma4(commandBuffer: cb,
+                        weights: nextRouter.buffer, weightsOffset: Int(nextRouter.offset),
+                        scales: nextRouter.buffer, scalesOffset: Int(nextRouter.scaleOffset),
+                        biases: nextRouter.buffer, biasesOffset: Int(nextRouter.biasOffset),
+                        hidden: cfg.ffnSandwichNorms ? routerInput : ffnInput,
+                        effectiveScale: effectiveScaleBuffers[L + 1],
+                        perExpertScale: nextScale.buffer,
+                        perExpertScaleOffset: nextScale.offset,
+                        outIndices: lookaheadIndices, outWeights: lookaheadWeights,
+                        numExperts: UInt32(cfg.numExperts), d: D,
+                        topK: UInt32(cfg.topKExperts))
+                }
+                lookaheadEncoded = true
+            }
             cb.commit()
             let tWait = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
             waitUntilCompleted(cb)
@@ -3299,6 +3365,42 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
             var experts = [Int](repeating: 0, count: cfg.topKExperts)
             for i in 0..<cfg.topKExperts {
                 experts[i] = min(Int(idxPtr[i]), cfg.numExperts - 1)
+            }
+            // The read issued for this layer during the previous one must land
+            // before this layer plans its own fetch.
+            if let finished = lookahead.drain(), finished.layer == L {
+                lookahead.record(predicted: finished.experts, actual: experts)
+            }
+            if lookaheadEncoded {
+                let predictedPtr = lookaheadIndices.contents()
+                    .bindMemory(to: UInt32.self, capacity: cfg.topKExperts)
+                let predicted = (0..<cfg.topKExperts).map {
+                    min(Int(predictedPtr[$0]), cfg.numExperts - 1)
+                }
+                var reads: DispatchGroup?
+                if let plan = try model.planRoutedExperts(layer: L + 1, experts: predicted),
+                   !plan.misses.isEmpty {
+                    // Entered now, dispatched after this layer's own fetch:
+                    // started together, the two reads split the SSD's
+                    // bandwidth and gained nothing, while after it the read
+                    // overlaps this layer's routed work and the next
+                    // layer's attention on the GPU.
+                    let group = DispatchGroup()
+                    group.enter()
+                    let model = self.model
+                    lookaheadDispatch = {
+                        DispatchQueue.global(qos: .userInitiated).async {
+                            // A failed read only loses the head start: the
+                            // layer's own fetch reads whatever is missing.
+                            try? model.prefetchRoutedExperts(plan: plan)
+                            group.leave()
+                        }
+                    }
+                    reads = group
+                    lookahead.noteRead()
+                }
+                lookahead.pending = ExpertLookahead.Pending(layer: L + 1, experts: predicted,
+                                                            reads: reads)
             }
 
             let routedOffsets = model.routedExpertOffsets(layer: L)
@@ -3463,6 +3565,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
             } else {
                 blobs = try await model.fetchRoutedExperts(layer: L, experts: experts)
             }
+            fireLookahead()
             let layerIo = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - tIoStart
             totalIoNanos &+= layerIo
             let routedBufs = blobs.map { $0.buffer }

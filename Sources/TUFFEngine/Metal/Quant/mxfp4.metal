@@ -8,20 +8,15 @@ using namespace metal;
 
 constant constexpr uint kMXFP4GroupSize = 32;
 
+// E2M1 values for all sixteen codes, sign in bit 3. A table lookup instead of
+// a per-value branch: in the decode GEMV the branch, not memory, was the limit.
+constant float kMXFP4E2M1[16] = {
+     0.0f,  0.5f,  1.0f,  1.5f,  2.0f,  3.0f,  4.0f,  6.0f,
+    -0.0f, -0.5f, -1.0f, -1.5f, -2.0f, -3.0f, -4.0f, -6.0f,
+};
+
 static inline float mxfp4_e2m1(uint code) {
-    const uint magnitude = code & 7u;
-    float value;
-    switch (magnitude) {
-    case 0u: value = 0.0f; break;
-    case 1u: value = 0.5f; break;
-    case 2u: value = 1.0f; break;
-    case 3u: value = 1.5f; break;
-    case 4u: value = 2.0f; break;
-    case 5u: value = 3.0f; break;
-    case 6u: value = 4.0f; break;
-    default: value = 6.0f; break;
-    }
-    return (code & 8u) == 0u ? value : -value;
+    return kMXFP4E2M1[code & 15u];
 }
 
 kernel void mxfp4_gemv_simd(
@@ -44,17 +39,27 @@ kernel void mxfp4_gemv_simd(
     const uint groupsPerRow = columns / kMXFP4GroupSize;
     device const uint8_t* rowWeights = weights + row * (columns / 2u);
     device const uint8_t* rowScales = scales + row * groupsPerRow;
+    // Each lane takes 8 consecutive values (4 bytes), so a SIMD group reads
+    // 128 contiguous weight bytes per step. Loading one nibble per lane per
+    // 32-value block left the kernel at about a fifth of the M2's memory
+    // bandwidth, which made GPT-OSS decode compute-bound in its experts.
+    // Eight values never straddle a 32-value block, so one scale serves them.
     float sum = 0.0f;
-    for (uint group = 0; group < groupsPerRow; ++group) {
-        const uint byteIndex = group * (kMXFP4GroupSize / 2u) + (lane >> 1u);
-        const uint packed = uint(rowWeights[byteIndex]);
-        const uint code = (lane & 1u) == 0u ? packed & 0x0Fu : packed >> 4u;
+    for (uint base = lane * 8u; base < columns; base += 256u) {
+        const packed_uchar4 bytes =
+            *reinterpret_cast<device const packed_uchar4*>(rowWeights + (base >> 1u));
+        device const half* x = input + base;
+        float partial = 0.0f;
+        for (uint j = 0; j < 4u; ++j) {
+            const uint packed = uint(bytes[j]);
+            partial = fma(mxfp4_e2m1(packed & 0x0Fu), float(x[2u * j]), partial);
+            partial = fma(mxfp4_e2m1(packed >> 4u), float(x[2u * j + 1u]), partial);
+        }
         // Production GPT-OSS exponent bytes are finite nonzero UE8M0 values.
         // Reinterpreting them as the FP32 exponent is exactly 2^(e - 127),
         // matching the official Metal reference without an approximation.
-        const float scale = as_type<float>(uint(rowScales[group]) << 23u);
-        const float weight = mxfp4_e2m1(code) * scale;
-        sum = fma(weight, float(input[group * kMXFP4GroupSize + lane]), sum);
+        const float scale = as_type<float>(uint(rowScales[base / kMXFP4GroupSize]) << 23u);
+        sum = fma(partial, scale, sum);
     }
     sum = simd_sum(sum);
     if (lane == 0u) {

@@ -52,6 +52,17 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
     private let expertScratch: GPTOSSExpertScratchBuffers
     /// Batched MPP experts for prefill; nil where MPP is unavailable.
     private let batchedExperts: GPTOSSBatchedExperts?
+    /// Decode lookahead: the next layer's predicted experts, read ahead.
+    private var lookahead = ExpertLookahead()
+    private lazy var lookaheadIndices: MTLBuffer = context.device.makeBuffer(
+        length: max(1, config.topKExperts) * MemoryLayout<UInt32>.stride,
+        options: .storageModeShared)!
+    private lazy var lookaheadWeights: MTLBuffer = context.device.makeBuffer(
+        length: max(1, config.topKExperts) * MemoryLayout<Float16>.stride,
+        options: .storageModeShared)!
+    var lookaheadPrecision: Double { lookahead.precision }
+    var lookaheadReadsIssued: Int { lookahead.readsIssued }
+    var lookaheadEnabled: Bool { lookahead.enabled }
     /// Prefill K and V rows before they are copied into KV slots.
     private let kStage: MTLBuffer
     private let vStage: MTLBuffer
@@ -203,6 +214,7 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
     }
 
     func reset() {
+        _ = lookahead.drain()
         kv.reset()
         lastLogitsBuffer = nil
         cachedSpeculativeBoundaryToken = nil
@@ -427,6 +439,7 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
                 "GPT-OSS logits buffer is smaller than the model vocabulary")
         }
 
+        _ = lookahead.drain()
         let floatBytes = MemoryLayout<Float>.stride
         let embeddingCB = context.queue.makeCommandBuffer()!
         for (row, token) in tokens.enumerated() {
@@ -794,6 +807,8 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
                 "GPT-OSS logits buffer is smaller than the model vocabulary")
         }
 
+        // A token that threw midway can leave the next layer's read in flight.
+        _ = lookahead.drain()
         let embeddingCB = context.queue.makeCommandBuffer()!
         bf16.encodeFloatEmbedding(commandBuffer: embeddingCB,
                                   table: model.embedding,
@@ -996,6 +1011,26 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
             outputIndices: routedIndices,
             outputWeights: expertScratch.routeWeights,
             numExperts: UInt32(config.numExperts))
+        // Lookahead: layer + 1's router over this layer's input predicts its
+        // experts, read ahead while this layer computes. See `ExpertLookahead`.
+        var lookaheadEncoded = false
+        if lookahead.enabled, layer + 1 < config.numLayers {
+            let next = layers[layer + 1]
+            bf16.encodeFloat(commandBuffer: cb1,
+                             weights: next.routerWeight,
+                             input: normed,
+                             output: routerLogits,
+                             bias: next.routerBias,
+                             rows: config.numExperts,
+                             columns: hiddenSize)
+            moePrimitives.encodeRouterTop4(
+                commandBuffer: cb1,
+                logits: routerLogits,
+                outputIndices: lookaheadIndices,
+                outputWeights: lookaheadWeights,
+                numExperts: UInt32(config.numExperts))
+            lookaheadEncoded = true
+        }
         cb1.commit()
         try waitForCompletion(cb1)
         totalCb1Nanos &+= clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - cb1Start
@@ -1003,6 +1038,43 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
         let indexPointer = routedIndices.contents()
             .assumingMemoryBound(to: UInt32.self)
         let experts = (0..<config.topKExperts).map { Int(indexPointer[$0]) }
+
+        if let finished = lookahead.drain(), finished.layer == layer {
+            lookahead.record(predicted: finished.experts, actual: experts)
+        }
+        var lookaheadDispatch: (() -> Void)?
+        func fireLookahead() {
+            lookaheadDispatch?()
+            lookaheadDispatch = nil
+        }
+        // Every exit, including a throw, releases a registered read.
+        defer { fireLookahead() }
+        if lookaheadEncoded {
+            let predictedPointer = lookaheadIndices.contents()
+                .assumingMemoryBound(to: UInt32.self)
+            let predicted = (0..<config.topKExperts).map {
+                min(Int(predictedPointer[$0]), config.numExperts - 1)
+            }
+            var reads: DispatchGroup?
+            if let plan = try model.planRoutedExperts(layer: layer + 1, experts: predicted),
+               !plan.misses.isEmpty {
+                // Dispatched after this layer's own fetch so the two reads
+                // do not split the SSD's bandwidth.
+                let group = DispatchGroup()
+                group.enter()
+                let model = self.model
+                lookaheadDispatch = {
+                    DispatchQueue.global(qos: .userInitiated).async {
+                        try? model.prefetchRoutedExperts(plan: plan)
+                        group.leave()
+                    }
+                }
+                reads = group
+                lookahead.noteRead()
+            }
+            lookahead.pending = ExpertLookahead.Pending(layer: layer + 1, experts: predicted,
+                                                        reads: reads)
+        }
 
         let ioStart = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
         let plannedFetch = try model.planRoutedExperts(
@@ -1015,6 +1087,7 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
             blobs = try await model.fetchRoutedExperts(
                 layer: layer, experts: experts)
         }
+        fireLookahead()
         totalIoNanos &+= clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - ioStart
 
         let cb2Start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)

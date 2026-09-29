@@ -148,6 +148,17 @@ extension Model {
             streamer: streamer, layer: plan.layer, cachePlan: plan.cachePlan)
     }
 
+    /// Reads a plan's misses into their cache slots on the calling thread.
+    /// Decode lookahead runs this on a background queue for the next layer
+    /// while the current one computes; the caller must not plan or fetch the
+    /// same layer until it returns.
+    func prefetchRoutedExperts(plan: RoutedExpertFetchPlan) throws {
+        guard !plan.misses.isEmpty else { return }
+        try ensureLayerOpened(plan.layer)
+        let streamer = streamersQueue.sync { streamersBox.streamers[plan.layer]! }
+        _ = try streamer.executeExpertCachePlan(plan.cachePlan)
+    }
+
     public func fetchRoutedExperts(layer: Int, experts: [Int]) async throws -> [TensorView] {
         try ensureLayerOpened(layer)
         let streamer = streamersQueue.sync { streamersBox.streamers[layer]! }

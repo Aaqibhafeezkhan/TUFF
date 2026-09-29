@@ -225,6 +225,22 @@ and 256 for the dense Gemmas. On a 16 GB M2 that took a 7,000-token Qwen 3.6
 prefill from 190 s to 86 s with identical output. The app and `tuff` apply it
 automatically; `TUFFCLI` and `TUFFServer` take `--prefill-chunk-tokens`.
 
+Within a chunk, TUFF 6 runs prefill as batched tensor-core matrix multiplies
+rather than one matrix-vector product per token: the dense and shared MLPs,
+every routed expert (each expert's tokens gathered and projected together),
+GPT-OSS's MXFP4 experts and K/V projections, and Qwen 3.8 Flash Next's group-32
+projections. Blocks under 32 tokens, including speculative verification, keep
+the decode kernels. Measured on a 16 GB M2 against 5.2, with the same output:
+
+| Model | Prompt | 5.2 prefill | 6.0 prefill |
+| --- | ---: | ---: | ---: |
+| Gemma 4 E4B | 4,156 tokens | 243-265 s | 31-34 s |
+| Gemma 4 12B QAT | 1,004 tokens | 388 s | 69 s |
+| GPT-OSS 20B | 973 tokens | 109 s | 20 s |
+| Qwen 3.6 35B-A3B | 4,087 tokens | 58 s | 31 s |
+| Gemma 4 26B-A4B | 4,160 tokens | 102 s | 62 s |
+| Qwen 3.8 Flash Next | 983 tokens | 66 s | 42 s |
+
 ### Running past the limits
 
 **Bypass model restrictions**, in Settings, removes both gates: models this Mac
@@ -410,7 +426,7 @@ swift build -c release
 To build the complete app bundle, embedded updater, ZIP, and checksum:
 
 ```bash
-Scripts/package_app.sh 5.2.0
+Scripts/package_app.sh 6.0.0
 open dist/TUFF.app
 ```
 

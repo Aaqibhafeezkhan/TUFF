@@ -39,6 +39,18 @@ public final class ModelForwardRunner: ChunkedPrefillRunner,
         }
     }
 
+    /// Decode expert lookahead counters, or nil for a runner without it.
+    public var expertLookahead: (precision: Double, readsIssued: Int, enabled: Bool)? {
+        switch backend {
+        case .affine(let runner):
+            return (runner.lookaheadPrecision, runner.lookaheadReadsIssued,
+                    runner.lookaheadEnabled)
+        case .gptOss(let runner):
+            return (runner.lookaheadPrecision, runner.lookaheadReadsIssued,
+                    runner.lookaheadEnabled)
+        }
+    }
+
     public func produce(token: Int32, position: Int,
                         into logits: MTLBuffer) async throws {
         switch backend {

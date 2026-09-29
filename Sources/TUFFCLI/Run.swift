@@ -360,6 +360,14 @@ public func run(args: Args,
             lines += "  routed expert bytes: \(runner.totalRoutedExpertBytes)\n"
             lines += "  routed expert cache hits: \(runner.totalRoutedExpertCacheHits)\n"
             lines += "  routed expert cache misses: \(runner.totalRoutedExpertCacheMisses)\n"
+            if let lookahead = runner.expertLookahead,
+               lookahead.readsIssued > 0 || lookahead.precision > 0 {
+                lines += "  expert lookahead: "
+                    + String(format: "%.1f%% of predicted experts routed, ",
+                             lookahead.precision * 100)
+                    + "\(lookahead.readsIssued) reads ahead"
+                    + (lookahead.enabled ? "" : ", turned off") + "\n"
+            }
             stderr.write(Data(lines.utf8))
         }
         if !args.quiet {
