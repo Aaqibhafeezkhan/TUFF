@@ -62,15 +62,18 @@ struct PrefillTensorOpsVariant: Hashable, Sendable {
 
     var tokensPerGroup: Int { Self.rowsPerThreadgroup / headsPerGroup }
 
-    /// Every shape TUFF's full-attention layers use: Gemma 4 26B-A4B and
-    /// 12B (512, groups of 8 and 16), E2B (512/8), E4B (512/4), Qwen 3.6
-    /// (256/8) and Qwen 3.8 Flash Next (256/12). MiniMax (128/6) and GPT-OSS
-    /// (sinks, separate runner) stay on their existing paths.
+    /// Every attention shape TUFF's chunked prefill runs. Full layers:
+    /// Gemma 4 26B-A4B and 12B (512, groups of 8 and 16), E2B (512/8), E4B
+    /// (512/4), Qwen 3.6 (256/8), Qwen 3.8 Flash Next (256/12), MiniMax
+    /// (128/6). Sliding layers: Gemma 4 26B-A4B and 12B (256/2), E2B (256/8),
+    /// E4B (256/4). GPT-OSS has its own runner and attention sinks.
     static let all: [PrefillTensorOpsVariant] = [
         PrefillTensorOpsVariant(headsPerGroup: 8, headDim: 512),
         PrefillTensorOpsVariant(headsPerGroup: 4, headDim: 512),
         PrefillTensorOpsVariant(headsPerGroup: 8, headDim: 256),
         PrefillTensorOpsVariant(headsPerGroup: 4, headDim: 256),
+        PrefillTensorOpsVariant(headsPerGroup: 2, headDim: 256),
+        PrefillTensorOpsVariant(headsPerGroup: 2, headDim: 128),
     ]
 
     var functionName: String {
@@ -80,18 +83,12 @@ struct PrefillTensorOpsVariant: Hashable, Sendable {
         return "attention_prefill_full_tensorops_2d_g\(headsPerGroup)_d\(headDim)"
     }
 
-    /// The variant for a dispatch, or nil when TensorOps cannot compute it
-    /// exactly. The kernel starts every key loop at zero and has no ring or
-    /// bidirectional-block addressing, so these are visibility guards as well
-    /// as shape checks.
-    static func select(params: PrefillAttentionParams,
-                       kvRingCapacity: UInt32,
-                       layerKind: PrefillAttentionLayerKind) -> PrefillTensorOpsVariant? {
-        guard layerKind == .full,
-              kvRingCapacity == 0,
-              params.slidingWindow == 0 || params.slidingWindow >= params.kvValidCount,
-              params.bidirectionalBlockEnd <= params.bidirectionalBlockStart,
-              params.numKVHeads > 0,
+    /// The variant for a dispatch, or nil when no compiled shape fits. The
+    /// kernel applies the sliding window, FP16 ring addressing and
+    /// bidirectional image blocks the same way the tiled kernel does, so only
+    /// the head geometry decides.
+    static func select(params: PrefillAttentionParams) -> PrefillTensorOpsVariant? {
+        guard params.numKVHeads > 0,
               params.numQHeads % params.numKVHeads == 0 else {
             return nil
         }
@@ -181,11 +178,11 @@ final class PrefillAttention {
         let requestsTensorOps = path == .fullTensorOps2DPreferred
             || path == .fullTensorOps2DValidityV2
         let variant = requestsTensorOps
-            ? PrefillTensorOpsVariant.select(params: effectiveParams,
-                                             kvRingCapacity: kvRingCapacity,
-                                             layerKind: layerKind)
+            ? PrefillTensorOpsVariant.select(params: effectiveParams)
             : nil
-        let tensorOpsPipeline = variant.flatMap { tensorOpsPipelines[$0] }
+        let tensorOpsPipeline = variant.flatMap {
+            tensorOpsPipeline($0, kvRingCapacity: kvRingCapacity)
+        }
         let useTensorOps = tensorOpsPipeline != nil
         let pipeline: MTLComputePipelineState
         if let tensorOpsPipeline {
@@ -272,6 +269,24 @@ final class PrefillAttention {
         enc.dispatchThreads(MTLSize(width: 13, height: 1, depth: 1),
                             threadsPerThreadgroup: MTLSize(width: 13, height: 1, depth: 1))
         enc.endEncoding()
+    }
+
+    /// The variant's pipeline, specialized on the ring capacity when the
+    /// layer uses an FP16 ring. The MetalContext cache makes the lookup cheap
+    /// after the first chunk; a ring variant that fails to build falls back
+    /// to the tiled kernel like a missing variant does.
+    private func tensorOpsPipeline(_ variant: PrefillTensorOpsVariant,
+                                   kvRingCapacity: UInt32) -> MTLComputePipelineState? {
+        guard let base = tensorOpsPipelines[variant] else { return nil }
+        guard kvRingCapacity > 0 else { return base }
+        do {
+            return try context.pipeline(
+                variant.functionName,
+                constants: [MetalFunctionConstant(index: 76, value: .uint32(kvRingCapacity))])
+        } catch {
+            Self.reportUnavailable(variant, error: error)
+            return nil
+        }
     }
 
     private func causalTiledPipeline(kvRingCapacity: UInt32) -> MTLComputePipelineState {

@@ -236,41 +236,111 @@ import TUFFValidationSupport
             let params = Self.selectorParams(headDim: shape.headDim,
                                              qHeads: shape.qHeads,
                                              kvHeads: shape.kvHeads)
-            #expect(PrefillTensorOpsVariant.select(params: params,
-                                                   kvRingCapacity: 0,
-                                                   layerKind: .full) == shape.variant,
+            #expect(PrefillTensorOpsVariant.select(params: params) == shape.variant,
                     "\(shape.label)")
+        }
+        let slidingAndMiniMax: [(Int, Int, Int, PrefillTensorOpsVariant)] = [
+            (256, 16, 8, PrefillTensorOpsVariant(headsPerGroup: 2, headDim: 256)),
+            (256, 8, 1, PrefillTensorOpsVariant(headsPerGroup: 8, headDim: 256)),
+            (256, 8, 2, PrefillTensorOpsVariant(headsPerGroup: 4, headDim: 256)),
+            (128, 48, 8, PrefillTensorOpsVariant(headsPerGroup: 2, headDim: 128)),
+        ]
+        for (headDim, qHeads, kvHeads, variant) in slidingAndMiniMax {
+            #expect(PrefillTensorOpsVariant.select(
+                params: Self.selectorParams(headDim: headDim, qHeads: qHeads,
+                                            kvHeads: kvHeads)) == variant,
+                    "\(headDim)/\(qHeads)/\(kvHeads)")
         }
     }
 
-    @Test func selectorRejectsShapesAndVisibilityTheKernelCannotComputeExactly() {
-        let eligible = Self.selectorParams(headDim: 512, qHeads: 16, kvHeads: 2)
-        #expect(PrefillTensorOpsVariant.select(params: eligible, kvRingCapacity: 0,
-                                               layerKind: .full) != nil)
-
-        // MiniMax M2.7: six query heads per KV head, 128-wide.
+    @Test func selectorRejectsShapesWithNoCompiledVariant() {
+        // GPT-OSS geometry: 64-wide heads have no variant.
         #expect(PrefillTensorOpsVariant.select(
-            params: Self.selectorParams(headDim: 128, qHeads: 48, kvHeads: 8),
-            kvRingCapacity: 0, layerKind: .full) == nil)
-        // Gemma 4 sliding layers: two query heads per KV head.
+            params: Self.selectorParams(headDim: 64, qHeads: 64, kvHeads: 8)) == nil)
+        // An odd group cannot fill eight rows.
         #expect(PrefillTensorOpsVariant.select(
-            params: Self.selectorParams(headDim: 256, qHeads: 16, kvHeads: 8),
-            kvRingCapacity: 0, layerKind: .full) == nil)
-        #expect(PrefillTensorOpsVariant.select(params: eligible, kvRingCapacity: 0,
-                                               layerKind: .slidingWindow) == nil)
-        #expect(PrefillTensorOpsVariant.select(params: eligible, kvRingCapacity: 1_024,
-                                               layerKind: .full) == nil)
+            params: Self.selectorParams(headDim: 256, qHeads: 9, kvHeads: 3)) == nil)
+    }
 
-        var clipping = eligible
-        clipping.slidingWindow = clipping.kvValidCount - 1
-        #expect(PrefillTensorOpsVariant.select(params: clipping, kvRingCapacity: 0,
-                                               layerKind: .full) == nil)
+    /// Sliding windows, FP16 ring wrap, and bidirectional image blocks all
+    /// run on TensorOps now, so each has to match the CPU reference.
+    @Test(arguments: [
+        // label, headDim, qHeads, kvHeads, start, chunk, window, ring
+        ("gemma26b-sliding-inside-window", 256, 16, 8, 40, 9, 1_024, 0),
+        ("gemma26b-sliding-clipped", 256, 16, 8, 1_100, 11, 1_024, 0),
+        ("gemma26b-sliding-ring-wrap", 256, 16, 8, 1_300, 13, 1_024, 1_152),
+        ("gemma-e2b-sliding-clipped", 256, 8, 1, 700, 7, 512, 0),
+        ("gemma-e4b-sliding-ring-wrap", 256, 8, 2, 900, 6, 512, 640),
+        ("minimax-full", 128, 48, 8, 150, 7, 0, 0),
+    ])
+    func tensorOpsMatchesReferenceForWindowsRingsAndMiniMax(
+        _ c: (String, Int, Int, Int, Int, Int, Int, Int)
+    ) throws {
+        let (label, headDim, qHeads, kvHeads, start, chunk, window, ring) = c
+        let fixture = Self.makeFixture(start: start, chunk: chunk, window: window,
+                                       seed: 0xB100 + UInt64(start + chunk),
+                                       headDim: headDim, qHeads: qHeads, kvHeads: kvHeads)
+        let context = try MetalContext()
+        let attention = try PrefillAttention(context: context)
+        let variant = try #require(PrefillTensorOpsVariant.select(
+            params: Self.selectorParams(headDim: headDim, qHeads: qHeads, kvHeads: kvHeads)))
+        guard attention.tensorOpsAvailable(variant) else { return }
 
-        var image = eligible
-        image.bidirectionalBlockStart = 4
-        image.bidirectionalBlockEnd = 9
-        #expect(PrefillTensorOpsVariant.select(params: image, kvRingCapacity: 0,
-                                               layerKind: .full) == nil)
+        let candidate = ring > 0
+            ? try Self.runKernel(Self.ringFixture(fixture, capacity: ring),
+                                 kvRingCapacity: UInt32(ring),
+                                 path: .fullTensorOps2DValidityV2)
+            : try Self.runKernel(fixture, path: .fullTensorOps2DValidityV2)
+        let reference = Self.reference(fixture)
+        let maxAbs = RelError.maxAbsDiff(candidate, reference)
+        let rel = RelError.compute(actual: candidate, reference: reference)
+        #expect(maxAbs <= 2e-2, "\(label) maxAbs=\(maxAbs) rel=\(rel)")
+        #expect(rel <= 2e-2, "\(label) rel=\(rel) maxAbs=\(maxAbs)")
+    }
+
+    /// Image blocks: bidirectional inside the block on sliding layers, and on
+    /// Gemma 4 12B's full layers, which allow it.
+    @Test func tensorOpsHonoursBidirectionalImageBlocks() throws {
+        let context = try MetalContext()
+        let attention = try PrefillAttention(context: context)
+        let cases: [(String, Int, Int, Int, Int, Bool)] = [
+            ("sliding-26b", 256, 16, 8, 1_024, false),
+            ("full-12b", 512, 16, 1, 0, true),
+        ]
+        for (label, headDim, qHeads, kvHeads, window, allowsFull) in cases {
+            let variant = try #require(PrefillTensorOpsVariant.select(
+                params: Self.selectorParams(headDim: headDim, qHeads: qHeads, kvHeads: kvHeads)))
+            guard attention.tensorOpsAvailable(variant) else { continue }
+            var fixture = Self.makeFixture(start: 60, chunk: 24, window: window,
+                                           seed: 0xB200 + UInt64(headDim),
+                                           headDim: headDim, qHeads: qHeads, kvHeads: kvHeads)
+            fixture.bidirectionalBlock = 66..<79
+            let candidate = try Self.runKernel(fixture,
+                                               path: .fullTensorOps2DValidityV2,
+                                               allowsBidirectionalFullAttention: allowsFull)
+            let tiled = try Self.runKernel(fixture, path: .causalTiled,
+                                           allowsBidirectionalFullAttention: allowsFull)
+            let reference = Self.reference(fixture)
+            #expect(RelError.maxAbsDiff(candidate, reference) <= 2e-2, "\(label)")
+            #expect(RelError.maxAbsDiff(candidate, tiled) <= 2e-2, "\(label)")
+        }
+    }
+
+    private static func ringFixture(_ fixture: Fixture, capacity: Int) -> Fixture {
+        var kRing = [Float](repeating: 0, count: capacity * fixture.kvStride)
+        var vRing = [Float](repeating: 0, count: capacity * fixture.kvStride)
+        for position in 0..<fixture.kvValid {
+            let destination = (position % capacity) * fixture.kvStride
+            let source = position * fixture.kvStride
+            kRing.replaceSubrange(destination..<(destination + fixture.kvStride),
+                                  with: fixture.k[source..<(source + fixture.kvStride)])
+            vRing.replaceSubrange(destination..<(destination + fixture.kvStride),
+                                  with: fixture.v[source..<(source + fixture.kvStride)])
+        }
+        var ring = fixture
+        ring.k = kRing
+        ring.v = vRing
+        return ring
     }
 
     @Test func preferredTensorOpsPathUsesSafeHardwareFallback() throws {
@@ -315,25 +385,6 @@ import TUFFValidationSupport
                                            path: .fullTensorOps2DPreferred,
                                            simulatingMissingTensorOps: true)
         let tiled = try Self.runKernel(fixture, path: .causalTiled)
-        #expect(preferred == tiled)
-    }
-
-    /// A full-attention layer whose window would clip must not reach the
-    /// kernel, which reads every key from zero.
-    @Test func preferredPathRejectsAWindowThatActuallyClips() throws {
-        let fixture = Self.makeFixture(start: 40,
-                                       chunk: 8,
-                                       window: 16,
-                                       seed: 0xA877,
-                                       headDim: 512,
-                                       qHeads: 16,
-                                       kvHeads: 2)
-        let preferred = try Self.runKernel(fixture,
-                                           path: .fullTensorOps2DPreferred,
-                                           layerKindOverride: .full)
-        let tiled = try Self.runKernel(fixture,
-                                       path: .causalTiled,
-                                       layerKindOverride: .full)
         #expect(preferred == tiled)
     }
 
@@ -477,7 +528,8 @@ import TUFFValidationSupport
         kvRingCapacity: UInt32 = 0,
         path: RuntimePrefillAttentionPath = .causalTiled,
         simulatingMissingTensorOps: Bool = false,
-        layerKindOverride: PrefillAttentionLayerKind? = nil
+        layerKindOverride: PrefillAttentionLayerKind? = nil,
+        allowsBidirectionalFullAttention: Bool = false
     ) throws -> [Float] {
         let ctx = try MetalContext()
         let prefill = try PrefillAttention(
@@ -528,6 +580,7 @@ import TUFFValidationSupport
                              kvRingCapacity: kvRingCapacity,
                              layerKind: layerKindOverride
                                  ?? (fixture.window == 0 ? .full : .slidingWindow),
+                             allowsBidirectionalFullAttention: allowsBidirectionalFullAttention,
                              path: path)
         cb.commit()
         cb.waitUntilCompleted()

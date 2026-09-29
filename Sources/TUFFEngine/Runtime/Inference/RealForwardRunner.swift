@@ -297,6 +297,9 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
     private let onesPerExpertScale: MTLBuffer?
     private var prefillChunkState = PrefillChunkCommitState()
     private var prefillScratch: PrefillChunkScratchBuffers?
+    /// Largest text chunk the KV ring was sized for at load. A later request
+    /// for more is run at this size rather than refused mid-prefill.
+    private let prefillTextChunkCapacity: Int
     private var speculativeStartPosition: Int?
     private var speculativeProcessedTokens = 0
     private var collectingSpeculativeMetrics = false
@@ -367,13 +370,16 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
         self.rdadviseEnabled = runtimeConfiguration.rdadviseEnabled
         let maximumVisionTokens = cfg.family.acceptsImageInput
             ? VisionConfig(family: cfg.family).maximumPooledTokens : 0
+        let textChunkCapacity = max(PrefillRuntimeConfig.baselineChunkTokens,
+                                    runtimeConfiguration.prefillChunkTokens)
+        self.prefillTextChunkCapacity = textChunkCapacity
         self.kv = try KVCacheManager(device: context.device,
                                      config: cfg,
                                      maxContext: maxContext,
                                      fp16RingEnabled: useFP16Ring,
                                      slidingWindow: cfg.slidingWindow,
                                      maxPrefillChunkTokens: max(
-                                        PrefillRuntimeConfig.maxChunkTokens,
+                                        textChunkCapacity,
                                         min(maxContext, maximumVisionTokens)),
                                      initialFullAttentionCapacityTokens:
                                         cfg.family == .qwen4Exp ? 2_048 : nil)
@@ -1070,6 +1076,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
         guard !tokens.isEmpty else {
             return PrefillResult(newPosition: startPosition, seed: .logitsWritten)
         }
+        let config = config.replacingChunkTokens(
+            min(config.chunkTokens, prefillTextChunkCapacity))
         let scratch = try ensurePrefillScratch(config: config)
         let spans = PrefillChunkPlanner.spans(tokenCount: tokens.count,
                                               startPosition: startPosition,
@@ -1139,7 +1147,9 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
         // The planner applies the same clamp the scratch layout does. Cutting at
         // the raw `config.chunkTokens` let a caller size a 280-token scratch and
         // then hand it a larger chunk, which died on the guard.
-        let textChunkTokens = min(config.chunkTokens, PrefillRuntimeConfig.maxChunkTokens)
+        let config = config.replacingChunkTokens(
+            min(config.chunkTokens, prefillTextChunkCapacity))
+        let textChunkTokens = config.chunkTokens
         let work = PrefillChunkPlanner.multimodalWork(
             tokenCount: tokens.count,
             imageRanges: input.imageSpans.map(\.tokenRange),

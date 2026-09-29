@@ -39,9 +39,11 @@ public struct ServerArguments: Equatable, Sendable {
       --expert-cache-policy <s>  Expert-cache policy: lfu or lru (default lfu).
       --prefill on|off           Enable or disable chunked prompt prefill (default on).
                                  Chunked prefill requires 16 or more cache slots.
-      --prefill-chunk-tokens <n> Prefill chunk size: 32, 64, 128, or 256
-                                 (default 128). Each chunk re-reads the routed
-                                 expert pool, so larger chunks read less.
+      --prefill-chunk-tokens <n> Prefill chunk size: 32, 64, 128, 256, 512, 1024,
+                                 or 2048 (default 128; `tuff serve` picks one for
+                                 the model and Mac). Each chunk re-reads the routed
+                                 expert pool, so larger chunks read less but hold
+                                 more memory.
       --rdadvise <s>             Read-advice policy: off, default, bounded, or adaptive
                                  (default off).
       --help                     Show this help.

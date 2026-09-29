@@ -11,6 +11,33 @@ import Testing
             appleSiliconGeneration: generation)
     }
 
+    /// Large chunks only where the experts cannot stay in the page cache:
+    /// measured on a 16 GB M2, Qwen 3.6 prefilled 2.2x faster at 2,048 while
+    /// Gemma 4 26B gained 3%.
+    @Test func prefillChunkFollowsWhetherTheExpertsFitInMemory() {
+        let sixteen = device(memoryGiB: 16)
+        let expectations: [(TUFFModelDescriptor, Int)] = [
+            (TUFFModelCatalog.gemma4_E2B, 256),
+            (TUFFModelCatalog.gemma4_E4B, 256),
+            (TUFFModelCatalog.gemma4_12B_QAT, 256),
+            (TUFFModelCatalog.gemma4_26B_A4B, 512),
+            (TUFFModelCatalog.gptOss_20B, 512),
+            (TUFFModelCatalog.qwen36_35B_A3B, 2_048),
+            (TUFFModelCatalog.gptOss_120B, 2_048),
+            (TUFFModelCatalog.qwen38FlashNext, 2_048),
+            (TUFFModelCatalog.minimaxM27, 2_048),
+        ]
+        for (model, chunk) in expectations {
+            #expect(model.recommendedPrefillChunkTokens(on: sixteen) == chunk, "\(model.selector)")
+        }
+        // Below 16 GB the large size is halved.
+        #expect(TUFFModelCatalog.gemma4_26B_A4B
+            .recommendedPrefillChunkTokens(on: device(memoryGiB: 8)) == 1_024)
+        // With enough memory to cache Qwen's experts it drops back.
+        #expect(TUFFModelCatalog.qwen36_35B_A3B
+            .recommendedPrefillChunkTokens(on: device(memoryGiB: 64)) == 512)
+    }
+
     @Test func qualifiedModelsAcceptExistingMemoryTiers() {
         for memoryGiB: UInt64 in [8, 16, 24, 64] {
             for model in [TUFFModelCatalog.gemma4_E2B,

@@ -270,12 +270,16 @@ import TUFFValidationSupport
             hiddenSize: 2_880, intermediateSize: 2_880, queryCapacity: 1)
         let prefill = GPTOSSExpertScratchLayout(
             hiddenSize: 2_880, intermediateSize: 2_880, queryCapacity: 256)
+        let largest = GPTOSSExpertScratchLayout(
+            hiddenSize: 2_880, intermediateSize: 2_880,
+            queryCapacity: PrefillRuntimeConfig.maxChunkTokens)
         let clamped = GPTOSSExpertScratchLayout(
             hiddenSize: 2_880, intermediateSize: 2_880, queryCapacity: 10_000)
         #expect(decode.totalBytes == 40_328)
         #expect(prefill.totalBytes == 5_917_568)
         #expect(prefill.totalBytes < 6 * 1_048_576)
-        #expect(clamped == prefill)
+        #expect(largest.totalBytes < 48 * 1_048_576)
+        #expect(clamped == largest)
     }
 
     @Test func invalidBlobRangeFailsBeforeEncoding() throws {

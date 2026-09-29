@@ -70,6 +70,7 @@ public enum TUFFCommand {
         applicationSupportURL: URL,
         environment: [String: String] = [:],
         selectedModel: String? = nil,
+        device: TUFFDeviceCapabilities = .current(),
         fileExists: (String) -> Bool = FileManager.default.fileExists(atPath:)
     ) throws -> TUFFCommandPlan {
         guard let command = arguments.first else { return .help }
@@ -82,6 +83,7 @@ public enum TUFFCommand {
         case "prompt":
             return try promptPlan(
                 remaining,
+                device: device,
                 executableURL: executableURL,
                 currentDirectoryURL: currentDirectoryURL,
                 applicationSupportURL: applicationSupportURL,
@@ -100,6 +102,7 @@ public enum TUFFCommand {
         case "serve":
             return try servePlan(
                 remaining,
+                device: device,
                 executableURL: executableURL,
                 currentDirectoryURL: currentDirectoryURL,
                 applicationSupportURL: applicationSupportURL,
@@ -113,6 +116,7 @@ public enum TUFFCommand {
 
     private static func promptPlan(
         _ arguments: [String],
+        device: TUFFDeviceCapabilities,
         executableURL: URL,
         currentDirectoryURL: URL,
         applicationSupportURL: URL,
@@ -162,6 +166,11 @@ public enum TUFFCommand {
         }
         if !forwarded.contains("--prefill-chunk-tokens") {
             forwarded += ["--prefill-chunk-tokens", "auto"]
+            if let descriptor = model.descriptor,
+               !forwarded.contains("--prefill-chunk-max") {
+                forwarded += ["--prefill-chunk-max",
+                              String(descriptor.recommendedPrefillChunkTokens(on: device))]
+            }
         }
         let child = try bundledExecutable(
             named: "TUFFCLI", beside: executableURL, fileExists: fileExists)
@@ -172,6 +181,7 @@ public enum TUFFCommand {
 
     private static func servePlan(
         _ arguments: [String],
+        device: TUFFDeviceCapabilities,
         executableURL: URL,
         currentDirectoryURL: URL,
         applicationSupportURL: URL,
@@ -194,6 +204,10 @@ public enum TUFFCommand {
             addDefault(
                 "--expert-cache-slots",
                 value: descriptor.runtimeDefaults.expertCacheSlots,
+                to: &forwarded)
+            addDefault(
+                "--prefill-chunk-tokens",
+                value: descriptor.recommendedPrefillChunkTokens(on: device),
                 to: &forwarded)
         }
         let child = try bundledExecutable(

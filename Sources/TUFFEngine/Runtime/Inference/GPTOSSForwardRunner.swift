@@ -7,8 +7,9 @@ import Metal
 /// chunk instead of once per token.
 final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
     ContinuableLogitProducer, SpeculativeVerificationRunner, @unchecked Sendable {
-    private static let prefillQueryCapacity =
-        GPTOSSExpertScratchLayout.maximumPrefillQueries
+    /// Rows every prefill buffer is sized for: the configured chunk, never
+    /// below the size TUFF shipped with.
+    private let prefillQueryCapacity: Int
     private struct LayerViews {
         let inputNorm: TensorView
         let postAttentionNorm: TensorView
@@ -101,16 +102,18 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
         self.context = context
         self.config = config
         self.maxContext = maxContext
+        self.prefillQueryCapacity = max(PrefillRuntimeConfig.baselineChunkTokens,
+                                        runtimeConfiguration.prefillChunkTokens)
         self.kv = try KVCacheManager(
             device: context.device,
             config: config,
             maxContext: maxContext,
             fp16RingEnabled: runtimeConfiguration.fp16RingEnabled,
             slidingWindow: config.slidingWindow,
-            maxPrefillChunkTokens: PrefillRuntimeConfig.maxChunkTokens)
+            maxPrefillChunkTokens: prefillQueryCapacity)
 
         bf16 = try BF16GEMV(context: context,
-                            maxBatchRows: Self.prefillQueryCapacity)
+                            maxBatchRows: prefillQueryCapacity)
         argmax = try FP16Argmax(context: context)
         rms = try RMSNorm(context: context)
         rope = try RoPE(context: context)
@@ -151,7 +154,7 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
         }
         let hiddenSize = config.hiddenSize
         let querySize = config.numHeads * config.headDim
-        let queryCapacity = Self.prefillQueryCapacity
+        let queryCapacity = prefillQueryCapacity
         hidden = try sharedBuffer(elements: queryCapacity * hiddenSize,
                                   stride: MemoryLayout<Float>.stride,
                                   label: "gptoss.hidden")
@@ -374,7 +377,8 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
         let spans = PrefillChunkPlanner.spans(
             tokenCount: tokens.count,
             startPosition: startPosition,
-            config: prefillConfig)
+            config: prefillConfig.replacingChunkTokens(
+                min(prefillConfig.chunkTokens, prefillQueryCapacity)))
         try await PrefillSpanIteration.forEachSpan(spans) { _, span in
             let lower = tokens.index(tokens.startIndex,
                                      offsetBy: span.tokenOffset)
@@ -400,7 +404,7 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
                                      speculativeTargetTokens: MTLBuffer? = nil)
         async throws {
         let queryCount = tokens.count
-        guard queryCount > 0, queryCount <= Self.prefillQueryCapacity else {
+        guard queryCount > 0, queryCount <= prefillQueryCapacity else {
             throw PrefillError.chunkedUnsupported(
                 "GPT-OSS prefill chunk has unsupported size \(queryCount)")
         }
@@ -751,7 +755,7 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
                                  normedStride: Int,
                                  rowCount: Int,
                                  outputTokens: MTLBuffer) throws {
-        precondition((1...Self.prefillQueryCapacity).contains(rowCount))
+        precondition((1...prefillQueryCapacity).contains(rowCount))
         let headStart = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
         let headCB = context.queue.makeCommandBuffer()!
         rms.encodeFloatBF16WRows(

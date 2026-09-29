@@ -1127,12 +1127,19 @@ kernel void attention_prefill_causal_tiled(
 #if defined(__HAVE_TENSOR__)
 
 // One threadgroup computes eight output rows that all read one KV head, so
-// each K and V tile is loaded once for the whole group. TUFF's full-attention
-// shapes differ per family (Gemma 4 uses 512-wide heads, Qwen 256-wide;
-// 16, 12, 8 or 4 query heads per KV head). MPP needs a multiple of eight rows,
-// so a group of four heads covers two query tokens: row r is head
-// r % HeadsPerGroup of token r / HeadsPerGroup. The Swift selector dispatches
-// a variant only when HeadsPerGroup divides the query-per-KV ratio.
+// each K and V tile is loaded once for the whole group. TUFF's attention
+// shapes differ per family (Gemma 4 uses 512-wide full and 256-wide sliding
+// heads, Qwen 256-wide, MiniMax 128-wide; 16, 12, 8, 6, 4 or 2 query heads per
+// KV head). MPP needs a multiple of eight rows, so a smaller group covers
+// several query tokens: row r is head r % HeadsPerGroup of token
+// r / HeadsPerGroup. The Swift selector dispatches a variant only when
+// HeadsPerGroup divides the query-per-KV ratio.
+//
+// Each row sees keys [first, last): `first` from the sliding window and
+// `last` from causality or a bidirectional image block, exactly as the tiled
+// kernel computes them. With an FP16 KV ring (FC_PREFILL_KV_RING_CAP), logical
+// key k lives at physical row k % cap; a tile is cut at the ring's end so each
+// matmul reads one contiguous run of rows.
 constant constexpr int kPrefillTensorOpsOutputs = 8;
 constant constexpr int kPrefillTensorOpsKeys = 64;
 
@@ -1182,6 +1189,30 @@ static inline void attention_prefill_full_tensorops_2d_validity_v2_impl(
         min(tokens_per_group, p.queryCount - min(query_start, p.queryCount));
     const uint q_per_kv = p.numQHeads / p.numKVHeads;
     const uint kvh = qh_start / q_per_kv;
+    const uint ring_cap =
+        (is_function_constant_defined(FC_PREFILL_KV_RING_CAP) &&
+         FC_PREFILL_KV_RING_CAP != 0u)
+            ? FC_PREFILL_KV_RING_CAP
+            : 0u;
+    // Rows that hold written keys. Bounding the tensor here keeps a tile's
+    // masked tail from reading rows no prefill has written yet, whose contents
+    // could be non-finite and poison the weighted sum even at weight zero.
+    const uint physical_rows =
+        ring_cap != 0u ? min(ring_cap, p.kvValidCount) : p.kvValidCount;
+
+    // The group's key range: the earliest token's window start, and the
+    // furthest visible key of any valid token.
+    uint group_first = 0xFFFFFFFFu;
+    uint group_last = 0u;
+    for (uint token = 0u; token < valid_tokens; ++token) {
+        const uint abs_q = p.startPosition + query_start + token;
+        const uint first = (p.slidingWindow != 0u && abs_q + 1u > p.slidingWindow)
+            ? abs_q + 1u - p.slidingWindow
+            : 0u;
+        group_first = min(group_first, first);
+        group_last = max(group_last, prefill_attention_last_exclusive(p, abs_q));
+    }
+    if (valid_tokens == 0u) { group_first = 0u; }
 
     for (uint linear = lid;
          linear < uint(kPrefillTensorOpsOutputs * kPrefillTensorOpsHeadDim);
@@ -1222,13 +1253,13 @@ static inline void attention_prefill_full_tensorops_2d_validity_v2_impl(
         K + kvh * p.headDim,
         dextents<int32_t, 2>(
             int32_t(p.headDim),
-            int32_t(p.kvValidCount)),
+            int32_t(physical_rows)),
         array<int32_t, 2>({1, int32_t(p.kvTokenStrideElements)}));
     device_half_tensor value_tensor(
         V + kvh * p.headDim,
         dextents<int32_t, 2>(
             int32_t(p.headDim),
-            int32_t(p.kvValidCount)),
+            int32_t(physical_rows)),
         array<int32_t, 2>({1, int32_t(p.kvTokenStrideElements)}));
 
     auto query_slice = query_tensor.slice(0, 0);
@@ -1245,14 +1276,16 @@ static inline void attention_prefill_full_tensorops_2d_validity_v2_impl(
         }
     }
 
-    // This full-attention kernel starts at key zero and ignores slidingWindow.
-    // The Swift selector must dispatch it only when every prior key is visible.
-    const uint last =
-        min(p.kvValidCount, p.startPosition + query_start + valid_tokens);
-    for (uint key_start = 0u;
-         key_start < last;
-         key_start += uint(kPrefillTensorOpsKeys)) {
-        auto key_slice = key_tensor.slice(0, int32_t(key_start));
+    uint tile_keys = 0u;
+    for (uint key_start = group_first;
+         key_start < group_last;
+         key_start += tile_keys) {
+        const uint physical_start = ring_cap != 0u ? key_start % ring_cap : key_start;
+        tile_keys = min(uint(kPrefillTensorOpsKeys), group_last - key_start);
+        if (ring_cap != 0u) {
+            tile_keys = min(tile_keys, ring_cap - physical_start);
+        }
+        auto key_slice = key_tensor.slice(0, int32_t(physical_start));
         auto score_product =
             qk_op.template get_destination_cooperative_tensor<
                 decltype(query_slice), decltype(key_slice), float>();
@@ -1284,16 +1317,27 @@ static inline void attention_prefill_full_tensorops_2d_validity_v2_impl(
         if (lid < uint(kPrefillTensorOpsOutputs)) {
             const uint output_row = lid;
             const uint token = output_row / heads_per_group;
-            const uint causal_last = token < valid_tokens
-                ? min(p.kvValidCount, p.startPosition + query_start + token + 1u)
-                : 0u;
-            const uint visible =
-                causal_last > key_start
-                    ? min(uint(kPrefillTensorOpsKeys), causal_last - key_start)
-                    : 0u;
+            // Columns [visible_start, visible_end) of this tile are keys the
+            // row may attend to.
+            uint visible_start = 0u;
+            uint visible_end = 0u;
+            if (token < valid_tokens) {
+                const uint abs_q = p.startPosition + query_start + token;
+                const uint row_first =
+                    (p.slidingWindow != 0u && abs_q + 1u > p.slidingWindow)
+                        ? abs_q + 1u - p.slidingWindow
+                        : 0u;
+                const uint row_last = prefill_attention_last_exclusive(p, abs_q);
+                const uint lo = max(row_first, key_start);
+                const uint hi = min(row_last, key_start + tile_keys);
+                if (hi > lo) {
+                    visible_start = lo - key_start;
+                    visible_end = hi - key_start;
+                }
+            }
 
             float tile_max = -INFINITY;
-            for (uint key = 0u; key < visible; ++key) {
+            for (uint key = visible_start; key < visible_end; ++key) {
                 tile_max = max(
                     tile_max,
                     score_tile[
@@ -1307,7 +1351,7 @@ static inline void attention_prefill_full_tensorops_2d_validity_v2_impl(
             for (uint key = 0u;
                  key < uint(kPrefillTensorOpsKeys);
                  ++key) {
-                const float weight = key < visible
+                const float weight = key >= visible_start && key < visible_end
                     ? fast::exp(
                         score_tile[
                             output_row * uint(kPrefillTensorOpsKeys) + key]
@@ -1324,7 +1368,7 @@ static inline void attention_prefill_full_tensorops_2d_validity_v2_impl(
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
-        auto value_slice = value_tensor.slice(0, int32_t(key_start));
+        auto value_slice = value_tensor.slice(0, int32_t(physical_start));
         auto output_product =
             pv_op.template get_destination_cooperative_tensor<
                 decltype(weight_tensor), decltype(value_slice), float>();
@@ -1411,6 +1455,8 @@ TUFF_PREFILL_TENSOROPS_KERNEL(attention_prefill_full_tensorops_2d_validity_v2, 5
 TUFF_PREFILL_TENSOROPS_KERNEL(attention_prefill_full_tensorops_2d_g4_d512, 512, 4)
 TUFF_PREFILL_TENSOROPS_KERNEL(attention_prefill_full_tensorops_2d_g8_d256, 256, 8)
 TUFF_PREFILL_TENSOROPS_KERNEL(attention_prefill_full_tensorops_2d_g4_d256, 256, 4)
+TUFF_PREFILL_TENSOROPS_KERNEL(attention_prefill_full_tensorops_2d_g2_d256, 256, 2)
+TUFF_PREFILL_TENSOROPS_KERNEL(attention_prefill_full_tensorops_2d_g2_d128, 128, 2)
 
 #undef TUFF_PREFILL_TENSOROPS_KERNEL
 

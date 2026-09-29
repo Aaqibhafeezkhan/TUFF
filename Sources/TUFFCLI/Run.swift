@@ -152,7 +152,8 @@ public func run(args: Args,
                 reasoningEffort: args.reasoningEffort,
                 currentDate: currentDate)
             effectiveArgs.prefillChunkTokens =
-                PrefillRuntimeConfig.autoChunkTokens(promptTokens: promptTokens)
+                PrefillRuntimeConfig.autoChunkTokens(promptTokens: promptTokens,
+                                                     cap: args.prefillChunkMax)
             if !args.quiet {
                 let line = "[prefill chunk auto: "
                     + "\(effectiveArgs.prefillChunkTokens) tokens for a "

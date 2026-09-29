@@ -206,6 +206,13 @@ public struct AppModelInstallDescriptor: Equatable, Sendable {
         catalogDescriptor?.capabilities.contains(.imageInput) ?? true
     }
 
+    /// Chunk size the app runs prefill at for this model on `device`; see
+    /// `TUFFModelDescriptor.recommendedPrefillChunkTokens(on:)`. A descriptor
+    /// outside the catalog keeps the size the app always used.
+    public func recommendedPrefillChunkTokens(on device: TUFFDeviceCapabilities) -> Int {
+        catalogDescriptor?.recommendedPrefillChunkTokens(on: device) ?? 128
+    }
+
     public var isRecommended: Bool {
         catalogID == TUFFModelCatalog.default.id
     }

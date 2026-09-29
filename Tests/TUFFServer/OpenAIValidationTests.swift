@@ -846,7 +846,7 @@ struct ServerArgumentTests {
         ["--expert-cache-slots", "12"],
         ["--expert-cache-policy", "mru"],
         ["--prefill", "maybe"],
-        ["--prefill-chunk-tokens", "512"],
+        ["--prefill-chunk-tokens", "4096"],
         ["--rdadvise", "eager"],
     ])
     func rejectsUnsupportedRuntimeValues(flag: [String]) throws {

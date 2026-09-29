@@ -27,6 +27,9 @@ public struct Args: Equatable, Sendable {
     /// `--prefill-chunk-tokens auto`: the size is decided once the prompt length
     /// is known, which needs the tokenizer and, for images, their geometry.
     public var prefillChunkTokensAuto: Bool
+    /// Largest size `auto` may pick. `tuff prompt` passes the model's
+    /// catalog recommendation; a direct CLI run keeps the historical 256.
+    public var prefillChunkMax: Int
     public var rdadvisePolicy: RDAdvicePolicyMode
     public var speculativeMode: SpeculativeDecodeMode
     public var speculativeDraftTokens: Int
@@ -55,6 +58,7 @@ public struct Args: Equatable, Sendable {
                 prefillPolicy: RuntimePrefillPolicy = RuntimeConfiguration.production.prefillPolicy,
                 prefillChunkTokens: Int = RuntimeConfiguration.production.prefillChunkTokens,
                 prefillChunkTokensAuto: Bool = false,
+                prefillChunkMax: Int = PrefillRuntimeConfig.baselineChunkTokens,
                 rdadvisePolicy: RDAdvicePolicyMode = RuntimeConfiguration.production.rdadvisePolicy,
                 speculativeMode: SpeculativeDecodeMode = .off,
                 speculativeDraftTokens: Int = 4) {
@@ -82,6 +86,7 @@ public struct Args: Equatable, Sendable {
         self.prefillPolicy = prefillPolicy
         self.prefillChunkTokens = prefillChunkTokens
         self.prefillChunkTokensAuto = prefillChunkTokensAuto
+        self.prefillChunkMax = prefillChunkMax
         self.rdadvisePolicy = rdadvisePolicy
         self.speculativeMode = speculativeMode
         self.speculativeDraftTokens = speculativeDraftTokens
@@ -156,10 +161,12 @@ extension Args {
       --prefill on|off           Enable or disable chunked prompt prefill (default on).
                                  Chunked prefill requires 16 or more cache slots.
       --prefill-chunk-tokens <n|auto>
-                                 Prefill chunk size: 32, 64, 128, 256, or auto
-                                 (default 128). Each chunk re-reads the routed
-                                 expert pool, so larger chunks read less; auto
-                                 picks the smallest size that covers the prompt.
+                                 Prefill chunk size: 32, 64, 128, 256, 512, 1024,
+                                 2048, or auto (default 128). Each chunk re-reads
+                                 the routed expert pool, so larger chunks read
+                                 less but hold more memory; auto picks the
+                                 smallest size that covers the prompt.
+      --prefill-chunk-max <n>    Largest size auto may pick (default 256).
       --rdadvise <s>             Read-advice policy: off, default, bounded, or adaptive (default off).
       --speculative <off|greedy|auto>
                                 Opt-in greedy speculation; auto starts at two
@@ -234,6 +241,7 @@ extension Args {
         var prefillPolicy = runtimeDefaults.prefillPolicy
         var prefillChunkTokens = runtimeDefaults.prefillChunkTokens
         var prefillChunkTokensAuto = false
+        var prefillChunkMax = PrefillRuntimeConfig.baselineChunkTokens
         var rdadvisePolicy = runtimeDefaults.rdadvisePolicy
         var speculativeMode: SpeculativeDecodeMode = .off
         var speculativeDraftTokens = 4
@@ -355,6 +363,13 @@ extension Args {
                 }
                 prefillChunkTokensAuto = false
                 prefillChunkTokens = parsed
+            case "--prefill-chunk-max":
+                let value = try takeValue(argv, &index, flag: flag)
+                guard let parsed = Int(value),
+                      RuntimeConfiguration.allowedPrefillChunkTokens.contains(parsed) else {
+                    throw ArgsError.invalidValue(flag: flag, value: value)
+                }
+                prefillChunkMax = parsed
             case "--rdadvise":
                 let value = try takeValue(argv, &index, flag: flag)
                 guard let parsed = RDAdvicePolicyMode(rawValue: value) else {
@@ -448,6 +463,7 @@ extension Args {
                              prefillPolicy: prefillPolicy,
                              prefillChunkTokens: prefillChunkTokens,
                              prefillChunkTokensAuto: prefillChunkTokensAuto,
+                             prefillChunkMax: prefillChunkMax,
                              rdadvisePolicy: rdadvisePolicy,
                              speculativeMode: speculativeMode,
                              speculativeDraftTokens: speculativeDraftTokens)

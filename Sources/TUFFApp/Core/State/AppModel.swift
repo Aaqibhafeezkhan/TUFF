@@ -406,6 +406,8 @@ public final class AppModel {
         self.runtimeOptions = AppRuntimeOptions(
             expertCacheSlots: modelSettings.expertCacheSlots,
             prefillEnabled: modelSettings.prefillEnabled,
+            prefillChunkTokens: installer.descriptor
+                .recommendedPrefillChunkTokens(on: deviceCapabilities),
             rdadvisePolicy: modelSettings.rdadvisePolicy,
             visionResidencyPolicy: .onDemand)
         self.automaticMemory = modelSettings.automaticMemory
@@ -2385,6 +2387,8 @@ public final class AppModel {
         runtimeOptions = AppRuntimeOptions(
             expertCacheSlots: profile.expertCacheSlots,
             prefillEnabled: profile.prefillEnabled,
+            prefillChunkTokens: selectedDescriptor
+                .recommendedPrefillChunkTokens(on: deviceCapabilities),
             rdadvisePolicy: profile.rdadvisePolicy,
             // Pinned for the same reason as `init`: the app always releases the
             // image tower. Reading the persisted value here would let a

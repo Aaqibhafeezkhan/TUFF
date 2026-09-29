@@ -22,6 +22,7 @@ struct TUFFCommandTests {
             currentDirectoryURL: repository,
             applicationSupportURL: appSupport,
             selectedModel: "minimax-m2.7",
+            device: Self.mac(memoryGiB: 16),
             fileExists: existing.contains)
 
         guard case .run(let child, let arguments) = plan else {
@@ -39,6 +40,51 @@ struct TUFFCommandTests {
         #expect(option("--system-prompt", in: arguments)
             == TUFFModelCatalog.minimaxM27.defaultSystemPrompt)
         #expect(option("--prefill-chunk-tokens", in: arguments) == "auto")
+        // MiniMax (128.7 GB) cannot stay in a 16 GB Mac's page cache.
+        #expect(option("--prefill-chunk-max", in: arguments) == "2048")
+    }
+
+    private static func mac(memoryGiB: UInt64) -> TUFFDeviceCapabilities {
+        TUFFDeviceCapabilities(unifiedMemoryBytes: memoryGiB * TUFFModelCatalog.oneGiB,
+                               macOSMajorVersion: 26,
+                               appleSiliconGeneration: 2)
+    }
+
+    @Test func serveAndPromptSizePrefillChunksForTheModelAndMac() throws {
+        let executable = repository.appendingPathComponent(".build/debug/TUFFCommand")
+        let existing: Set<String> = [
+            "/repo/Package.swift", "/repo/Sources/TUFFApp/Mac",
+            "/repo/.build/debug/TUFFServer", "/repo/.build/debug/TUFFCLI",
+        ]
+        func served(_ model: String, memoryGiB: UInt64, extra: [String] = []) throws -> String? {
+            guard case .run(_, let arguments) = try TUFFCommand.plan(
+                arguments: ["serve", "--model", model] + extra,
+                executableURL: executable,
+                currentDirectoryURL: repository,
+                applicationSupportURL: appSupport,
+                device: Self.mac(memoryGiB: memoryGiB),
+                fileExists: existing.contains) else { return nil }
+            return option("--prefill-chunk-tokens", in: arguments)
+        }
+        #expect(try served("qwen36", memoryGiB: 16) == "2048")
+        #expect(try served("gemma4", memoryGiB: 16) == "512")
+        #expect(try served("gemma4-e4b", memoryGiB: 16) == "256")
+        #expect(try served("qwen36", memoryGiB: 64) == "512")
+        // An explicit size always wins.
+        #expect(try served("qwen36", memoryGiB: 16,
+                           extra: ["--prefill-chunk-tokens", "128"]) == "128")
+
+        guard case .run(_, let promptArguments) = try TUFFCommand.plan(
+            arguments: ["prompt", "--model", "gemma4-e4b", "hi"],
+            executableURL: executable,
+            currentDirectoryURL: repository,
+            applicationSupportURL: appSupport,
+            device: Self.mac(memoryGiB: 16),
+            fileExists: existing.contains) else {
+            Issue.record("expected a child process")
+            return
+        }
+        #expect(option("--prefill-chunk-max", in: promptArguments) == "256")
     }
 
     @Test func promptAcceptsAnExplicitModelPathAndRawCLIOptions() throws {

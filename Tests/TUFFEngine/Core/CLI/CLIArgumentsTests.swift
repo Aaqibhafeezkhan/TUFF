@@ -77,6 +77,7 @@ import TUFFEngine
             "--temperature", "--top-k", "--top-p", "--repetition-penalty",
             "--seed", "--stop", "--quiet", "--expert-cache-slots",
             "--expert-cache-policy", "--prefill", "--prefill-chunk-tokens",
+            "--prefill-chunk-max",
             "--rdadvise", "--help",
             "--chat-prompt", "--image", "--vision-pack", "--vision-residency",
             "--speculative", "--speculative-draft-tokens",
@@ -84,6 +85,24 @@ import TUFFEngine
         let words = Args.usage.split { $0.isWhitespace || $0 == "(" || $0 == ")" }
         let options = Set(words.map(String.init).filter { $0.hasPrefix("--") })
         #expect(options == expected)
+    }
+
+    @Test func autoChunkCapDefaultsToTheHistoricalSize() throws {
+        let direct = try Args.parse([
+            "--model", "m.gturbo", "--prompt", "hi", "--prefill-chunk-tokens", "auto"])
+        #expect(direct.prefillChunkTokensAuto)
+        #expect(direct.prefillChunkMax == 256)
+
+        let wrapped = try Args.parse([
+            "--model", "m.gturbo", "--prompt", "hi",
+            "--prefill-chunk-tokens", "auto", "--prefill-chunk-max", "2048"])
+        #expect(wrapped.prefillChunkMax == 2_048)
+
+        let fixed = try Args.parse([
+            "--model", "m.gturbo", "--prompt", "hi", "--prefill-chunk-tokens", "1024"])
+        #expect(fixed.prefillChunkTokens == 1_024)
+        #expect(try fixed.resolvedRuntimeConfiguration(forceLogitsHead: false)
+            .prefillChunkTokens == 1_024)
     }
 
     @Test func speculativeOptionsAreOptInAndBounded() throws {
@@ -247,7 +266,8 @@ import TUFFEngine
             ("--expert-cache-slots", "7"),
             ("--expert-cache-policy", "fifo"),
             ("--prefill", "yes"),
-            ("--prefill-chunk-tokens", "512"),
+            ("--prefill-chunk-tokens", "4096"),
+            ("--prefill-chunk-max", "4096"),
             ("--rdadvise", "automatic"),
         ]
         for (flag, value) in invalidValues {
@@ -276,9 +296,9 @@ import TUFFEngine
         }
 
         arguments.expertCacheSlots = RuntimeConfiguration.production.expertCacheSlots
-        arguments.prefillChunkTokens = 512
+        arguments.prefillChunkTokens = 4_096
         #expect(throws: ArgsError.invalidValue(
-            flag: "--prefill-chunk-tokens", value: "512")) {
+            flag: "--prefill-chunk-tokens", value: "4096")) {
             _ = try arguments.resolvedRuntimeConfiguration(forceLogitsHead: false)
         }
 

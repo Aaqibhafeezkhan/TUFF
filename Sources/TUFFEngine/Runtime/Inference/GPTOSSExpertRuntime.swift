@@ -38,7 +38,7 @@ enum GPTOSSExpertRuntimeError: Error, Equatable {
 /// Projection intermediates are reused route-by-route; only the final partial
 /// vectors scale with `queryCapacity * topK`.
 struct GPTOSSExpertScratchLayout: Sendable, Equatable {
-    static let maximumPrefillQueries = 256
+    static let maximumPrefillQueries = PrefillRuntimeConfig.maxChunkTokens
 
     let hiddenSize: Int
     let intermediateSize: Int

@@ -487,6 +487,24 @@ public struct TUFFModelDescriptor: Codable, Equatable, Sendable, Identifiable {
             + "You are running in a SSD MoE streaming app on Mac called TUFF."
     }
 
+    /// Prefill chunk size for this model on `device`.
+    ///
+    /// Every chunk streams each layer's routed experts again, so chunk count
+    /// drives SSD traffic, but only when the experts cannot stay in the page
+    /// cache. Measured on a 16 GB M2 over a 7K-token prompt: Qwen 3.6 (19.5 GB
+    /// installed) prefilled 2.2x faster at 2,048 than at 256, while Gemma 4
+    /// 26B-A4B (14.3 GB) gained 3% for the same memory. So large chunks go
+    /// only to a mixture-of-experts model bigger than the Mac's memory; one
+    /// that fits gets a moderate chunk, and a dense model, which has no
+    /// experts to re-read, keeps the size TUFF shipped with. Below 16 GB the
+    /// large size is halved, since its scratch and KV ring come out of the
+    /// same small budget as the expert cache.
+    public func recommendedPrefillChunkTokens(on device: TUFFDeviceCapabilities) -> Int {
+        guard architecture.feedForwardKind == .mixtureOfExperts else { return 256 }
+        guard source.installedBytes > device.unifiedMemoryBytes else { return 512 }
+        return device.unifiedMemoryBytes >= 16 * TUFFModelCatalog.oneGiB ? 2_048 : 1_024
+    }
+
     public func compatibility(
         with device: TUFFDeviceCapabilities,
         contextTokens: Int? = nil,

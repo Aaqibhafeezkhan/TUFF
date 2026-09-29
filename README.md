@@ -217,6 +217,14 @@ actually resolve on this Mac. The manual context, cache, and prefill controls
 stay visible but disabled until Auto is turned off, and turning it off restores
 that model's saved choices.
 
+Prefill reads each layer's experts again for every chunk of the prompt, so
+chunk size decides SSD traffic when a model's experts cannot stay in memory.
+TUFF sizes the chunk per model and Mac: 2,048 tokens for a mixture-of-experts
+model larger than the Mac's memory (1,024 below 16 GB), 512 for one that fits,
+and 256 for the dense Gemmas. On a 16 GB M2 that took a 7,000-token Qwen 3.6
+prefill from 190 s to 86 s with identical output. The app and `tuff` apply it
+automatically; `TUFFCLI` and `TUFFServer` take `--prefill-chunk-tokens`.
+
 ### Running past the limits
 
 **Bypass model restrictions**, in Settings, removes both gates: models this Mac
@@ -402,7 +410,7 @@ swift build -c release
 To build the complete app bundle, embedded updater, ZIP, and checksum:
 
 ```bash
-Scripts/package_app.sh 5.1.0
+Scripts/package_app.sh 5.2.0
 open dist/TUFF.app
 ```
 

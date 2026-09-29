@@ -220,17 +220,22 @@ public struct PrefillRuntimeConfig: Sendable, Equatable {
     /// else. On an 11,612-token prompt that meant 578 GB read from a 12 GB pool
     /// with no cache hits at all.
     ///
-    /// 256 is free: the runner floors the chunk at
-    /// `VisionConfig().maximumPooledTokens` (280) for the KV ring and for the
-    /// multimodal scratch layout, so every size up to 280 produces byte-identical
-    /// geometry. 512 is the first size that costs anything, and raising this past
-    /// 280 should come with a test that asserts ring bytes the way
-    /// `PrefillChunkScratchTests` asserts scratch.
-    public static let maxChunkTokens = 256
+    /// Larger chunks divide that traffic. On a 16 GB M2, Qwen 3.6 (19.5 GB, so
+    /// its experts cannot stay in the page cache) prefilled 6,996 tokens in
+    /// 190 s at 256 and 86 s at 2,048, with identical output; Gemma 4 26B,
+    /// whose experts do fit, went from 193 s to 187 s. The cost is memory that
+    /// scales with the chunk: prefill scratch, and the FP16 ring on
+    /// sliding-window layers, which holds the window plus one chunk. Runners
+    /// size both from the chunk size they are configured with, never from this
+    /// ceiling, so a model run at 256 pays exactly what it did before.
+    public static let maxChunkTokens = 2_048
 
-    /// Chunk sizes a caller may select. Capped at `maxChunkTokens` - see there
-    /// for why the larger sizes the scratch layout can handle are not offered.
-    public static let allowedChunkTokens = [32, 64, 128, 256]
+    /// The chunk size ring and scratch memory is never sized below. Every size
+    /// up to it produces the geometry TUFF shipped before larger chunks existed.
+    public static let baselineChunkTokens = 256
+
+    /// Chunk sizes a caller may select.
+    public static let allowedChunkTokens = [32, 64, 128, 256, 512, 1_024, 2_048]
 
     /// The largest selectable chunk no greater than `requested`.
     ///
