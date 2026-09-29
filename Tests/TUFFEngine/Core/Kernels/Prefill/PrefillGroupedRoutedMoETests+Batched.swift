@@ -34,7 +34,12 @@ extension PrefillGroupedRoutedMoETests {
     let ctx = try MetalContext()
     guard let batched = PrefillBatchedRoutedExperts(
       context: ctx, groupSize: Quantization.groupSize, siluActivation: false)
-    else { return }
+    else {
+      if #available(macOS 26.0, *) {
+        #expect(!ctx.device.supportsFamily(.apple8), "batched routed experts must build on Apple8+")
+      }
+      return
+    }
     let grouped = try PrefillGroupedRoutedMoE(context: ctx)
     let tile = routes.tiles[0]
     let groups = Array(routes.groups[Int(tile.groupStart)..<Int(tile.groupStart + tile.groupCount)])

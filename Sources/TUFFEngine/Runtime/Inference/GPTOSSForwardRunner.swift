@@ -50,6 +50,11 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
     private let routerLogits: MTLBuffer
     private let routedIndices: MTLBuffer
     private let expertScratch: GPTOSSExpertScratchBuffers
+    /// Batched MPP experts for prefill; nil where MPP is unavailable.
+    private let batchedExperts: GPTOSSBatchedExperts?
+    /// Prefill K and V rows before they are copied into KV slots.
+    private let kStage: MTLBuffer
+    private let vStage: MTLBuffer
     private let speculativeTargetTokenBuffer: MTLBuffer
     private var lastLogitsBuffer: MTLBuffer?
     private var cachedSpeculativeBoundaryToken: Int32?
@@ -186,6 +191,15 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
                 intermediateSize: config.moeIntermediateSize,
                 topK: config.topKExperts,
                 queryCapacity: queryCapacity))
+        kStage = try sharedBuffer(elements: queryCapacity * config.numKVHeads * config.headDim,
+                                  stride: MemoryLayout<Float16>.stride,
+                                  label: "gptoss.prefill.kStage")
+        vStage = try sharedBuffer(elements: queryCapacity * config.numKVHeads * config.headDim,
+                                  stride: MemoryLayout<Float16>.stride,
+                                  label: "gptoss.prefill.vStage")
+        batchedExperts = GPTOSSBatchedExperts(context: context,
+                                              hiddenSize: hiddenSize,
+                                              intermediateSize: config.moeIntermediateSize)
     }
 
     func reset() {
@@ -470,9 +484,10 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
         let cb1 = context.queue.makeCommandBuffer()!
 
         // Normalize and project all candidate rows through the resident
-        // weights with bounded 2-D dispatches. K/V still use per-row outputs
-        // because a ring-enabled KV cache may wrap each position to a
-        // different physical slot.
+        // weights with bounded 2-D dispatches. K and V are projected into
+        // staging rows in one dispatch each, then copied row by row into
+        // their KV slots, because a ring-enabled KV cache may wrap each
+        // position to a different physical slot.
         rms.encodeFloatBF16WRows(
             commandBuffer: cb1,
             x: hidden,
@@ -496,27 +511,48 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
             rows: qRows,
             columns: hiddenSize)
 
+        bf16.encodeHalfRows(
+            commandBuffer: cb1,
+            weights: views.kWeight,
+            input: normed,
+            inputStrideElements: hiddenSize,
+            output: kStage,
+            outputStrideElements: kvRows,
+            bias: views.kBias,
+            batchCount: queryCount,
+            rows: kvRows,
+            columns: hiddenSize)
+        bf16.encodeHalfRows(
+            commandBuffer: cb1,
+            weights: views.vWeight,
+            input: normed,
+            inputStrideElements: hiddenSize,
+            output: vStage,
+            outputStrideElements: kvRows,
+            bias: views.vBias,
+            batchCount: queryCount,
+            rows: kvRows,
+            columns: hiddenSize)
+        if let blit = cb1.makeBlitCommandEncoder() {
+            let rowBytes = kvRows * halfBytes
+            precondition(kv.stride(layer: layer) == rowBytes,
+                         "GPT-OSS KV slot stride must be one K/V row")
+            for row in 0..<queryCount {
+                let kSlot = kv.kSlot(layer: layer, position: startPosition + row)
+                let vSlot = kv.vSlot(layer: layer, position: startPosition + row)
+                blit.copy(from: kStage, sourceOffset: row * rowBytes,
+                          to: kSlot.buffer, destinationOffset: kSlot.offset, size: rowBytes)
+                blit.copy(from: vStage, sourceOffset: row * rowBytes,
+                          to: vSlot.buffer, destinationOffset: vSlot.offset, size: rowBytes)
+            }
+            blit.endEncoding()
+        }
+
         for row in 0..<queryCount {
             let position = startPosition + row
-            let normedOffset = row * hiddenSize * halfBytes
             let queryOffset = row * qRows * halfBytes
             let kSlot = kv.kSlot(layer: layer, position: position)
             let vSlot = kv.vSlot(layer: layer, position: position)
-
-            bf16.encodeHalf(
-                commandBuffer: cb1,
-                weights: views.kWeight,
-                input: normed, inputOffset: normedOffset,
-                output: kSlot.buffer, outputOffset: kSlot.offset,
-                bias: views.kBias,
-                rows: kvRows, columns: hiddenSize)
-            bf16.encodeHalf(
-                commandBuffer: cb1,
-                weights: views.vWeight,
-                input: normed, inputOffset: normedOffset,
-                output: vSlot.buffer, outputOffset: vSlot.offset,
-                bias: views.vBias,
-                rows: kvRows, columns: hiddenSize)
             encodeRoPE(commandBuffer: cb1, data: query,
                        dataOffset: queryOffset,
                        position: position, heads: config.numHeads)
@@ -569,15 +605,13 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
             batchCount: queryCount,
             rows: hiddenSize,
             columns: qRows)
-        for row in 0..<queryCount {
-            let hiddenOffset = row * hiddenSize * floatBytes
-            let normedOffset = row * hiddenSize * halfBytes
-            elementwise.encodeFloatResidualAdd(
-                commandBuffer: cb1,
-                hidden: hidden, hiddenOffset: hiddenOffset,
-                delta: projectedAttention, deltaOffset: normedOffset,
-                count: hiddenSize)
-        }
+        // Rows are contiguous in both buffers, so one dispatch covers the
+        // chunk instead of one per token.
+        elementwise.encodeFloatResidualAdd(
+            commandBuffer: cb1,
+            hidden: hidden, hiddenOffset: 0,
+            delta: projectedAttention, deltaOffset: 0,
+            count: queryCount * hiddenSize)
         rms.encodeFloatBF16WRows(
             commandBuffer: cb1,
             x: hidden,
@@ -629,6 +663,45 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
         let availableSlots = model.routedExpertCacheSlotCount(layer: layer)
             ?? orderedExperts.count
         let groupSize = max(1, min(availableSlots, orderedExperts.count))
+
+        // The batched path wants each expert's pairs contiguous, in the same
+        // order the fetch groups walk the experts. Below the batched threshold
+        // (every speculative verification block) the per-pair kernels keep
+        // decode's numerics.
+        let batched = queryCount >= PrefillSharedExpert.minimumBatchedTokens
+            ? batchedExperts : nil
+        var pairsByExpert: [Int: (start: Int, count: Int)] = [:]
+        var sortedPairsBuffer: MTLBuffer?
+        if batched != nil {
+            let order = Dictionary(uniqueKeysWithValues: orderedExperts.enumerated().map { ($1, $0) })
+            var pairs: [PrefillTokenExpertPair] = []
+            pairs.reserveCapacity(queryCount * config.topKExperts)
+            for row in 0..<queryCount {
+                for slot in 0..<config.topKExperts {
+                    pairs.append(PrefillTokenExpertPair(
+                        token: UInt32(row),
+                        expert: indexPointer[row * config.topKExperts + slot],
+                        rank: UInt32(slot),
+                        weight: 0))
+                }
+            }
+            pairs.sort {
+                let l = order[Int($0.expert)]!, r = order[Int($1.expert)]!
+                return l != r ? l < r : ($0.token, $0.rank) < ($1.token, $1.rank)
+            }
+            for (index, pair) in pairs.enumerated() {
+                let expert = Int(pair.expert)
+                if let run = pairsByExpert[expert] {
+                    pairsByExpert[expert] = (run.start, run.count + 1)
+                } else {
+                    pairsByExpert[expert] = (index, 1)
+                }
+            }
+            sortedPairsBuffer = pairs.withUnsafeBytes {
+                context.device.makeBuffer(bytes: $0.baseAddress!, length: $0.count,
+                                          options: .storageModeShared)
+            }
+        }
         var groupStart = 0
         while groupStart < orderedExperts.count {
             try Task.checkCancellation()
@@ -654,6 +727,21 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
             }
 
             let cb2 = context.queue.makeCommandBuffer()!
+            if let batched, let sortedPairsBuffer {
+                let groups = expertIDs.compactMap { expert -> GPTOSSBatchedExperts.Group? in
+                    guard let run = pairsByExpert[expert], let blob = blobByExpert[expert] else {
+                        return nil
+                    }
+                    return GPTOSSBatchedExperts.Group(blob: blob, pairStart: run.start,
+                                                      pairCount: run.count)
+                }
+                try batched.encode(commandBuffer: cb2, input: normed,
+                                   sortedPairs: sortedPairsBuffer, groups: groups,
+                                   offsets: views.expertOffsets,
+                                   routePartials: expertScratch.routePartials,
+                                   topK: config.topKExperts,
+                                   swigluLimit: Float(config.swigluLimit))
+            } else {
             for row in 0..<queryCount {
                 for routeSlot in 0..<config.topKExperts {
                     let routeIndex = row * config.topKExperts + routeSlot
@@ -669,6 +757,7 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
                         scratch: expertScratch,
                         swigluLimit: Float(config.swigluLimit))
                 }
+            }
             }
             if groupEnd == orderedExperts.count {
                 try expertRuntime.encodeFloatResidualReduce(

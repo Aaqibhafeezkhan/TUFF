@@ -265,6 +265,106 @@ import TUFFValidationSupport
         #expect(RelError.maxAbsDiff(floatActual, floatExpected) < 0.02)
     }
 
+    /// The batched MPP experts write the same route partials as the per-pair
+    /// runtime, for every token and route rank.
+    @Test func batchedExpertsMatchPerPairRuntime() throws {
+        let hidden = 128
+        let intermediate = 64
+        let queries = 40
+        let topK = 4
+        let expertCount = 6
+        let context = try MetalContext()
+        guard let batched = GPTOSSBatchedExperts(
+            context: context, hiddenSize: hidden, intermediateSize: intermediate)
+        else {
+            // Unavailable only without MSL 4 tensors or below Apple8.
+            if #available(macOS 26.0, *) {
+                #expect(!context.device.supportsFamily(.apple8),
+                        "the MXFP4 MPP kernel must build on Apple8 or newer")
+            }
+            return
+        }
+        let runtime = try GPTOSSExpertRuntime(context: context)
+        let layout = GPTOSSExpertScratchLayout(
+            hiddenSize: hidden, intermediateSize: intermediate,
+            topK: topK, queryCapacity: queries)
+        let perPair = try GPTOSSExpertScratchBuffers.allocate(device: context.device, layout: layout)
+        let batchedScratch = try GPTOSSExpertScratchBuffers.allocate(device: context.device,
+                                                                     layout: layout)
+        let fixtures = try (0..<expertCount).map {
+            try Self.fixture(context: context, hidden: hidden,
+                             intermediate: intermediate, seed: $0 + 3)
+        }
+        let input = (0..<(queries * hidden)).map { Float16(Float(($0 * 13) % 37 - 18) / 64) }
+        let inputBuffer = try #require(Fp16Buffer.make(context.device, halves: input))
+        func expert(token: Int, rank: Int) -> Int { (token * 5 + rank * 2) % expertCount }
+
+        var pairs: [PrefillTokenExpertPair] = []
+        for token in 0..<queries {
+            for rank in 0..<topK {
+                pairs.append(PrefillTokenExpertPair(token: UInt32(token),
+                                                    expert: UInt32(expert(token: token, rank: rank)),
+                                                    rank: UInt32(rank), weight: 0))
+            }
+        }
+        pairs.sort { ($0.expert, $0.token, $0.rank) < ($1.expert, $1.token, $1.rank) }
+        var groups: [GPTOSSBatchedExperts.Group] = []
+        var cursor = 0
+        for e in 0..<expertCount {
+            let count = pairs.filter { $0.expert == UInt32(e) }.count
+            if count > 0 {
+                groups.append(.init(blob: fixtures[e].view, pairStart: cursor, pairCount: count))
+            }
+            cursor += count
+        }
+        let pairBuffer = try #require(pairs.withUnsafeBytes {
+            context.device.makeBuffer(bytes: $0.baseAddress!, length: $0.count,
+                                      options: .storageModeShared)
+        })
+
+        let reference = try #require(context.queue.makeCommandBuffer())
+        for token in 0..<queries {
+            for rank in 0..<topK {
+                try runtime.encodeExpert(commandBuffer: reference,
+                                         blob: fixtures[expert(token: token, rank: rank)].view,
+                                         offsets: fixtures[0].offsets,
+                                         input: inputBuffer, queryIndex: token, routeSlot: rank,
+                                         scratch: perPair, swigluLimit: 7)
+            }
+        }
+        reference.commit()
+        reference.waitUntilCompleted()
+        try checkCommandBufferError(reference)
+
+        let candidate = try #require(context.queue.makeCommandBuffer())
+        try batched.encode(commandBuffer: candidate, input: inputBuffer,
+                           sortedPairs: pairBuffer, groups: groups,
+                           offsets: fixtures[0].offsets,
+                           routePartials: batchedScratch.routePartials,
+                           topK: topK, swigluLimit: 7)
+        candidate.commit()
+        candidate.waitUntilCompleted()
+        try checkCommandBufferError(candidate)
+
+        func read(_ buffer: MTLBuffer) throws -> [Float] {
+            let count = queries * topK * hidden
+            let staging = try #require(context.device.makeBuffer(
+                length: count * 2, options: .storageModeShared))
+            let cb = try #require(context.queue.makeCommandBuffer())
+            let blit = try #require(cb.makeBlitCommandEncoder())
+            blit.copy(from: buffer, sourceOffset: 0, to: staging, destinationOffset: 0,
+                      size: count * 2)
+            blit.endEncoding()
+            cb.commit()
+            cb.waitUntilCompleted()
+            return Fp16Buffer.read(staging, count: count)
+        }
+        let expected = try read(perPair.routePartials)
+        let actual = try read(batchedScratch.routePartials)
+        let rel = RelError.compute(actual: actual, reference: expected)
+        #expect(rel < 1e-2, "batched vs per-pair rel=\(rel)")
+    }
+
     @Test func productionScratchStaysBoundedAcrossDecodeAndPrefill() {
         let decode = GPTOSSExpertScratchLayout(
             hiddenSize: 2_880, intermediateSize: 2_880, queryCapacity: 1)
