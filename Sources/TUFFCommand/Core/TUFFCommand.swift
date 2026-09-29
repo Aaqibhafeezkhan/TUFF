@@ -58,7 +58,7 @@ public enum TUFFCommand {
       serve    Start the local OpenAI-compatible server in the foreground.
 
     model names include gemma4-e2b, gemma4-e4b, gemma4-12b-qat, gemma4,
-    qwen36, gpt-oss-20b, gpt-oss-120b, and minimax-m2.7.
+    qwen36, qwen38-flash-next, gpt-oss-20b, gpt-oss-120b, and minimax-m2.7.
 
     Run `tuff prompt --help` or `tuff serve --help` for command-specific options.
     """
