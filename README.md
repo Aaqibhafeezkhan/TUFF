@@ -241,6 +241,23 @@ the decode kernels. Measured on a 16 GB M2 against 5.2, with the same output:
 | Gemma 4 26B-A4B | 4,160 tokens | 102 s | 62 s |
 | Qwen 3.8 Flash Next | 983 tokens | 66 s | 42 s |
 
+Decode reads each layer's routed experts after its router has run, so on a
+model whose experts stream from SSD the next layer used to wait for the read.
+TUFF 6 also routes each layer's input through the next layer's router, reads
+the experts it predicts into that layer's cache while the GPU works, and turns
+this off if fewer than 35% of its guesses are used. A guess only decides what
+is read early, so output is unchanged. GPT-OSS's MXFP4 experts also decode
+about four times faster per byte. 64-token decode on a 16 GB M2, same output:
+
+| Model | 5.2 decode | 6.0 decode | Guesses used |
+| --- | ---: | ---: | ---: |
+| Qwen 3.6 35B-A3B | 7.4 tok/s | 10.5 tok/s | 84% |
+| Gemma 4 26B-A4B | 8.6 tok/s | 9.6 tok/s | 71% |
+| Qwen 3.8 Flash Next | 2.3 tok/s | 2.5 tok/s | 69% |
+| GPT-OSS 20B | 4.6 tok/s | 7.0 tok/s | 90% |
+
+`TUFF_PHASES=1` prints the share of guesses used and the reads made early.
+
 ### Running past the limits
 
 **Bypass model restrictions**, in Settings, removes both gates: models this Mac
