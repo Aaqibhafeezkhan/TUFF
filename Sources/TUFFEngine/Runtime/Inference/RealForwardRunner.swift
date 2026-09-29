@@ -179,12 +179,21 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
     private let prefillRMS: PrefillRMSNorm
     private let prefillQMM: PrefillInt4QMM
     private let prefillMPPAffineInt4: MPPPrefillInt4QMM?
+    /// Batched projections for a checkpoint whose INT4 group is not 64
+    /// (Qwen 3.8 Flash Next uses 32), which `prefillMPPAffineInt4` cannot
+    /// decode. Without it those projections ran as one GEMV per token.
+    private let prefillMPPAffineGrouped: MPPPrefillAffineQMM?
     private let prefillQKVEpilogue: PrefillQKVEpilogue
     private let prefillAttention: PrefillAttention
     private let prefillPostAttention: PrefillPostAttentionSetup
     private let prefillRouter: PrefillRouter
     private let prefillSharedExpert: PrefillSharedExpert
     private let prefillGroupedMoE: PrefillGroupedRoutedMoE
+    /// Routed experts as batched MPP projections, with its bounded scratch.
+    /// Nil on dense models and where MPP is unavailable, which keeps the
+    /// per-pair kernels.
+    private let prefillBatchedRouted: PrefillBatchedRoutedExperts?
+    private let prefillBatchedRoutedScratch: PrefillBatchedRoutedExperts.Scratch?
     private let prefillMoE: PrefillMoE
     private let prefillLayerTail: PrefillLayerTail
     private let prefillFinalRowHead: PrefillFinalRowHeadInt4
@@ -438,6 +447,9 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
         // being silently mis-decoded by the tensor-ops one.
         self.prefillMPPAffineInt4 = int4Groups == Quantization.groupSize
             ? MPPPrefillInt4QMM(context: context) : nil
+        self.prefillMPPAffineGrouped = int4Groups == Quantization.groupSize
+            ? nil
+            : MPPPrefillAffineQMM(context: context, bits: 4, groupSize: int4Groups)
         self.prefillQKVEpilogue = try PrefillQKVEpilogue(context: context)
         self.prefillAttention = try PrefillAttention(context: context)
         self.prefillPostAttention = try PrefillPostAttentionSetup(context: context)
@@ -450,6 +462,18 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
             weightBits: model.sharedExpertWeightBits,
             siluActivation: silu,
             groupSize: int4Groups)
+        if cfg.feedForwardKind == .mixtureOfExperts,
+           let batchedRouted = PrefillBatchedRoutedExperts(context: context,
+                                                           groupSize: int4Groups,
+                                                           siluActivation: silu),
+           batchedRouted.supports(d: cfg.hiddenSize, f: cfg.moeIntermediateSize) {
+            self.prefillBatchedRouted = batchedRouted
+            self.prefillBatchedRoutedScratch = try PrefillBatchedRoutedExperts.makeScratch(
+                device: context.device, d: cfg.hiddenSize, f: cfg.moeIntermediateSize)
+        } else {
+            self.prefillBatchedRouted = nil
+            self.prefillBatchedRoutedScratch = nil
+        }
         self.prefillGroupedMoE = try PrefillGroupedRoutedMoE(context: context,
                                                              siluActivation: silu,
                                                              groupSize: int4Groups)
@@ -1481,6 +1505,21 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                 if metadata.path == .affineThreadgroupF16 {
                     return
                 }
+            }
+            if tokenCount >= 32,
+               family == .q || family == .kv || family == .o,
+               xStrideElements == columns, yStrideElements == rows,
+               let grouped = prefillMPPAffineGrouped,
+               grouped.encode(commandBuffer: commandBuffer,
+                              weights: weights.buffer,
+                              weightsOffset: Int(weights.offset),
+                              scales: weights.buffer,
+                              scalesOffset: Int(weights.scaleOffset),
+                              biases: weights.buffer,
+                              biasesOffset: Int(weights.biasOffset),
+                              x: x, y: y,
+                              m: tokenCount, n: rows, k: columns) {
+                return
             }
             if PrefillProjectionDispatchPolicy.selectedDispatch(for: family,
                                                                 chunkTokens: tokenCount) == .qmm {
@@ -2554,6 +2593,25 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                             "prefill start=\(startPosition) count=\(tokens.count) layer=\(L) phase=routed_tile") else {
                             throw ModelError.residentBufferWrapFailed
                         }
+                        // Below the batched threshold (every speculative
+                        // verification block) the per-pair kernels keep
+                        // decode's numerics.
+                        if tokens.count >= PrefillSharedExpert.minimumBatchedTokens,
+                           let batchedRouted = prefillBatchedRouted,
+                           let batchedScratch = prefillBatchedRoutedScratch {
+                            let groupStart = Int(tile.groupStart)
+                            try batchedRouted.encodeTile(
+                                commandBuffer: tileCB,
+                                hidden: ffnInput,
+                                hiddenStrideElements: D,
+                                sortedPairs: metadata.sortedPairs,
+                                groups: Array(routes.groups[groupStart..<(groupStart + Int(tile.groupCount))]),
+                                views: fetch.binding.views,
+                                offsets: routedOffsets,
+                                routePartials: scratch.routePartials,
+                                scratch: batchedScratch,
+                                d: D, f: cfg.moeIntermediateSize, topK: cfg.topKExperts)
+                        } else {
                         _ = prefillGroupedMoE.encodeStreamedBatched(
                             commandBuffer: tileCB,
                             hidden: ffnInput,
@@ -2565,6 +2623,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                             binding: fetch.binding,
                             params: streamedParams,
                             pairMicrobatchRows: scratch.layout.routedPairMicrobatchRows)
+                        }
                         tileCB.commit()
                         pendingTiles.append(PendingPrefillTile(tileIndex: tileIndex,
                                                                commandBuffer: tileCB,

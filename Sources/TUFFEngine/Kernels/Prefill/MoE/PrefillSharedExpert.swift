@@ -3,14 +3,39 @@ import Metal
 
 final class PrefillSharedExpert {
     private let shared: SharedExpertRuntime
+    private let batched: MPPPrefillAffineQMM?
+    private let activationPSO: MTLComputePipelineState
+
+    /// Fewest tokens that take the batched path: the threshold TUFF's batched
+    /// projections already use. Below it, including every speculative
+    /// verification block, the per-token kernels decode uses keep their
+    /// numerics.
+    static let minimumBatchedTokens = 32
 
     init(context: MetalContext, weightBits: Int = 8,
          siluActivation: Bool = false,
-         groupSize: Int = Quantization.groupSize) throws {
+         groupSize: Int = Quantization.groupSize,
+         allowBatched: Bool = true) throws {
         self.shared = try SharedExpertRuntime(context: context,
                                               weightBits: weightBits,
                                               siluActivation: siluActivation,
                                               groupSize: groupSize)
+        // INT8 shared weights are grouped at 64 whatever the checkpoint's INT4
+        // group, as `dequant_int8.metal` assumes.
+        self.batched = allowBatched
+            ? MPPPrefillAffineQMM(context: context, bits: weightBits,
+                                  groupSize: weightBits == 8 ? Quantization.groupSize : groupSize)
+            : nil
+        self.activationPSO = try context.pipeline(
+            siluActivation ? "silu_mul_fp16" : "gelu_mul_fp16")
+    }
+
+    var usesBatchedPath: Bool { batched != nil }
+
+    /// Scratch elements each of gate, up and activation needs for `tokens`
+    /// rows: a whole chunk on the batched path, one token otherwise.
+    static func scratchElements(tokens: Int, intermediate: Int) -> Int {
+        max(1, tokens) * intermediate
     }
 
     func encodeBlock(commandBuffer cb: MTLCommandBuffer,
@@ -45,6 +70,17 @@ final class PrefillSharedExpert {
         }
 
         let halfBytes = MemoryLayout<Float16>.stride
+        if queryCount >= Self.minimumBatchedTokens,
+           xStrideElements == d, yStrideElements == d,
+           try encodeBatched(commandBuffer: cb, x: x, xOffset: xOffset,
+                             y: y, yOffset: yOffset,
+                             gate: gate, up: up, down: down,
+                             scratchGate: scratchGate, scratchGateOffset: scratchGateOffset,
+                             scratchUp: scratchUp, scratchUpOffset: scratchUpOffset,
+                             scratchAct: scratchAct, scratchActOffset: scratchActOffset,
+                             queryCount: queryCount, d: d, intermediate: intermediate) {
+            return
+        }
         for row in 0..<queryCount {
             try shared.encode(commandBuffer: cb,
                               x: x,
@@ -61,5 +97,66 @@ final class PrefillSharedExpert {
                               scratchAct: scratchAct,
                               scratchActOffset: scratchActOffset)
         }
+    }
+
+    /// The whole chunk as three batched projections around one activation
+    /// pass: gate and up [T, I], activation [T, I], down [T, D]. Returns false
+    /// before encoding anything when the batched kernel or the scratch cannot
+    /// serve it, so the caller falls back to the per-token loop.
+    private func encodeBatched(commandBuffer cb: MTLCommandBuffer,
+                               x: MTLBuffer, xOffset: Int,
+                               y: MTLBuffer, yOffset: Int,
+                               gate: SharedExpertInt8Proj,
+                               up: SharedExpertInt8Proj,
+                               down: SharedExpertInt8Proj,
+                               scratchGate: MTLBuffer, scratchGateOffset: Int,
+                               scratchUp: MTLBuffer, scratchUpOffset: Int,
+                               scratchAct: MTLBuffer, scratchActOffset: Int,
+                               queryCount: Int, d: Int, intermediate: Int) throws -> Bool {
+        guard let batched,
+              MPPPrefillAffineQMM.supports(k: d, n: intermediate, m: queryCount),
+              MPPPrefillAffineQMM.supports(k: intermediate, n: d, m: queryCount),
+              d.isMultiple(of: batched.groupSize),
+              intermediate.isMultiple(of: batched.groupSize) else {
+            return false
+        }
+        let bytes = queryCount * intermediate * MemoryLayout<Float16>.stride
+        guard scratchGateOffset + bytes <= scratchGate.length,
+              scratchUpOffset + bytes <= scratchUp.length,
+              scratchActOffset + bytes <= scratchAct.length else {
+            return false
+        }
+        func project(_ projection: SharedExpertInt8Proj,
+                     _ input: MTLBuffer, _ inputOffset: Int,
+                     _ output: MTLBuffer, _ outputOffset: Int) -> Bool {
+            batched.encode(commandBuffer: cb,
+                           weights: projection.weights, weightsOffset: projection.weightsOffset,
+                           scales: projection.scales, scalesOffset: projection.scalesOffset,
+                           biases: projection.biases, biasesOffset: projection.biasesOffset,
+                           x: input, xOffset: inputOffset,
+                           y: output, yOffset: outputOffset,
+                           m: queryCount, n: Int(projection.rows), k: Int(projection.cols))
+        }
+        guard project(gate, x, xOffset, scratchGate, scratchGateOffset),
+              project(up, x, xOffset, scratchUp, scratchUpOffset) else {
+            throw SharedExpertInt8Error.dimensionMismatch(
+                "batched shared-expert projection refused after its shape was accepted")
+        }
+        guard let encoder = cb.makeComputeCommandEncoder() else { return true }
+        encoder.setComputePipelineState(activationPSO)
+        encoder.setBuffer(scratchGate, offset: scratchGateOffset, index: 0)
+        encoder.setBuffer(scratchUp, offset: scratchUpOffset, index: 1)
+        encoder.setBuffer(scratchAct, offset: scratchActOffset, index: 2)
+        var count = UInt32(queryCount * intermediate)
+        encoder.setBytes(&count, length: MemoryLayout<UInt32>.size, index: 3)
+        let width = min(activationPSO.maxTotalThreadsPerThreadgroup, 256)
+        encoder.dispatchThreads(MTLSize(width: Int(count), height: 1, depth: 1),
+                                threadsPerThreadgroup: MTLSize(width: width, height: 1, depth: 1))
+        encoder.endEncoding()
+        guard project(down, scratchAct, scratchActOffset, y, yOffset) else {
+            throw SharedExpertInt8Error.dimensionMismatch(
+                "batched shared-expert down projection refused after its shape was accepted")
+        }
+        return true
     }
 }

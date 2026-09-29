@@ -807,6 +807,45 @@ kernel void prefill_grouped_routed_moe_batched_down(
     route_partials[(pair.token * p.top_k + pair.rank) * p.D + d] = value;
 }
 
+// Batched routed experts. A tile's route pairs are sorted by expert, so the
+// rows each expert reads are contiguous once gathered: the MPP projections run
+// one [rows, K] x [N, K]^T matmul per expert instead of re-reading every
+// expert weight row once per pair, and the scatter writes each pair's output
+// to the same route_partials slot the per-pair kernels fill.
+kernel void prefill_moe_gather_pair_rows(
+    device const half*                      hidden       [[buffer(0)]],
+    device const PrefillTokenExpertPairMSL* sorted_pairs [[buffer(1)]],
+    device half*                            rows         [[buffer(2)]],
+    constant uint&                          pair_start   [[buffer(3)]],
+    constant uint&                          pair_count   [[buffer(4)]],
+    constant uint&                          D            [[buffer(5)]],
+    constant uint&                          hidden_stride [[buffer(6)]],
+    uint2                                   gid          [[thread_position_in_grid]]
+) {
+    const uint d = gid.x;
+    const uint row = gid.y;
+    if (d >= D || row >= pair_count) return;
+    const uint token = sorted_pairs[pair_start + row].token;
+    rows[row * D + d] = hidden[token * hidden_stride + d];
+}
+
+kernel void prefill_moe_scatter_pair_rows(
+    device const half*                      down         [[buffer(0)]],
+    device const PrefillTokenExpertPairMSL* sorted_pairs [[buffer(1)]],
+    device half*                            route_partials [[buffer(2)]],
+    constant uint&                          pair_start   [[buffer(3)]],
+    constant uint&                          pair_count   [[buffer(4)]],
+    constant uint&                          D            [[buffer(5)]],
+    constant uint&                          top_k        [[buffer(6)]],
+    uint2                                   gid          [[thread_position_in_grid]]
+) {
+    const uint d = gid.x;
+    const uint row = gid.y;
+    if (d >= D || row >= pair_count) return;
+    const PrefillTokenExpertPairMSL pair = sorted_pairs[pair_start + row];
+    route_partials[(pair.token * top_k + pair.rank) * D + d] = down[row * D + d];
+}
+
 kernel void prefill_dequant_int4_qmm_f16_block(
     device const uint8_t* W      [[buffer(0)]],
     device const bfloat*  scales [[buffer(1)]],

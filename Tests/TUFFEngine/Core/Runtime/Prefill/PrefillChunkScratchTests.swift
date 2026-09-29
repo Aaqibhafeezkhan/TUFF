@@ -21,12 +21,16 @@ import Metal
         #expect(layout.routePartialElements == 32 * 8 * 2816)
         #expect(layout.routeIDElements == 32 * 8)
         #expect(layout.routeWeightElements == 32 * 8)
-        #expect(layout.sharedExpertScratchElements == 2112)
+        // Gate, up and activation hold every token's intermediate so the
+        // dense MLP runs as batched projections.
+        #expect(layout.sharedExpertScratchElements == 32 * 2112)
         #expect(layout.routedPairMicrobatchRows == 32)
         #expect(layout.routedGateUpActElements == 3 * 32 * 704)
         #expect(layout.routedDownOutputElements == 32 * 2816)
 
-        let worksheetT32UpperBound = Int(4.5 * 1_048_576.0)
+        // 4.5 MiB before the batched MLP, plus its three 31-token-larger
+        // intermediate buffers (0.37 MiB).
+        let worksheetT32UpperBound = Int(4.9 * 1_048_576.0)
         #expect(layout.totalPersistentBytes <= worksheetT32UpperBound)
     }
 

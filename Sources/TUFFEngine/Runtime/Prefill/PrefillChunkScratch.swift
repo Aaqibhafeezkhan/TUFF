@@ -107,7 +107,12 @@ struct PrefillChunkScratchLayout: Sendable, Equatable {
     var routePartialElements: Int { chunkTokens * topK * hiddenSize }
     var routeIDElements: Int { chunkTokens * topK }
     var routeWeightElements: Int { routeIDElements }
-    var sharedExpertScratchElements: Int { sharedIntermediate }
+    /// Gate, up and activation rows for the whole chunk: the batched MLP
+    /// path writes every token's intermediate at once.
+    var sharedExpertScratchElements: Int {
+        PrefillSharedExpert.scratchElements(tokens: chunkTokens,
+                                            intermediate: sharedIntermediate)
+    }
     var routedGateUpActElements: Int { 3 * routedPairMicrobatchRows * routedIntermediate }
     var routedDownOutputElements: Int { routedPairMicrobatchRows * hiddenSize }
 
