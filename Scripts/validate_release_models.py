@@ -4,7 +4,8 @@
 Keep output under benchmark-results/: photo paths and model responses are private.
 Resume is allowed only with the same runner, harness, photo, and run settings.
 Without --image only the Paris runs are made; a later --resume that adds
---image runs the photo checks against the same runner.
+--image runs the photo checks against the same runner, or --text-only marks
+the sweep finished with the Paris runs alone.
 """
 import argparse
 import hashlib
@@ -43,11 +44,15 @@ def main():
     parser.add_argument('--app', required=True, type=Path)
     parser.add_argument('--model-root', required=True, type=Path)
     parser.add_argument('--image', type=Path)
+    parser.add_argument('--text-only', action='store_true',
+                        help='finish the sweep with the Paris runs alone')
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--repeat', type=int, default=1)
     parser.add_argument('--timeout', type=int, default=1200)
     parser.add_argument('--resume', action='store_true')
     args = parser.parse_args()
+    if args.text_only and args.image:
+        parser.error('--text-only and --image are exclusive')
     if args.repeat < 1 or args.timeout < 1:
         parser.error('repeat and timeout must be positive')
     cli = args.app.resolve() / 'Contents/Resources/bin/TUFFCLI'
@@ -160,8 +165,9 @@ def main():
                 report['results'].append(row)
                 atomic_json(result_path, report)
                 print(f"{kind} {model}: {row['status']}, prefill={row.get('prefill_seconds', '?')}s, TPS={row.get('tps', '?')}", flush=True)
-    if image is not None:
+    if image is not None or args.text_only:
         report['finished'] = time.time()
+        report['photo_checks'] = 'run' if image is not None else 'skipped'
     else:
         print('Paris runs finished; resume with --image to add the photo checks.', flush=True)
     atomic_json(result_path, report)
