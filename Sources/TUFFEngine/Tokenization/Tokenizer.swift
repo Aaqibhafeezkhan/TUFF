@@ -744,13 +744,22 @@ public struct GFTokenizer: @unchecked Sendable {
             s += Self.turnOpen + role + "\n" + content + Self.turnClose + "\n"
         }
         s += Self.turnOpen + "model\n"
-        // The E4B checkpoint omits the empty thought channel when thinking is
-        // off. The 26B template includes it, and that exact suffix is the v1
-        // behavior, so an absent variant intentionally keeps the legacy path.
-        if reasoning == .off, modelVariant != .gemma4_E4B {
-            s += "<|channel>thought\n<channel|>"
-        }
+            + Self.gemmaGenerationSuffix(modelVariant: modelVariant, reasoning: reasoning)
         return s
+    }
+
+    /// What follows the open model turn. The 26B and 12B templates close an
+    /// empty thought channel there when thinking is off; the E2B and E4B
+    /// templates add nothing, and those models answer in plain text after an
+    /// unexpected empty channel, narrating their reasoning as the answer. An
+    /// absent variant keeps the 26B suffix, the v1 behavior.
+    static func gemmaGenerationSuffix(modelVariant: ModelVariant?,
+                                      reasoning: ChatReasoning) -> String {
+        guard reasoning == .off else { return "" }
+        switch modelVariant {
+        case .gemma4_E2B, .gemma4_E4B: return ""
+        default: return "<|channel>thought\n<channel|>"
+        }
     }
 
     private func chatMLChatTemplate(
@@ -902,9 +911,8 @@ public struct GFTokenizer: @unchecked Sendable {
         let content = userContent.trimmingCharacters(in: .whitespacesAndNewlines)
         switch dialect {
         case .gemma:
-            let suffix = reasoning == .off && modelVariant != .gemma4_E4B
-                ? "<|channel>thought\n<channel|>"
-                : ""
+            let suffix = Self.gemmaGenerationSuffix(modelVariant: modelVariant,
+                                                    reasoning: reasoning)
             return [endOfTurnID] + encode(
                 "\n\(Self.turnOpen)user\n\(content)\(Self.turnClose)\n"
                     + "\(Self.turnOpen)model\n" + suffix,
@@ -985,9 +993,8 @@ public struct GFTokenizer: @unchecked Sendable {
                     reasoning: reasoning),
                 addBOS: false)
         } else if dialect == .gemma {
-            let suffix = reasoning == .off && modelVariant != .gemma4_E4B
-                ? "<|channel>thought\n<channel|>"
-                : ""
+            let suffix = Self.gemmaGenerationSuffix(modelVariant: modelVariant,
+                                                    reasoning: reasoning)
             template = [endOfTurnID] + encode(
                 "\n\(Self.turnOpen)user\n\(content)\(Self.turnClose)\n"
                     + "\(Self.turnOpen)model\n" + suffix,

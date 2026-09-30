@@ -36,6 +36,30 @@ struct ChatTemplateTests {
         #expect(!p.contains("<|channel>thought"))
     }
 
+    @Test("E2B thinking off matches its pinned template, like E4B",
+          arguments: [ModelVariant.gemma4_E2B, .gemma4_E4B])
+    func smallGemmaThinkingOff(_ variant: ModelVariant) throws {
+        let p = try tok.applyChatTemplate(
+            [Message(role: .user, content: "Hi")],
+            modelVariant: variant,
+            reasoning: .off)
+        #expect(p == "<bos><|turn>user\nHi<turn|>\n<|turn>model\n")
+        let continuation = tok.encodeTextContinuation(
+            userContent: "Hi", modelVariant: variant, reasoning: .off)
+        #expect(continuation == [tok.endOfTurnID] + tok.encode(
+            "\n<|turn>user\nHi<turn|>\n<|turn>model\n", addBOS: false))
+    }
+
+    @Test("26B and 12B thinking off close an empty thought channel",
+          arguments: [ModelVariant.gemma4_26B_A4B, .gemma4_12B_QAT])
+    func largeGemmaThinkingOff(_ variant: ModelVariant) throws {
+        let p = try tok.applyChatTemplate(
+            [Message(role: .user, content: "Hi")],
+            modelVariant: variant,
+            reasoning: .off)
+        #expect(p.hasSuffix("<|turn>model\n<|channel>thought\n<channel|>"))
+    }
+
     @Test("Gemma native thinking control leads the first system turn")
     func thinkingOn() throws {
         let p = try tok.applyChatTemplate([
