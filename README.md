@@ -16,7 +16,7 @@
   · <a href="CONTRIBUTING.md">Contribute</a>
 </p>
 
-![TUFF running GPT-OSS 120B on a 16 GB Mac](docs/assets/tuff-v3-chat.png)
+![TUFF generating with Qwen 3.8 Flash Next, a 110 GB model, on a 16 GB Mac](docs/assets/tuff-chat.png)
 
 ## What TUFF is
 
@@ -228,26 +228,30 @@ automatically; `TUFFCLI` and `TUFFServer` take `--prefill-chunk-tokens`.
 Within a chunk, TUFF 6 runs prefill as batched tensor-core matrix multiplies
 rather than one matrix-vector product per token: the dense and shared MLPs,
 every routed expert (each expert's tokens gathered and projected together),
-GPT-OSS's MXFP4 experts and K/V projections, and Qwen 3.8 Flash Next's group-32
-projections. Blocks under 32 tokens, including speculative verification, keep
-the decode kernels. Measured on a 16 GB M2 against 5.2 during development:
+GPT-OSS's MXFP4 experts and BF16 attention projections, and Qwen 3.8 Flash
+Next's group-32 projections. Blocks under 32 tokens, including speculative
+verification, keep the decode kernels. Measured on a 16 GB M2, alternating the
+packaged 5.2.0 and 6.0.0 apps on the same day:
 
 | Model | Prompt | 5.2 prefill | 6.0 prefill |
 | --- | ---: | ---: | ---: |
-| Gemma 4 E4B | 4,156 tokens | 243-265 s | 31-34 s |
-| Gemma 4 12B QAT | 1,004 tokens | 388 s | 69 s |
-| GPT-OSS 20B | 973 tokens | 109 s | 20 s |
-| Qwen 3.6 35B-A3B | 4,087 tokens | 58 s | 31 s |
-| Gemma 4 26B-A4B | 4,160 tokens | 102 s | 62 s |
-| Qwen 3.8 Flash Next | 983 tokens | 66 s | 42 s |
+| Gemma 4 E4B | 4,156 tokens | 145 s | 19 s |
+| Gemma 4 12B QAT | 1,004 tokens | 360 s | 24 s |
+| GPT-OSS 20B | 973 tokens | 127 s | 34 s |
+| Qwen 3.6 35B-A3B | 4,087 tokens | 169 s | 155 s |
+| Gemma 4 26B-A4B | 4,160 tokens | 164 s | 127 s |
+| Qwen 3.8 Flash Next | 983 tokens | 156 s | 118 s |
 
-The release build also sizes each matmul tile to its rows. A routed expert sees
-a handful of a chunk's tokens, so a 64-row tile spent most of its work on
-padding; it now gets an 8-, 16- or 32-row tile, and every tile dequantizes 8
-weights per load. GPT-OSS applies RoPE and picks its experts once per chunk
-rather than once per token. In alternating runs on a 1,000-token prompt this cut
-prefill again: Gemma 4 E4B 7.9 to 4.8 s, Gemma 4 12B QAT 28 to 23 s, Gemma 4
-26B-A4B 75 to 29 s, Qwen 3.6 55 to 36 s, and GPT-OSS 20B 72 to 48 s.
+The dense models gain the most. The last three are larger than this Mac's
+memory, so their prompt time is mostly SSD reads of experts, which faster
+matrix multiplies cannot shorten; on this machine those reads varied by more
+than 3x from day to day.
+
+Each matmul tile is sized to its rows. A routed expert sees a handful of a
+chunk's tokens, so a 64-row tile would spend most of its work on padding; it
+gets an 8-, 16- or 32-row tile instead, and every tile dequantizes 8 weights
+per load. GPT-OSS also applies RoPE and picks its experts once per chunk rather
+than once per token.
 
 Output matches 5.2 on these prompts except on Qwen 3.6 and Gemma 4 E2B, where
 the batched kernels' different summation order changes a word or two of the
@@ -259,14 +263,15 @@ TUFF 6 also routes each layer's input through the next layer's router, reads
 the experts it predicts into that layer's cache while the GPU works, and turns
 this off if fewer than 35% of its guesses are used. A guess only decides what
 is read early, so output is unchanged. GPT-OSS's MXFP4 experts also decode
-about four times faster per byte. 64-token decode on a 16 GB M2, same output:
+about four times faster per byte. 64-token decode on a 16 GB M2, best of two
+alternating runs of the packaged apps, same output:
 
 | Model | 5.2 decode | 6.0 decode | Guesses used |
 | --- | ---: | ---: | ---: |
-| Qwen 3.6 35B-A3B | 7.4 tok/s | 10.5 tok/s | 84% |
-| Gemma 4 26B-A4B | 8.6 tok/s | 9.6 tok/s | 71% |
-| Qwen 3.8 Flash Next | 2.3 tok/s | 2.5 tok/s | 69% |
-| GPT-OSS 20B | 4.6 tok/s | 7.0 tok/s | 90% |
+| Qwen 3.6 35B-A3B | 7.3 tok/s | 11.4 tok/s | 84% |
+| Gemma 4 26B-A4B | 8.5 tok/s | 10.4 tok/s | 71% |
+| Qwen 3.8 Flash Next | 2.4 tok/s | 2.6 tok/s | 69% |
+| GPT-OSS 20B | 4.9 tok/s | 6.4 tok/s | 90% |
 
 `TUFF_PHASES=1` prints the share of guesses used and the reads made early.
 
@@ -294,31 +299,29 @@ every workload.
 
 ### Benchmarks
 
-TUFF 5.0.0, measured 2026-09-10 on a 16 GB M2 MacBook Air. One fresh process per model, answering `What is the capital of France?` with a 4,096-token context, seed 20260721, and a 128-token output cap (256 for MiniMax). Decode speed excludes model loading and prefill; prefill includes the first-use weight checks. 9/9 runs named Paris. These short responses are smoke tests, not a sustained-throughput or model-quality comparison. Host load and filesystem caching can affect the timings.
+TUFF 6.0.0, measured 2026-09-29 on a 16 GB M2 MacBook Air. One fresh process per model, answering `What is the capital of France?` with a 4,096-token context, seed 20260721, and a 128-token output cap (256 for MiniMax M2.7). Decode speed excludes model loading and prefill; prefill includes the first-use weight checks. 9/9 runs named Paris. These short responses are smoke tests, not a sustained-throughput or model-quality comparison. Host load and filesystem caching can affect the timings.
 
 | Model | Decode | Prefill | Peak RSS |
 | --- | ---: | ---: | ---: |
-| Gemma 4 E2B IT | 46.96 tok/s | 0.47 s | 324 MiB |
-| Gemma 4 E4B IT | 27.71 tok/s | 0.80 s | 324 MiB |
-| Gemma 4 12B IT QAT | 5.41 tok/s | 29.42 s | 385 MiB |
-| Gemma 4 26B-A4B IT | 8.16 tok/s | 4.61 s | 1840 MiB |
-| Qwen3.6 35B-A3B | 6.76 tok/s | 6.39 s | 1418 MiB |
-| GPT-OSS 20B | 2.19 tok/s | 10.44 s | 2217 MiB |
-| GPT-OSS 120B | 0.16 tok/s | 31.34 s | 1870 MiB |
-| MiniMax M2.7 4-bit | 0.26 tok/s | 49.79 s | 2689 MiB |
-| Qwen3.8 Flash Next 4-bit | 0.54 tok/s | 31.87 s | 1295 MiB |
+| Gemma 4 E2B IT | 45.66 tok/s | 0.84 s | 324 MiB |
+| Gemma 4 E4B IT | 27.51 tok/s | 1.11 s | 324 MiB |
+| Gemma 4 12B IT QAT | 6.34 tok/s | 29.49 s | 384 MiB |
+| Gemma 4 26B-A4B IT | 8.38 tok/s | 4.57 s | 1799 MiB |
+| Qwen3.6 35B-A3B | 8.13 tok/s | 6.42 s | 1410 MiB |
+| GPT-OSS 20B | 2.68 tok/s | 6.82 s | 2081 MiB |
+| GPT-OSS 120B | 0.19 tok/s | 29.40 s | 2146 MiB |
+| MiniMax M2.7 4-bit | 0.17 tok/s | 51.57 s | 2317 MiB |
+| Qwen3.8 Flash Next 4-bit | 1.50 tok/s | 27.03 s | 2783 MiB |
 
-Peak RSS is the process resident set reported by macOS, not total model or Metal memory. MiniMax needed a longer completion rerun; its completed rerun is shown. Preliminary capped results are retained locally.
-
-The same packaged runner was tested with one local photo on all 6 image-compatible models. 6/6 responses passed the glasses-and-towel keyword smoke check, with responses also reviewed manually. E2B needed a 512-token rerun after the initial 128-token cap; the other photo runs used 128 tokens. This is a single-image check, not a general vision accuracy score. The photo and raw responses are kept out of the repository.
+Peak RSS is the process resident set reported by macOS, not total model or Metal memory.
 
 Reproduce the sweep with:
 
 ```sh
 python3 Scripts/validate_release_models.py \
-  --app dist/v5.0.0-release-public/TUFF.app \
+  --app dist/v6.0.0-release-public/TUFF.app \
   --model-root "$HOME/Library/Application Support/TUFF/Models" \
-  --image /path/to/photo.jpeg \
+  --text-only \
   --output benchmark-results/release-validation
 ```
 
@@ -376,14 +379,14 @@ model costs, because the weights are memory-mapped and the kernel owns those
 pages; the longer-workload rows below report footprint alongside RSS for that
 reason.
 
-Longer workloads on Gemma 4 E4B, at temperature `0.2`, Top-K `64`, Top-P `0.95`,
+Longer workloads on Gemma 4 E4B with 6.0.0, at temperature `0.2`, Top-K `64`, Top-P `0.95`,
 with a frozen prompt and seed. Both runs were coherent and stopped at end of
 turn:
 
 | Case | Context | Prompt / generated | Prefill | Decode | Peak RSS / footprint |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| short-explanation | 4,096 | 57 / 440 | 3.08 s | 9.267 tok/s | 406.2 / 872.2 MiB |
-| long-synthesis | 8,192 | 3,011 / 369 | 204.40 s | 6.820 tok/s | 582.3 / 1,748.5 MiB |
+| short-explanation | 4,096 | 57 / 435 | 0.52 s | 26.73 tok/s | 324.1 / 308.2 MiB |
+| long-synthesis | 8,192 | 3,011 / 353 | 13.22 s | 25.25 tok/s | 324.1 / 359.9 MiB |
 
 GPT-OSS 120B is the headline case: a verified 61 GiB install, run at 4,096-token
 context with Low reasoning and 16 expert-cache slots, returning the requested

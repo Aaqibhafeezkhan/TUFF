@@ -108,7 +108,7 @@
   </header>
 
   <div class="shot">
-    <img src="assets/tuff-chat.png" alt="TUFF running GPT-OSS 120B on a 16 GB Mac">
+    <img src="assets/tuff-chat.png" alt="TUFF generating with Qwen 3.8 Flash Next, a 110 GB model, on a 16 GB Mac">
   </div>
 
   <section>
@@ -139,11 +139,10 @@
 
 <!-- release-benchmarks:start -->
 <section class="benchmarks">
-<h2>Version 5.0.0</h2>
-<p>Qwen3.8 Flash Next with image support, faster first-use weight verification, conversation reuse for text follow-ups, RAM-aware automatic settings, and context options up to each model’s supported limit.</p>
-<h3>Local model check</h3><p>TUFF 5.0.0, measured 2026-09-10 on a 16 GB M2 MacBook Air. One fresh process per model, answering What is the capital of France? with a 4,096-token context, seed 20260721, and a 128-token output cap (256 for MiniMax). Decode speed excludes model loading and prefill; prefill includes the first-use weight checks. 9/9 runs named Paris. These short responses are smoke tests, not a sustained-throughput or model-quality comparison. Host load and filesystem caching can affect the timings.</p>
-<div style="overflow-x:auto"><table style="width:100%;text-align:left;border-spacing:0 10px"><thead><tr><th>Model</th><th>Decode</th><th>Prefill</th></tr></thead><tbody><tr><td>Gemma 4 E2B IT</td><td>46.96 tok/s</td><td>0.47 s</td></tr><tr><td>Gemma 4 E4B IT</td><td>27.71 tok/s</td><td>0.80 s</td></tr><tr><td>Gemma 4 12B IT QAT</td><td>5.41 tok/s</td><td>29.42 s</td></tr><tr><td>Gemma 4 26B-A4B IT</td><td>8.16 tok/s</td><td>4.61 s</td></tr><tr><td>Qwen3.6 35B-A3B</td><td>6.76 tok/s</td><td>6.39 s</td></tr><tr><td>GPT-OSS 20B</td><td>2.19 tok/s</td><td>10.44 s</td></tr><tr><td>GPT-OSS 120B</td><td>0.16 tok/s</td><td>31.34 s</td></tr><tr><td>MiniMax M2.7 4-bit</td><td>0.26 tok/s</td><td>49.79 s</td></tr><tr><td>Qwen3.8 Flash Next 4-bit</td><td>0.54 tok/s</td><td>31.87 s</td></tr></tbody></table></div>
-<p>The same packaged runner was tested with one local photo on all 6 image-compatible models. 6/6 responses passed the glasses-and-towel keyword smoke check, with responses also reviewed manually. E2B needed a 512-token rerun after the initial 128-token cap; the other photo runs used 128 tokens. This is a single-image check, not a general vision accuracy score. The photo and raw responses are kept out of the repository.</p>
+<h2>Version 6.0.0</h2>
+<p>Batched tensor-core prefill with matmul tiles sized to each expert&#x27;s rows, next-layer expert prefetch in decode, and faster GPT-OSS MXFP4 decode.</p>
+<h3>Local model check</h3><p>TUFF 6.0.0, measured 2026-09-29 on a 16 GB M2 MacBook Air. One fresh process per model, answering What is the capital of France? with a 4,096-token context, seed 20260721, and a 128-token output cap (256 for MiniMax M2.7). Decode speed excludes model loading and prefill; prefill includes the first-use weight checks. 9/9 runs named Paris. These short responses are smoke tests, not a sustained-throughput or model-quality comparison. Host load and filesystem caching can affect the timings.</p>
+<div style="overflow-x:auto"><table style="width:100%;text-align:left;border-spacing:0 10px"><thead><tr><th>Model</th><th>Decode</th><th>Prefill</th></tr></thead><tbody><tr><td>Gemma 4 E2B IT</td><td>45.66 tok/s</td><td>0.84 s</td></tr><tr><td>Gemma 4 E4B IT</td><td>27.51 tok/s</td><td>1.11 s</td></tr><tr><td>Gemma 4 12B IT QAT</td><td>6.34 tok/s</td><td>29.49 s</td></tr><tr><td>Gemma 4 26B-A4B IT</td><td>8.38 tok/s</td><td>4.57 s</td></tr><tr><td>Qwen3.6 35B-A3B</td><td>8.13 tok/s</td><td>6.42 s</td></tr><tr><td>GPT-OSS 20B</td><td>2.68 tok/s</td><td>6.82 s</td></tr><tr><td>GPT-OSS 120B</td><td>0.19 tok/s</td><td>29.40 s</td></tr><tr><td>MiniMax M2.7 4-bit</td><td>0.17 tok/s</td><td>51.57 s</td></tr><tr><td>Qwen3.8 Flash Next 4-bit</td><td>1.50 tok/s</td><td>27.03 s</td></tr></tbody></table></div>
 <p><a href="https://github.com/rexmhall09/TUFF/blob/main/docs/MODEL_VALIDATION.md">Validation details and reproduction script</a></p>
 </section>
 <!-- release-benchmarks:end -->

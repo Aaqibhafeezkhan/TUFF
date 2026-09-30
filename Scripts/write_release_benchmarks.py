@@ -64,8 +64,8 @@ vision_text = '' if not vision else (f'The same packaged runner was tested with 
                'The photo and raw responses are kept out of the repository.')
 usage = ('```sh\npython3 Scripts/validate_release_models.py \\\n  --app dist/v'+a.version+'-release-public/TUFF.app \\\n  --model-root "$HOME/Library/Application Support/TUFF/Models" \\\n  '+('--image /path/to/photo.jpeg' if vision else '--text-only')+' \\\n  --output benchmark-results/release-validation\n```')
 section = ('### Benchmarks\n\n'+intro+'\n\n'+table+'\n\n'
-           'Peak RSS is the process resident set reported by macOS, not total model or Metal memory. '
-           + rerun_text + '\n\n'
+           'Peak RSS is the process resident set reported by macOS, not total model or Metal memory.'
+           + (' ' + rerun_text.rstrip() if rerun_text else '') + '\n\n'
            +(vision_text+'\n\n' if vision_text else '')+'Reproduce the sweep with:\n\n'+usage+'\n\n'
            'The harness saves each command, response, timing, model manifest hash, and runner identity; '
            '`--resume` refuses changed inputs. See [the release validation report](docs/MODEL_VALIDATION.md) '
