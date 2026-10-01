@@ -18,6 +18,22 @@ public struct RoutedExpertFetchPlan: Sendable {
 }
 
 extension Model {
+    public var expertCacheAllocatedBytes: UInt64 {
+        streamersQueue.sync {
+            streamersBox.streamers.compactMap { $0 }.reduce(0) {
+                $0 + $1.diagnosticSlotScratchBytes
+            }
+        }
+    }
+
+    public var expertReadMetrics: ExpertReadMetrics {
+        streamersQueue.sync {
+            var total = streamersBox.retiredReadMetrics
+            for streamer in streamersBox.streamers.compactMap({ $0 }) { total.add(streamer.readMetrics) }
+            return total
+        }
+    }
+
     func gptOssRoutedExpertOffsets(layer: Int) throws -> GPTOSSExpertOffsets {
         let experts = packedExpertsLayout.layers[layer].experts
         guard let first = experts.first else {
@@ -156,7 +172,7 @@ extension Model {
         guard !plan.misses.isEmpty else { return }
         try ensureLayerOpened(plan.layer)
         let streamer = streamersQueue.sync { streamersBox.streamers[plan.layer]! }
-        _ = try streamer.executeExpertCachePlan(plan.cachePlan)
+        _ = try streamer.executeExpertCachePlan(plan.cachePlan, purpose: .prefetch)
     }
 
     public func fetchRoutedExperts(layer: Int, experts: [Int]) async throws -> [TensorView] {

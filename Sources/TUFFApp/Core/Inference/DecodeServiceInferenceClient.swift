@@ -512,7 +512,9 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
             rdadviseCallsPerToken: value.rdadviseCallsPerToken,
             rdadviseMegabytesPerToken: value.rdadviseMegabytesPerToken,
             rdadviseSkippedPerToken: value.rdadviseSkippedPerToken,
-            rdadviseFailures: value.rdadviseFailures)
+            rdadviseFailures: value.rdadviseFailures,
+            expertReads: value.expertReads,
+            exposedPrefetchWaitMillisecondsPerToken: value.exposedPrefetchWaitMillisecondsPerToken)
     }
 
     private static func decodeRuntimeOptions(_ options: AppRuntimeOptions)

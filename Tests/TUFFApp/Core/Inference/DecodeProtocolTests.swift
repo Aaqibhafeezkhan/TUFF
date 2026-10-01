@@ -75,7 +75,24 @@ import TUFFDecodeProtocol
         #expect(decoded.prompt == "hi")
     }
 
+    @Test func olderRunnerDiagnosticsRemainReadable() throws {
+        let json = Data("""
+        {"cb1MillisecondsPerToken":0,"ioMillisecondsPerToken":0,
+         "cb2MillisecondsPerToken":0,"headMillisecondsPerToken":0,
+         "rdadviseMillisecondsPerToken":0,"rdadviseCallsPerToken":0,
+         "rdadviseMegabytesPerToken":0,"rdadviseSkippedPerToken":0,"rdadviseFailures":0}
+        """.utf8)
+        let runner = try JSONDecoder().decode(DecodeRunnerDiagnostics.self, from: json)
+        #expect(runner.expertReads == nil)
+        #expect(runner.exposedPrefetchWaitMillisecondsPerToken == nil)
+    }
+
     @Test func terminalEventRoundTripPreservesDiagnosticsAndMemory() throws {
+        var reads = ExpertReadMetrics()
+        reads.demandReads = 2
+        reads.demandBytes = 4096
+        reads.prefetchReads = 3
+        reads.prefetchBytes = 6144
         let runner = DecodeRunnerDiagnostics(
             cb1MillisecondsPerToken: 0.6,
             ioMillisecondsPerToken: 12,
@@ -85,7 +102,8 @@ import TUFFDecodeProtocol
             rdadviseCallsPerToken: 0,
             rdadviseMegabytesPerToken: 0,
             rdadviseSkippedPerToken: 0,
-            rdadviseFailures: 0)
+            rdadviseFailures: 0,
+            expertReads: reads, exposedPrefetchWaitMillisecondsPerToken: 1.2)
         let event = DecodeServiceEvent(
             kind: .finished,
             generationID: UUID(),

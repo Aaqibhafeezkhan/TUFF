@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# One short question, one fresh process per model, one decode rate each.
+# One short question, a fresh process per repetition, median and spread.
 # This is the quick launch-lineup check. Scripts/benchmark_v2.rb remains the
 # long three-run matrix for workload-by-workload reporting.
 
@@ -87,51 +87,58 @@ def run_once(model, command, output_dir, attempt)
   [footer, rss, stdout.strip, (Time.now - started).round(2)]
 end
 
-# Decode rate is reported as the best of `repeat` runs rather than the mean.
-# This Mac shares its GPU with the window server, so a run that overlapped
-# other drawing measures the interference, not the runtime. The best run is the
-# one least disturbed; averaging would fold the disturbance into the figure.
+def machine_state
+  JSON.parse(safe_capture("python3", "-c",
+    "import sys,json;sys.path.insert(0,'Scripts');from benchmark_reporting import machine_state;print(json.dumps(machine_state()))"))
+end
+
+def median(values)
+  sorted = values.sort
+  mid = sorted.length / 2
+  sorted.length.odd? ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2.0
+end
+
 def measure(model, config, output_dir, max_new, root, repeat)
   command = command_for(config, max_new, root)
-
-  print "#{model}: "
-  $stdout.flush
-  best = nil
-  rates = []
-  repeat.times do |attempt|
+  runs = repeat.times.map do |attempt|
+    before = machine_state
     footer, rss, answer, wall = run_once(model, command, output_dir, attempt)
-    rates << footer[6].to_f
-    next unless best.nil? || footer[6].to_f > best[0][6].to_f
-
-    best = [footer, rss, answer, wall]
+    suffix = attempt.zero? ? "run" : "run-#{attempt + 1}"
+    stderr = File.read(File.join(output_dir, model, "#{suffix}.stderr.txt"))
+    settings = stderr[/^\[resolved inference settings\] (.*)$/, 1]
+    {
+      "attempt" => attempt + 1, "stop_reason" => footer[1],
+      "prompt_tokens" => footer[2].to_i, "prefill_seconds" => footer[3].to_f,
+      "generated_tokens" => footer[4].to_i, "decode_seconds" => footer[5].to_f,
+      "decode_tokens_per_second" => footer[6].to_f,
+      "peak_rss_bytes" => rss[1].to_i, "wall_seconds" => wall,
+      "answers_paris" => answer.match?(/\bParis\b/i), "answer" => answer,
+      "resolved_settings" => settings && JSON.parse(settings),
+      "machine_state_before" => before, "machine_state_after" => machine_state
+    }
   end
-  footer, rss, answer, wall = best
-  row = {
-    "model" => model,
-    "label" => BENCHMARK_MODEL_LABELS.fetch(model, model),
-    "stop_reason" => footer[1],
-    "prompt_tokens" => footer[2].to_i,
-    "prefill_seconds" => footer[3].to_f,
-    "generated_tokens" => footer[4].to_i,
-    "decode_seconds" => footer[5].to_f,
-    "decode_tokens_per_second" => footer[6].to_f,
+  rates = runs.map { |run| run.fetch("decode_tokens_per_second") }
+  row = runs.first.merge(
+    "model" => model, "label" => BENCHMARK_MODEL_LABELS.fetch(model, model),
+    "decode_tokens_per_second" => median(rates),
     "decode_tokens_per_second_all_runs" => rates,
-    "runs" => repeat,
-    "peak_rss_bytes" => rss[1].to_i,
-    "wall_seconds" => wall,
-    "answers_paris" => answer.downcase.include?("paris"),
-    "answer" => answer,
-    "command" => Shellwords.join(command)
-  }
-  puts format(
-    "%.3f tok/s (best of %d: %s), prefill %.2f s, peak RSS %.0f MiB, %s",
-    row.fetch("decode_tokens_per_second"),
-    repeat,
-    rates.map { |rate| format("%.2f", rate) }.join(", "),
-    row.fetch("prefill_seconds"),
-    row.fetch("peak_rss_bytes") / 1_048_576.0,
-    row.fetch("answers_paris") ? "answered Paris" : "DID NOT SAY PARIS"
-  )
+    "decode_tokens_per_second_min" => rates.min,
+    "decode_tokens_per_second_max" => rates.max,
+    "decode_tokens_per_second_spread" => rates.max - rates.min,
+    "runs" => repeat, "all_runs" => runs,
+    "prefill_seconds" => median(runs.map { |run| run.fetch("prefill_seconds") }),
+    "peak_rss_bytes" => runs.map { |run| run.fetch("peak_rss_bytes") }.max,
+    "answers_paris" => runs.all? { |run| run.fetch("answers_paris") },
+    "command" => Shellwords.join(command))
+  row["statistics"] = %w[decode_tokens_per_second prefill_seconds decode_seconds wall_seconds peak_rss_bytes].to_h do |field|
+    values = runs.map { |run| run.fetch(field) }
+    [field, { "values" => values, "median" => median(values),
+              "minimum" => values.min, "maximum" => values.max,
+              "spread" => values.max - values.min }]
+  end
+  row["wall_seconds"] = row.fetch("statistics").fetch("wall_seconds").fetch("median")
+  row["decode_seconds"] = row.fetch("statistics").fetch("decode_seconds").fetch("median")
+  puts "#{model}: median #{median(rates)} tok/s, range #{rates.min}..#{rates.max}, #{repeat} runs"
   row
 end
 
@@ -143,32 +150,36 @@ def write_markdown(path, report)
     "",
     "One fresh process per model answering \"What is the capital of France?\"",
     "from `docs/benchmark-prompts/capital-of-france.json`, seed #{SEED}, 4,096-token",
-    "context. Decode rate excludes install, load, and prefill. These are single",
-    "runs on one Mac. Each rate is the best of #{report.fetch("runs_per_model")} "\
-    "run(s): this Mac shares its GPU with the window server, so a slower run "\
-    "measured that interference rather than the runtime.",
+    "context. Decode rate excludes install, load, and prefill. Median of",
+    "#{report.fetch("runs_per_model")} runs; every repetition and min/max spread are saved.",
+    "These are short keyword smoke checks, not quality or sustained performance validation.",
+    "Machine-state probes are observations; slower runs have no inferred cause.",
     "",
-    "| Model | Decode rate | Prefill | Generated | Peak RSS | Answer |",
-    "| --- | ---: | ---: | ---: | ---: | --- |"
+    "| Model | Median decode | Min..max | Prefill | Generated | Peak RSS | Answer |",
+    "| --- | ---: | --- | ---: | ---: | ---: | --- |"
   ]
   report.fetch("results").each do |row|
     lines << format(
-      "| %s | %.2f tok/s | %.2f s | %d tok | %.0f MiB | %s |",
+      "| %s | %.2f tok/s | %.2f..%.2f | %.2f s | %d tok | %.0f MiB | %s |",
       row.fetch("label"),
       row.fetch("decode_tokens_per_second"),
+      row.fetch("decode_tokens_per_second_min"),
+      row.fetch("decode_tokens_per_second_max"),
       row.fetch("prefill_seconds"),
       row.fetch("generated_tokens"),
       row.fetch("peak_rss_bytes") / 1_048_576.0,
-      row.fetch("answers_paris") ? "correct" : "did not name Paris"
+      row.fetch("answers_paris") ? "named Paris" : "did not name Paris"
     )
   end
   File.write(path, lines.join("\n") + "\n")
 end
 
+if $PROGRAM_NAME == __FILE__
+
 options = {
   models: BENCHMARK_MODELS.keys,
   model_root: nil,
-  repeat: 1,
+  repeat: 3,
   max_new: 128,
   output: File.join(ROOT, "benchmark-results", "simple-#{Time.now.strftime("%Y%m%d-%H%M%S")}")
 }
@@ -187,7 +198,7 @@ OptionParser.new do |parser|
   parser.on("--model-root DIR", "Directory holding the .gturbo installs") do |dir|
     options[:model_root] = File.expand_path(dir)
   end
-  parser.on("--repeat N", Integer, "Runs per model; the best is reported (default 1)") do |n|
+  parser.on("--repeat N", Integer, "Runs per model; median and spread are reported (default 3)") do |n|
     raise OptionParser::InvalidArgument, n.to_s unless n.positive?
 
     options[:repeat] = n
@@ -219,3 +230,5 @@ options[:models].each do |model|
 end
 
 puts "\nwrote #{File.join(options[:output], "summary.md")}"
+
+end

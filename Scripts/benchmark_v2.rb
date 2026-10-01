@@ -36,6 +36,12 @@ def safe_capture(*command)
   [stdout.strip, stderr.strip, status.success?]
 end
 
+def machine_state
+  stdout, _stderr, success = safe_capture("python3", "-c",
+    "import sys,json;sys.path.insert(0,'Scripts');from benchmark_reporting import machine_state;print(json.dumps(machine_state()))")
+  success ? JSON.parse(stdout) : { "available" => false }
+end
+
 def system_report
   commit, = safe_capture("git", "rev-parse", "HEAD")
   status, = safe_capture("git", "status", "--short")
@@ -58,7 +64,8 @@ def system_report
     "swift" => swift,
     "physical_memory_bytes" => memory.to_i,
     "hardware" => filtered_hardware,
-    "captured_at" => Time.now.iso8601
+    "captured_at" => Time.now.iso8601,
+    "machine_state" => machine_state
   }
 end
 
@@ -82,10 +89,12 @@ def parse_measurement(stderr)
   footer = stderr.match(FOOTER)
   raise "TUFFCLI did not print a timing footer" unless footer
 
+  settings = stderr[/^\[resolved inference settings\] (.*)$/, 1]
   rss = stderr.match(MAX_RSS)
   raise "/usr/bin/time did not print peak RSS" unless rss
 
   {
+    "resolved_settings" => settings && JSON.parse(settings),
     "stop_reason" => footer[1],
     "prompt_tokens" => footer[2].to_i,
     "prefill_seconds" => footer[3].to_f,
@@ -103,17 +112,22 @@ def run_once(output_dir, model, case_id, label, command)
   File.write("#{prefix}.command.txt", Shellwords.join(command) + "\n")
 
   puts "#{model} / #{case_id} / #{label}"
+  before = machine_state
   stdout, stderr, status = Open3.capture3(*command, chdir: ROOT)
   File.binwrite("#{prefix}.stdout.txt", stdout)
   File.binwrite("#{prefix}.stderr.txt", stderr)
   raise "#{model} #{case_id} #{label} exited #{status.exitstatus}" unless status.success?
 
+  after = machine_state
+  File.write("#{prefix}.machine.json", JSON.pretty_generate({ "before" => before, "after" => after }) + "\n")
   measurement = parse_measurement(stderr)
   unless %w[endOfTurn eos].include?(measurement.fetch("stop_reason"))
     raise "#{model} #{case_id} #{label} stopped with #{measurement.fetch("stop_reason")}"
   end
 
   measurement.merge(
+    "machine_state_before" => before,
+    "machine_state_after" => after,
     "label" => label,
     "command" => Shellwords.join(command),
     "stdout_file" => File.basename("#{prefix}.stdout.txt"),
@@ -132,8 +146,12 @@ def existing_run(output_dir, model, case_id, label, command)
   measurement = parse_measurement(File.read(stderr_path))
   return nil unless %w[endOfTurn eos].include?(measurement.fetch("stop_reason"))
 
+  machine_path = "#{prefix}.machine.json"
+  state = File.file?(machine_path) ? JSON.parse(File.read(machine_path)) : {}
   puts "#{model} / #{case_id} / #{label} (resumed)"
   measurement.merge(
+    "machine_state_before" => state["before"],
+    "machine_state_after" => state["after"],
     "label" => label,
     "command" => Shellwords.join(command),
     "stdout_file" => File.basename(stdout_path),
@@ -153,7 +171,13 @@ def summarize(measurements)
     "median_decode_tokens_per_second" => median(
       measurements.map { |row| row.fetch("decode_tokens_per_second") }
     ),
-    "median_peak_rss_bytes" => median(measurements.map { |row| row.fetch("peak_rss_bytes") })
+    "median_peak_rss_bytes" => median(measurements.map { |row| row.fetch("peak_rss_bytes") }),
+    "statistics" => %w[prefill_seconds decode_seconds decode_tokens_per_second peak_rss_bytes].to_h do |field|
+      values = measurements.map { |row| row.fetch(field) }
+      [field, { "values" => values, "median" => median(values),
+                "minimum" => values.min, "maximum" => values.max,
+                "spread" => values.max - values.min }]
+    end
   }
 end
 
@@ -163,8 +187,8 @@ def write_markdown(path, report)
     "",
     "Commit: `#{report.dig("system", "commit")}`",
     "",
-    "One discarded warmup preceded three fresh-process measurements per case.",
-    "Medians are calculated across the three measured runs.",
+    "#{report.dig("protocol", "warmups_per_case")} discarded warmup(s) preceded #{report.dig("protocol", "measured_runs_per_case")} measurements per case. All attempts, median and spread are saved; causes of slower runs are not inferred.",
+    "Medians use every measured repetition; the JSON includes minimum, maximum and spread.",
     "",
     "| Model | Case | Prompt tokens | Generated tokens | Stop reasons | Prefill median | Decode median | Peak RSS median |",
     "| --- | --- | ---: | --- | --- | ---: | ---: | ---: |"
@@ -187,6 +211,8 @@ def write_markdown(path, report)
   end
   File.write(path, lines.join("\n") + "\n")
 end
+
+if $PROGRAM_NAME == __FILE__
 
 options = {
   models: MODELS.keys,
@@ -295,3 +321,5 @@ options[:models].each do |model|
 end
 
 puts "Results: #{options[:output]}"
+
+end

@@ -288,6 +288,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
     /// Decode lookahead counters for TUFF_PHASES.
     public var lookaheadPrecision: Double { lookahead.precision }
     public var lookaheadReadsIssued: Int { lookahead.readsIssued }
+    var exposedPrefetchWaitNanos: UInt64 { lookahead.exposedWaitNanos }
+    var expertReadMetrics: ExpertReadMetrics { model.expertReadMetrics }
     public var lookaheadEnabled: Bool { lookahead.enabled }
     // Persistent MoE scratch, allocated once; about 56 KiB at production shape.
     private let moeActs: MTLBuffer       // [topK * FmoE] FP16

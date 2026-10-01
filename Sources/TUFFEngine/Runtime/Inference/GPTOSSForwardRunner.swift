@@ -64,6 +64,8 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
         options: .storageModeShared)!
     var lookaheadPrecision: Double { lookahead.precision }
     var lookaheadReadsIssued: Int { lookahead.readsIssued }
+    var exposedPrefetchWaitNanos: UInt64 { lookahead.exposedWaitNanos }
+    var expertReadMetrics: ExpertReadMetrics { model.expertReadMetrics }
     var lookaheadEnabled: Bool { lookahead.enabled }
     /// Prefill K and V rows before they are copied into KV slots.
     private let kStage: MTLBuffer

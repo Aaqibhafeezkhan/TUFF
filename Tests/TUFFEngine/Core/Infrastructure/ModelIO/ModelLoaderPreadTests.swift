@@ -109,6 +109,8 @@ import Metal
                                    expecting: .gemma4Toy(),
                                    streamingMode: .pread(slotCount: 2))
         _ = try model.routedExpert(layer: 1, expert: 4)
+        let before = model.expertReadMetrics
+        #expect(before.demandReads == 1)
         let expectedScratch = UInt64(2 * Int(getpagesize()))
 
         let retained = model.prepareExpertResidencyForVision(.keepReady)
@@ -125,10 +127,12 @@ import Metal
         #expect(released.remainingOpenLayerCount == 0)
         #expect(released.remainingSlotScratchBytes == 0)
         #expect(model.openLayerFileCount() == 0)
+        #expect(model.expertReadMetrics == before)
 
         let view = try model.routedExpert(layer: 1, expert: 4)
         #expect(model.openLayerFileCount() == 1)
         #expect(Self.readBytes(view)[1] == 4)
+        #expect(model.expertReadMetrics.demandReads == before.demandReads + 1)
     }
 
 }

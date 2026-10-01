@@ -1,103 +1,164 @@
 #!/usr/bin/env python3
-"""Publish a sanitized summary of validate_release_models.py results to local docs."""
+"""Write a sanitized release smoke report, retaining every repetition in summaries."""
 import argparse
 import datetime
-import html
 import json
 from pathlib import Path
 import re
+from benchmark_reporting import summarize
 
 ROOT = Path(__file__).resolve().parent.parent
-p = argparse.ArgumentParser(description=__doc__)
-p.add_argument('--results', type=Path, required=True)
-p.add_argument('--version', required=True)
-p.add_argument('--summary', required=True,
-               help='one sentence on what the release changed, for the site')
-a = p.parse_args()
-if not re.fullmatch(r'\d+\.\d+\.\d+', a.version):
-    p.error('version must be major.minor.patch')
-r = json.loads(a.results.read_text())
-paris = [x for x in r['results'] if x['kind'] == 'paris']
-vision = [x for x in r['results'] if x['kind'] == 'vision']
-photos_skipped = r.get('photo_checks') == 'skipped'
-if not r.get('finished') or not paris or not (vision or photos_skipped):
-    p.error('the sweep must finish before rendering its summary')
-reruns = []
-for key, cases in [('completion_checks', paris), ('vision_completion_checks', vision)]:
-    for completion in r.get(key, []):
-        if completion.get('passed'):
-            if completion['cli_sha256'] != r['identity']['cli_sha256']:
-                p.error('completion runner differs from the sweep')
-            original = next(x for x in cases if x['model'] == completion['model'])
-            original.update(completion, status='passed')
-            reruns.append((key, original['label']))
-models = list(dict.fromkeys(x['model'] for x in paris))
-rows = [max((x for x in paris if x['model'] == name), key=lambda x: x.get('tps', -1)) for name in models]
-date = datetime.datetime.fromtimestamp(r['started'], datetime.timezone.utc).date().isoformat()
-passes = sum(x['status'] == 'passed' for x in paris)
-vision_passes = sum(x['status'] == 'passed' for x in vision)
-repeat = r['identity']['repeat']
-method = ('One fresh process per model' if repeat == 1 else f'Best of {repeat} fresh processes per model')
-intro = (f'TUFF {a.version}, measured {date} on a 16 GB M2 MacBook Air. {method}, '
-         'answering `What is the capital of France?` with a 4,096-token context, '
-         'seed 20260721, and a 128-token output cap (256 for MiniMax M2.7). Decode speed excludes model loading '
-         'and prefill; prefill includes the first-use weight checks. '
-         f'{passes}/{len(paris)} runs named Paris. These short responses are smoke tests, '
-         'not a sustained-throughput or model-quality comparison. Host load and filesystem '
-         'caching can affect the timings.')
-lines = ['| Model | Decode | Prefill | Peak RSS |', '| --- | ---: | ---: | ---: |']
-for x in rows:
-    if 'tps' in x:
-        lines.append(f"| {x['label']} | {x['tps']:.2f} tok/s | {x['prefill_seconds']:.2f} s | {x.get('peak_rss_bytes', 0)/1048576:.0f} MiB |")
-    else:
-        lines.append(f"| {x['label']} | {x['status']} | — | — |")
-table = '\n'.join(lines)
-paris_reruns = [label for key, label in reruns if key == 'completion_checks']
-vision_reruns = [label for key, label in reruns if key == 'vision_completion_checks']
-rerun_text = (f"{', '.join(paris_reruns)} needed a longer completion rerun; the completed rerun is shown. "
-              if paris_reruns else '')
-vision_text = '' if not vision else (f'The same packaged runner was tested with one local photo on all {len(vision)} '
-               f'image-compatible models, with a 512-token cap. {vision_passes}/{len(vision)} responses passed the glasses-and-towel '
-               'keyword smoke check, with responses also reviewed manually. '
-               + (f"{', '.join(vision_reruns)} needed a completion rerun. " if vision_reruns else '')
-               + 'This is a single-image check, not a general vision accuracy score. '
-               'The photo and raw responses are kept out of the repository.')
-usage = ('```sh\npython3 Scripts/validate_release_models.py \\\n  --app dist/v'+a.version+'-release-public/TUFF.app \\\n  --model-root "$HOME/Library/Application Support/TUFF/Models" \\\n  '+('--image /path/to/photo.jpeg' if vision else '--text-only')+' \\\n  --output benchmark-results/release-validation\n```')
-section = ('### Benchmarks\n\n'+intro+'\n\n'+table+'\n\n'
-           'Peak RSS is the process resident set reported by macOS, not total model or Metal memory.'
-           + (' ' + rerun_text.rstrip() if rerun_text else '') + '\n\n'
-           +(vision_text+'\n\n' if vision_text else '')+'Reproduce the sweep with:\n\n'+usage+'\n\n'
-           'The harness saves each command, response, timing, model manifest hash, and runner identity; '
-           '`--resume` refuses changed inputs. See [the release validation report](docs/MODEL_VALIDATION.md) '
-           'for per-model status and [the runner report](docs/QWEN38_RUNNER_PERFORMANCE.md) '
-           'for the separate preprocessing comparison.\n\n')
-readme = ROOT/'README.md'
-text, count = re.subn(r'### Benchmarks\n.*?(?=#### What v4\.0\.0 changed about decode)', lambda _: section,
-                     readme.read_text(), count=1, flags=re.S)
-if count != 1:
-    p.error('README benchmark section not found')
-readme.write_text(text)
-report = ['# TUFF '+a.version+' model validation', '', intro, '', table]
-if vision:
-    report += ['', '## Photo smoke checks', '', vision_text, '', '| Model | Status |', '| --- | --- |']
-    report += [f"| {x['label']} | {x['status']} |" for x in vision]
-report += ['', '## Reproduction', '', usage, '', f"Packaged CLI SHA-256: `{r['identity']['cli_sha256']}`.", '', f"Sources fingerprint: `{r['identity']['source_sha256']}`.", '', f'Raw evidence is retained locally under `{a.results.parent.name}/`. The fingerprint identifies the compiled source tree; the recorded benchmark base commit may predate the release commit.', '']
-(ROOT/'docs/MODEL_VALIDATION.md').write_text('\n'.join(report))
-tr = ''.join('<tr><td>'+html.escape(x['label'])+'</td><td>'+f"{x['tps']:.2f} tok/s</td><td>{x['prefill_seconds']:.2f} s</td></tr>" for x in rows if 'tps' in x)
-block = ('<!-- release-benchmarks:start -->\n<section class="benchmarks">\n'
-         f'<h2>Version {a.version}</h2>\n'
-         '<p>'+html.escape(a.summary)+'</p>\n'
-         f'<h3>Local model check</h3><p>{html.escape(intro.replace("`", ""))}</p>\n'
-         '<div style="overflow-x:auto"><table style="width:100%;text-align:left;border-spacing:0 10px"><thead><tr><th>Model</th><th>Decode</th><th>Prefill</th></tr></thead><tbody>'+tr+'</tbody></table></div>\n'
-         +('<p>'+html.escape(vision_text)+'</p>\n' if vision_text else '')+
-         '<p><a href="https://github.com/rexmhall09/TUFF/blob/main/docs/MODEL_VALIDATION.md">Validation details and reproduction script</a></p>\n'
-         '</section>\n<!-- release-benchmarks:end -->\n')
-site = ROOT/'site/index.html'
-text = site.read_text()
-if '<!-- release-benchmarks:start -->' in text:
-    text = re.sub(r'<!-- release-benchmarks:start -->.*?<!-- release-benchmarks:end -->\n?', lambda _: block, text, flags=re.S)
-else:
-    text = text.replace('  <footer>', block+'\n  <footer>', 1)
-site.write_text(text)
-print(f'Updated README, site, and sanitized report: {passes}/{len(paris)} Paris, '
-      + (f'{vision_passes}/{len(vision)} photo checks' if vision else 'photo checks skipped'))
+
+
+def probe(state, name):
+    item = state.get(name, {})
+    if not item.get('available') or not item.get('value'):
+        return 'unavailable'
+    return item['value'].replace('|', '\\|').replace('\n', '; ')
+
+
+def memory_free(state):
+    value = probe(state, 'memory_pressure')
+    match = re.search(r'System-wide memory free percentage: (\d+)%', value)
+    return match[1] + '%' if match else 'unavailable'
+
+
+def vm_counters(state):
+    value = probe(state, 'vm_stat')
+    counters = [re.search(r'\b' + name + r':\s+(\d+)', value)
+                for name in ('Pageins', 'Pageouts', 'Swapins', 'Swapouts')]
+    return ', '.join(match[1] for match in counters) if all(counters) else 'unavailable'
+
+
+def render(report, version):
+    rows = report['results']
+    text_rows = [row for row in rows if row['kind'] == 'paris']
+    vision = [row for row in rows if row['kind'] == 'vision']
+    date = datetime.datetime.fromtimestamp(report['started']).astimezone().date()
+    hardware = report.get('hardware', 'unavailable').replace('\n', ', ')
+    lines = [f'# TUFF {version} model validation', '', f'Host model and memory: {hardware}.', '',
+             f'Measured {date}. These are short correctness smoke checks, not model-quality '
+             'or sustained-performance qualification. Each attempt uses a fresh process. '
+             'Decode rate excludes load and prefill. Prefill includes first-use expert integrity checks; '
+             'filesystem caching is uncontrolled. Timings may overlap; logical expert '
+             'reads include OS-cache hits and do not measure physical SSD traffic.', '',
+             f"Text smoke passes: {sum(row['status'] == 'passed' for row in text_rows)}/{len(text_rows)}. "
+             f"Image smoke passes: {sum(row['status'] == 'passed' for row in vision)}/{len(vision)}.", '',
+             '| Model | All decode rates (tok/s) | Median | Min..max | Spread | Prefill median | Peak RSS max |',
+             '| --- | --- | ---: | --- | ---: | ---: | ---: |']
+    labels = {row['model']: row['label'] for row in rows}
+    for summary in summarize(rows):
+        rates = summary['tps']
+        if not rates:
+            lines.append(f"| {labels[summary['model']]} | unavailable | | | | | |")
+            continue
+        prefill = summary['prefill_seconds']
+        rss = summary['peak_rss_bytes']
+        values = ', '.join(f'{value:.3f}' for value in rates['values'])
+        lines.append(f"| {labels[summary['model']]} | {values} | {rates['median']:.3f} | "
+                     f"{rates['minimum']:.3f}..{rates['maximum']:.3f} | {rates['spread']:.3f} | "
+                     f"{prefill['median']:.2f} s | {rss['maximum']/1048576:.0f} MiB |")
+    lines += ['', 'Peak RSS is the process resident set, not total model or Metal memory. '
+              'Slow runs have no assigned cause. Machine-state snapshots record available '
+              'thermal, power, swap, VM and memory-pressure probes before and after each run; '
+              'unavailable probes are marked below.', '', '## Resolved settings', '',
+              '| Model | Context | Cache slots | Prefill | Chunk | Sampling T / K / P |',
+              '| --- | ---: | ---: | --- | ---: | --- |']
+    for model in dict.fromkeys(row['model'] for row in text_rows):
+        settings = next((row.get('resolved_settings') for row in text_rows
+                         if row['model'] == model and row.get('resolved_settings')), None)
+        if not settings:
+            continue
+        lines.append(f"| {labels[model]} | {settings['context']} | {settings['expert_cache_slots']} | "
+                     f"{settings['prefill']} | {settings['prefill_chunk_tokens']} | "
+                     f"{settings['temperature']} / {settings['top_k']} / {settings['top_p']} |")
+    lines += ['', 'Full resolved runtime settings (including kernel preferences):', '']
+    for model in dict.fromkeys(row['model'] for row in text_rows):
+        settings = next((row.get('resolved_settings') for row in text_rows
+                         if row['model'] == model and row.get('resolved_settings')), None)
+        if settings:
+            lines += [f"**{labels[model]}**", '', '```json', json.dumps(settings, sort_keys=True, indent=2), '```', '']
+    lines += ['', '## Individual text attempts', '',
+              'Wall is elapsed harness-attempt time, including before-run probes and '
+              'metadata checks. Prefill and decode are CLI intervals, so their sum is '
+              'not the complete attempt time.', '',
+              '| Model | Attempt | Status / stop | Prompt / generated | Prefill | Decode | tok/s | Wall |',
+              '| --- | ---: | --- | --- | ---: | ---: | ---: | ---: |']
+    for row in text_rows:
+        def number(key):
+            return f"{row[key]:.3f}" if key in row else 'unavailable'
+        lines.append(f"| {row['label']} | {row['attempt']+1} | {row['status']} / {row.get('stop', 'unavailable')} | "
+                     f"{row.get('prompt_tokens', '?')} / {row.get('generated_tokens', '?')} | "
+                     f"{number('prefill_seconds')} | {number('decode_seconds')} | {number('tps')} | {number('wall_seconds')} |")
+    lines += ['', '## Logical expert I/O (prefill and decode combined)', '',
+              '| Model / attempt | Demand records / bytes | Prefetch records / bytes | Exposed wait ms | Slot allocations |',
+              '| --- | --- | --- | ---: | ---: |']
+    for row in text_rows:
+        io = row.get('expert_io', {})
+        demand, prefetch = io.get('demand', {}), io.get('prefetch', {})
+        if not demand and not prefetch:
+            continue
+        lines.append(f"| {row['label']} / {row['attempt']+1} | {demand.get('reads', '?')} / {demand.get('bytes', '?')} | "
+                     f"{prefetch.get('reads', '?')} / {prefetch.get('bytes', '?')} | "
+                     f"{io.get('exposed_prefetch_wait_ms', '?')} | {row.get('allocated_expert_slot_bytes', 0)} |")
+    if vision:
+        lines += ['', '## Image smoke checks', '', '| Model | Status | Stop |', '| --- | --- | --- |']
+        lines += [f"| {row['label']} | {row['status']} | {row.get('stop', 'unavailable')} |" for row in vision]
+    lines += ['', '## Machine-state observations', '',
+              'These probes do not establish the cause of a timing difference. Memory free '
+              'is the system-wide percentage reported by `memory_pressure -Q`. Swap values '
+              'come from `vm.swapusage`. VM counters list cumulative system pageins, '
+              'pageouts, swapins and swapouts from `vm_stat`, in that order. Each pair '
+              'is before / after the attempt.', '',
+              '| Model / kind / attempt | Memory free | Swap | Thermal | Power | VM counters |',
+              '| --- | --- | --- | --- | --- | --- |']
+    for row in rows:
+        before = row.get('machine_state_before', {})
+        after = row.get('machine_state_after', {})
+        pairs = [memory_free(before) + ' / ' + memory_free(after)]
+        pairs += [probe(before, name) + ' / ' + probe(after, name)
+                  for name in ('swap_usage', 'thermal', 'power')]
+        pairs += [vm_counters(before) + ' / ' + vm_counters(after)]
+        lines.append(f"| {row['label']} / {row['kind']} / {row['attempt']+1} | "
+                     + ' | '.join(pairs) + ' |')
+    lines += ['', '## Scope and identity', '',
+              'Text checks require the answer to name Paris. Image checks use the supplied '
+              'prompt and keywords. Neither test establishes reasoning, tool or general vision '
+              'quality. Independent toy and kernel regressions run separately in the serial suite.', '',
+              f"Packaged CLI SHA-256: `{report['identity']['cli_sha256']}`.", '',
+              f"Sources fingerprint: `{report['identity']['source_sha256']}`.", '',
+              f"Packaged shaders fingerprint: `{report['identity'].get('shaders_sha256', 'unavailable')}`.", '',
+              f"Text prompt SHA-256: `{report['identity'].get('prompt_sha256', 'unavailable')}`.", '',
+              '| Model | Text manifest SHA-256 | Image manifest SHA-256 |',
+              '| --- | --- | --- |']
+    for model in dict.fromkeys(row['model'] for row in rows):
+        manifest = next((row.get('manifest_sha256') for row in rows
+                         if row['model'] == model and row.get('manifest_sha256')), 'unavailable')
+        image_manifest = next((row.get('vision_manifest_sha256') for row in vision
+                               if row['model'] == model and row.get('vision_manifest_sha256')), 'not checked')
+        lines.append(f"| {labels[model]} | `{manifest}` | `{image_manifest}` |")
+    lines += ['',
+              'Only the available Mac was exercised. Other chips and memory capacities are '
+              'not hardware-validated by this release.', '',
+              'Raw outputs are temporary release artifacts. This sanitized report preserves '
+              'all measured decode rates and resolved settings after local cleanup.', '']
+    return '\n'.join(lines)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--results', type=Path, required=True)
+    parser.add_argument('--version', required=True)
+    parser.add_argument('--summary', help='accepted for existing release callers')
+    args = parser.parse_args()
+    if not re.fullmatch(r'\d+\.\d+\.\d+', args.version):
+        parser.error('version must be major.minor.patch')
+    report = json.loads(args.results.read_text())
+    if not report.get('finished') or not report['results']:
+        parser.error('the sweep must finish before rendering its summary')
+    (ROOT / 'docs/MODEL_VALIDATION.md').write_text(render(report, args.version))
+    print('Updated sanitized model validation report')
+
+
+if __name__ == '__main__':
+    main()

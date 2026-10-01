@@ -209,6 +209,8 @@ final class DecodeServiceOutbox: @unchecked Sendable {
             rdadviseCallsPerToken: value.rdadviseCallsPerToken,
             rdadviseMegabytesPerToken: value.rdadviseMegabytesPerToken,
             rdadviseSkippedPerToken: value.rdadviseSkippedPerToken,
-            rdadviseFailures: value.rdadviseFailures)
+            rdadviseFailures: value.rdadviseFailures,
+            expertReads: value.expertReads,
+            exposedPrefetchWaitMillisecondsPerToken: value.exposedPrefetchWaitMillisecondsPerToken)
     }
 }

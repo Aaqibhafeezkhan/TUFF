@@ -2,64 +2,64 @@
 # frozen_string_literal: true
 
 # Shared launch-model table for the benchmark scripts. Each entry pins the
-# chat, sampling, and runtime flags a model is qualified with, so every
-# harness measures the same configuration users actually run.
+# chat and sampling flags plus explicit 16 GB release-check runtime settings.
+# Context stays at 4K for comparable smoke checks, rather than Auto context.
 
 BENCHMARK_MODELS = {
   "gemma4-e2b" => {
     path: "scratch/gemma4-e2b.gturbo",
     chat: %w[--thinking off],
     sampling: %w[--temperature 1.0 --top-k 64 --top-p 0.95],
-    runtime: %w[--expert-cache-slots 16 --prefill on --prefill-chunk-tokens auto --rdadvise off]
+    runtime: %w[--expert-cache-slots 16 --prefill on --prefill-chunk-tokens 256 --rdadvise off]
   },
   "gemma4-e4b" => {
     path: "scratch/gemma4-e4b.gturbo",
     chat: %w[--thinking off],
     sampling: %w[--temperature 1.0 --top-k 64 --top-p 0.95],
-    runtime: %w[--expert-cache-slots 16 --prefill on --prefill-chunk-tokens auto --rdadvise off]
+    runtime: %w[--expert-cache-slots 16 --prefill on --prefill-chunk-tokens 256 --rdadvise off]
   },
   "gemma4-12b-qat" => {
     path: "scratch/gemma4-12b-qat.gturbo",
     chat: %w[--thinking off],
     sampling: %w[--temperature 1.0 --top-k 64 --top-p 0.95],
-    runtime: %w[--expert-cache-slots 16 --prefill on --prefill-chunk-tokens auto --rdadvise off]
+    runtime: %w[--expert-cache-slots 16 --prefill on --prefill-chunk-tokens 256 --rdadvise off]
   },
   "gemma4" => {
     path: "scratch/gemma4.gturbo",
     chat: %w[--thinking off],
     sampling: %w[--temperature 0.2 --top-k 64 --top-p 0.95],
-    runtime: %w[--expert-cache-slots 16 --prefill on --prefill-chunk-tokens auto --rdadvise off]
+    runtime: %w[--expert-cache-slots 16 --prefill on --prefill-chunk-tokens 512 --rdadvise off]
   },
   "qwen36" => {
     path: "scratch/qwen36.gturbo",
     chat: %w[--thinking off],
     sampling: %w[--temperature 0.2 --top-k 64 --top-p 0.95],
-    runtime: %w[--expert-cache-slots 16 --prefill on --prefill-chunk-tokens auto --rdadvise off]
+    runtime: %w[--expert-cache-slots 16 --prefill on --prefill-chunk-tokens 2048 --rdadvise off]
   },
   "gpt-oss-20b" => {
     path: "scratch/gpt-oss-20b.gturbo",
     chat: %w[--reasoning low],
     sampling: %w[--temperature 1.0 --top-k 0 --top-p 1.0],
-    runtime: %w[--expert-cache-slots 16 --prefill on --prefill-chunk-tokens auto --rdadvise off]
+    runtime: %w[--expert-cache-slots 16 --prefill on --prefill-chunk-tokens 512 --rdadvise off]
   },
   "gpt-oss-120b" => {
     path: "scratch/gpt-oss-120b.gturbo",
     chat: %w[--reasoning low],
     sampling: %w[--temperature 1.0 --top-k 0 --top-p 1.0],
-    runtime: %w[--expert-cache-slots 16 --prefill on --prefill-chunk-tokens auto --rdadvise bounded]
+    runtime: %w[--expert-cache-slots 4 --prefill off --prefill-chunk-tokens 2048 --rdadvise bounded]
   },
   "minimax-m2.7" => {
     path: "scratch/minimax-m2.7.gturbo",
     chat: [],
     sampling: %w[--temperature 1.0 --top-k 40 --top-p 0.95],
-    runtime: %w[--expert-cache-slots 16 --prefill on --prefill-chunk-tokens auto --rdadvise bounded]
+    runtime: %w[--expert-cache-slots 16 --prefill on --prefill-chunk-tokens 2048 --rdadvise bounded]
   },
-  # 32 slots is this checkpoint's measured optimum; see the catalogue note.
+  # 32 slots is this checkpoint's qualified default; see the catalogue note.
   "qwen38-flash-next" => {
     path: "scratch/qwen38-flash-next.gturbo",
     chat: [],
     sampling: %w[--temperature 1.0 --top-k 20 --top-p 0.95],
-    runtime: %w[--expert-cache-slots 32 --prefill on --prefill-chunk-tokens auto --rdadvise bounded]
+    runtime: %w[--expert-cache-slots 32 --prefill on --prefill-chunk-tokens 2048 --rdadvise bounded]
   }
 }.freeze
 

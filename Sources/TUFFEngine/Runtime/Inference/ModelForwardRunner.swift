@@ -1,4 +1,5 @@
 import Metal
+import TUFFModelCatalog
 
 /// Family-neutral production runner used by the CLI, app, and server. The
 /// existing Gemma/Qwen implementation remains untouched; GPT-OSS selects its
@@ -14,9 +15,17 @@ public final class ModelForwardRunner: ChunkedPrefillRunner,
     }
 
     private let backend: Backend
+    public let memoryPlan: InferenceMemoryPlan?
 
     public init(model: Model, context: MetalContext, maxContext: Int,
                 runtimeConfiguration: RuntimeConfiguration = .production) throws {
+        memoryPlan = TUFFModelCatalog.all.first {
+            $0.architecture.id.rawValue == model.config.variant.rawValue
+        }.map {
+            InferenceMemoryPlan(descriptor: $0, config: model.config,
+                contextTokens: maxContext, expertCacheSlots: runtimeConfiguration.expertCacheSlots,
+                prefillChunkTokens: runtimeConfiguration.prefillChunkTokens)
+        }
         if model.config.family == .gptOss {
             backend = .gptOss(try GPTOSSForwardRunner(
                 model: model,
@@ -48,6 +57,20 @@ public final class ModelForwardRunner: ChunkedPrefillRunner,
         case .gptOss(let runner):
             return (runner.lookaheadPrecision, runner.lookaheadReadsIssued,
                     runner.lookaheadEnabled)
+        }
+    }
+
+    public var exposedPrefetchWaitNanos: UInt64 {
+        switch backend {
+        case .affine(let runner): return runner.exposedPrefetchWaitNanos
+        case .gptOss(let runner): return runner.exposedPrefetchWaitNanos
+        }
+    }
+
+    public var expertReadMetrics: ExpertReadMetrics {
+        switch backend {
+        case .affine(let runner): return runner.expertReadMetrics
+        case .gptOss(let runner): return runner.expertReadMetrics
         }
     }
 

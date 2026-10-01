@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 /// Decode expert lookahead: routing layer L's feed-forward input through
 /// layer L+1's router predicts L+1's experts, and their SSD reads start while
@@ -26,6 +27,7 @@ struct ExpertLookahead {
     private(set) var predicted = 0
     private(set) var correct = 0
     private(set) var readsIssued = 0
+    private(set) var exposedWaitNanos: UInt64 = 0
     private(set) var enabled = true
     var pending: Pending?
 
@@ -48,7 +50,11 @@ struct ExpertLookahead {
     /// read never races the layer it fills.
     mutating func drain() -> Pending? {
         guard let pending else { return nil }
-        pending.reads?.wait()
+        if let reads = pending.reads, reads.wait(timeout: .now()) == .timedOut {
+            let start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+            reads.wait()
+            exposedWaitNanos += clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - start
+        }
         self.pending = nil
         return pending
     }

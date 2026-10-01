@@ -839,7 +839,7 @@ public enum TUFFModelCatalog {
         hardware: TUFFModelHardwareRequirements(minimumUnifiedMemoryBytes: eightGiB),
         memory: TUFFModelMemoryProfile(
             qualifiedDefaultWorkingSetBytes: 2_254_857_830,
-            expertCacheBytesPerSlot: 100_663_296,
+            expertCacheBytesPerSlot: 100_761_600,
             kvCache: TUFFKVCacheProfile(
                 fullAttentionBytesPerToken: 20_480,
                 slidingAttentionBytesPerToken: 204_800,
@@ -877,7 +877,7 @@ public enum TUFFModelCatalog {
         hardware: TUFFModelHardwareRequirements(minimumUnifiedMemoryBytes: eightGiB),
         memory: TUFFModelMemoryProfile(
             qualifiedDefaultWorkingSetBytes: 1_610_612_736,
-            expertCacheBytesPerSlot: 75_497_472,
+            expertCacheBytesPerSlot: 70_778_880,
             kvCache: TUFFKVCacheProfile(fullAttentionBytesPerToken: 20_480)),
         capabilities: [.textGeneration, .imageInput, .reasoning],
         reasoningControl: .toggleWithPreservation,
@@ -920,7 +920,7 @@ public enum TUFFModelCatalog {
             qualifiedDefaultWorkingSetBytes: 5_487_695_296,
             defaultContextTokens: 4_096,
             defaultExpertCacheSlots: 4,
-            expertCacheBytesPerSlot: 13_238_272,
+            expertCacheBytesPerSlot: 317_718_528,
             kvCache: TUFFKVCacheProfile(
                 fullAttentionBytesPerToken: 24_576,
                 slidingAttentionBytesPerToken: 24_576,
@@ -954,7 +954,7 @@ public enum TUFFModelCatalog {
             qualifiedDefaultWorkingSetBytes: 7_990_582_952,
             defaultContextTokens: 4_096,
             defaultExpertCacheSlots: 4,
-            expertCacheBytesPerSlot: 13_238_272,
+            expertCacheBytesPerSlot: 476_577_792,
             kvCache: TUFFKVCacheProfile(
                 fullAttentionBytesPerToken: 36_864,
                 slidingAttentionBytesPerToken: 36_864,

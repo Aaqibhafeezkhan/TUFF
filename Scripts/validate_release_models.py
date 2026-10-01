@@ -16,6 +16,7 @@ import re
 import signal
 import subprocess
 import time
+from benchmark_reporting import machine_state, resolved_settings, summarize, expert_io
 
 ROOT = Path(__file__).resolve().parent.parent
 VISION_MODELS = {'gemma4-e2b', 'gemma4-e4b', 'gemma4-12b-qat', 'gemma4',
@@ -44,11 +45,14 @@ def main():
     parser.add_argument('--app', required=True, type=Path)
     parser.add_argument('--model-root', required=True, type=Path)
     parser.add_argument('--image', type=Path)
+    parser.add_argument('--image-prompt', default=PHOTO_PROMPT)
+    parser.add_argument('--image-keywords', default='glasses,towel',
+                        help='comma-separated words required by the image smoke check')
     parser.add_argument('--text-only', action='store_true',
                         help='finish the sweep with the Paris runs alone')
     parser.add_argument('--output', required=True, type=Path)
-    parser.add_argument('--repeat', type=int, default=1)
-    parser.add_argument('--timeout', type=int, default=1200)
+    parser.add_argument('--repeat', type=int, default=3)
+    parser.add_argument('--timeout', type=int, default=2400)
     parser.add_argument('--resume', action='store_true')
     args = parser.parse_args()
     if args.text_only and args.image:
@@ -64,6 +68,7 @@ def main():
         ['ruby', '-rjson', '-e', 'require File.expand_path("Scripts/benchmark_models", Dir.pwd); '
          'puts JSON.generate({models: BENCHMARK_MODELS, labels: BENCHMARK_MODEL_LABELS})'], cwd=ROOT))
     identity = dict(cli_sha256=digest(cli), harness_sha256=digest(__file__),
+                    reporting_sha256=digest(ROOT / 'Scripts/benchmark_reporting.py'),
                     source_sha256=hashlib.sha256(''.join(
                         str(p.relative_to(ROOT)) + digest(p)
                         for p in sorted((ROOT / 'Sources').rglob('*')) if p.is_file()).encode()).hexdigest(),
@@ -72,7 +77,8 @@ def main():
                         for p in sorted(args.app.resolve().rglob('*'))
                         if p.suffix in {'.metal', '.metallib'}).encode()).hexdigest(),
                     model_table_sha256=digest(ROOT / 'Scripts/benchmark_models.rb'),
-                    image_sha256=digest(image) if image else None, model_root=str(model_root), repeat=args.repeat,
+                    image_sha256=digest(image) if image else None,
+                    image_prompt=args.image_prompt, image_keywords=args.image_keywords, model_root=str(model_root), repeat=args.repeat,
                     timeout=args.timeout, prompt_sha256=digest(ROOT / 'docs/benchmark-prompts/capital-of-france.json'))
     result_path = output / 'results.json'
     if result_path.exists():
@@ -90,7 +96,8 @@ def main():
                       commit=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
                       worktree_status=subprocess.check_output(['git', 'status', '--short'], cwd=ROOT, text=True),
                       hardware=subprocess.check_output(['sysctl', '-n', 'hw.model', 'hw.memsize'], text=True).strip(),
-                      results=[])
+                      validation_scope="keyword correctness smoke; not quality or sustained performance qualification",
+                      machine_state=machine_state(), results=[])
     completed = {(r['model'], r['kind'], r['attempt']) for r in report['results']}
     for row in report['results']:
         if 'manifest_sha256' in row:
@@ -102,7 +109,9 @@ def main():
             if digest(model_root / (name + '.vision.gturbo') / 'manifest.json') != row['vision_manifest_sha256']:
                 parser.error('installed image pack metadata changed since the previous run')
     for kind in ('paris', 'vision'):
-        for model, config in metadata['models'].items():
+        ordered = sorted(metadata['models'].items(), key=lambda item: (
+            {"qwen38-flash-next": 0, "gemma4": 1}.get(item[0], 2)))
+        for model, config in ordered:
             if kind == 'vision' and (model not in VISION_MODELS or image is None):
                 continue
             model_dir = model_root / Path(config['path']).name
@@ -119,11 +128,13 @@ def main():
                 if kind == 'paris':
                     command += ['--messages-file', str(ROOT / 'docs/benchmark-prompts/capital-of-france.json')]
                 else:
-                    command += ['--chat-prompt', PHOTO_PROMPT, '--image', str(image)]
+                    command += ['--chat-prompt', args.image_prompt, '--image', str(image)]
+                row['machine_state_before'] = machine_state()
                 row['command'] = command
                 row['max_new_tokens'] = int(command[command.index('--max-new') + 1])
                 try:
                     row['manifest_sha256'] = digest(manifest)
+                    model_manifest = json.loads(manifest.read_text())
                     if kind == 'vision':
                         pack = model_root / (model_dir.name.removesuffix('.gturbo') + '.vision.gturbo')
                         row['vision_manifest_sha256'] = digest(pack / 'manifest.json')
@@ -144,6 +155,8 @@ def main():
                     answer = Path(str(prefix) + '.stdout.txt').read_text()
                     stderr = Path(str(prefix) + '.stderr.txt').read_text()
                     row['stdout_sha256'] = digest(Path(str(prefix) + '.stdout.txt'))
+                    row['resolved_settings'] = resolved_settings(stderr)
+                    row['expert_io'] = expert_io(stderr)
                     footer = FOOTER.search(stderr)
                     if footer:
                         row.update(stop=footer[1], prompt_tokens=int(footer[2]), prefill_seconds=float(footer[3]),
@@ -152,17 +165,30 @@ def main():
                     if rss:
                         row['peak_rss_bytes'] = int(rss[1])
                     checks = ({'names_paris': bool(re.search(r'\bParis\b', answer, re.I))} if kind == 'paris' else
-                              {'glasses': bool(re.search(r'\b(glasses|spectacles|eyeglasses)\b', answer, re.I)),
-                               'towel': bool(re.search(r'\btowel\b', answer, re.I))})
+                              {word: bool(re.search(r'\b' + re.escape(word) + r'\b', answer, re.I))
+                               for word in args.image_keywords.split(',') if word})
+                    allocated = re.search(r'allocated expert slot bytes: (\d+)', stderr)
+                    if model_manifest.get('expertStride', 0):
+                        slots = int(command[command.index('--expert-cache-slots') + 1])
+                        stride = model_manifest['expertStride']
+                        page = os.sysconf('SC_PAGESIZE')
+                        expected = ((stride + page - 1) // page * page
+                                    * model_manifest['numLayers']
+                                    * min(slots, model_manifest['expertsPerLayer']))
+                        row['expected_expert_slot_bytes'] = expected
+                        row['allocated_expert_slot_bytes'] = int(allocated[1]) if allocated else None
+                        checks['expert_slot_allocation_matches_manifest'] = bool(allocated and int(allocated[1]) == expected)
                     row['checks'] = checks
                     # Keywords are a smoke check; keep every full response for human review.
-                    row['status'] = 'passed' if proc.returncode == 0 and footer and all(checks.values()) else 'needs_review'
+                    row['status'] = 'passed' if proc.returncode == 0 and footer and row['resolved_settings'] and checks and all(checks.values()) else 'needs_review'
                 except FileNotFoundError as exc:
                     row.update(status='unavailable', error=str(exc))
                 except subprocess.TimeoutExpired:
                     row.update(status='timeout', error=f'exceeded {args.timeout} seconds')
                 row['wall_seconds'] = time.time() - row['started']
+                row['machine_state_after'] = machine_state()
                 report['results'].append(row)
+                report['summaries'] = summarize(report['results'])
                 atomic_json(result_path, report)
                 print(f"{kind} {model}: {row['status']}, prefill={row.get('prefill_seconds', '?')}s, TPS={row.get('tps', '?')}", flush=True)
     if image is not None or args.text_only:

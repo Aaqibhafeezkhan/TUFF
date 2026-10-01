@@ -20,6 +20,9 @@ public struct AppRunnerDiagnostics: Equatable, Sendable {
     public var rdadviseCallsPerToken: Double
     public var rdadviseMegabytesPerToken: Double
     public var rdadviseSkippedPerToken: Double
+    /// Decode-only logical reads; CPU/GPU durations may overlap.
+    public var expertReads: ExpertReadMetrics?
+    public var exposedPrefetchWaitMillisecondsPerToken: Double?
     public var rdadviseFailures: UInt64
 
     public init(cb1MillisecondsPerToken: Double = 0,
@@ -30,7 +33,9 @@ public struct AppRunnerDiagnostics: Equatable, Sendable {
                 rdadviseCallsPerToken: Double = 0,
                 rdadviseMegabytesPerToken: Double = 0,
                 rdadviseSkippedPerToken: Double = 0,
-                rdadviseFailures: UInt64 = 0) {
+                rdadviseFailures: UInt64 = 0,
+                expertReads: ExpertReadMetrics? = nil,
+                exposedPrefetchWaitMillisecondsPerToken: Double? = nil) {
         self.cb1MillisecondsPerToken = cb1MillisecondsPerToken
         self.ioMillisecondsPerToken = ioMillisecondsPerToken
         self.cb2MillisecondsPerToken = cb2MillisecondsPerToken
@@ -39,6 +44,8 @@ public struct AppRunnerDiagnostics: Equatable, Sendable {
         self.rdadviseCallsPerToken = rdadviseCallsPerToken
         self.rdadviseMegabytesPerToken = rdadviseMegabytesPerToken
         self.rdadviseSkippedPerToken = rdadviseSkippedPerToken
+        self.expertReads = expertReads
+        self.exposedPrefetchWaitMillisecondsPerToken = exposedPrefetchWaitMillisecondsPerToken
         self.rdadviseFailures = rdadviseFailures
     }
 }

@@ -298,6 +298,7 @@ public struct AppModelInstallDescriptor: Equatable, Sendable {
     public func contextEligibility(
         contextTokens: Int,
         expertCacheSlots: Int,
+        prefillChunkTokens: Int? = nil,
         on device: TUFFDeviceCapabilities
     ) -> AppModelContextEligibility {
         guard let catalogDescriptor else {
@@ -305,9 +306,10 @@ public struct AppModelInstallDescriptor: Equatable, Sendable {
                 estimatedWorkingSetBytes: 0,
                 safeBudgetBytes: device.unifiedMemoryBytes)
         }
-        let estimate = catalogDescriptor.memory.estimatedWorkingSetBytes(
+        let estimate = catalogDescriptor.estimatedInferenceWorkingSetBytes(
             contextTokens: contextTokens,
-            expertCacheSlots: expertCacheSlots)
+            expertCacheSlots: expertCacheSlots,
+            prefillChunkTokens: prefillChunkTokens ?? recommendedPrefillChunkTokens(on: device))
         let budget = device.safeAppMemoryBudgetBytes
         return AppModelContextEligibility(
             estimatedWorkingSetBytes: estimate,

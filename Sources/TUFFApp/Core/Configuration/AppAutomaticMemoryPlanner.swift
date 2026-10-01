@@ -22,24 +22,9 @@ public struct AppAutomaticMemoryPlan: Equatable, Sendable {
     }
 }
 
-/// Resolves a per-model memory profile from the Mac's detected unified memory
-/// and the checkpoint's measured working-set profile.
-///
-/// The profiles differ in context length and nothing else, because context is
-/// the only thing measurement says is worth buying. On Gemma 4 26B-A4B, a
-/// 16 GB Mac, 24 generated tokens:
-///
-///     8K context, 16 slots   7.69 tok/s   1.93 GB peak
-///     8K context, 128 slots  6.28 tok/s   2.99 GB peak
-///     16K context, 16 slots  7.67 tok/s   1.93 GB peak
-///
-/// Doubling the context is free. Filling the budget with routed-expert slots
-/// costs 18% of throughput and a gigabyte of memory: each slot is its own
-/// Metal buffer, and a command buffer that references hundreds of them pays
-/// for all of them. Auto therefore keeps the checkpoint's qualified slot
-/// count, which is the count it was validated at, and spends nothing else.
-/// Raising it stays available by hand for anyone who wants to trade that
-/// throughput for fewer SSD reads.
+/// Resolves context and cache capacity using the shared runtime allocation plan.
+/// Cache counts retain qualified defaults; larger context must fit alongside
+/// the selected chunk's scratch and ring storage.
 public enum AppAutomaticMemoryPlanner {
     public static func plan(
         for descriptor: AppModelInstallDescriptor,
@@ -50,11 +35,12 @@ public enum AppAutomaticMemoryPlanner {
               let catalog = TUFFModelCatalog.model(id: id) else { return nil }
 
         let budget = device.safeAppMemoryBudgetBytes
-        let memory = catalog.memory
+        let chunk = catalog.recommendedPrefillChunkTokens(on: device)
         let qualifiedContext = catalog.runtimeDefaults.contextTokens
         func fits(context: Int, slots: Int) -> Bool {
-            memory.estimatedWorkingSetBytes(contextTokens: context,
-                                            expertCacheSlots: slots) <= budget
+            catalog.estimatedInferenceWorkingSetBytes(contextTokens: context,
+                                            expertCacheSlots: slots,
+                                            prefillChunkTokens: chunk) <= budget
         }
 
         // The qualified slot count, clamped to what this model can use, then
@@ -101,9 +87,10 @@ public enum AppAutomaticMemoryPlanner {
             profile: profile,
             contextTokens: context,
             expertCacheSlots: slots,
-            estimatedWorkingSetBytes: memory.estimatedWorkingSetBytes(
+            estimatedWorkingSetBytes: catalog.estimatedInferenceWorkingSetBytes(
                 contextTokens: context,
-                expertCacheSlots: slots),
+                expertCacheSlots: slots,
+                prefillChunkTokens: chunk),
             safeBudgetBytes: budget)
     }
 

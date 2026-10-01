@@ -36,6 +36,7 @@ let package = Package(
         .target(
             name: "TUFFEngine",
             dependencies: [
+                "TUFFModelCatalog",
                 "TUFFFormat",
                 .product(name: "Tokenizers", package: "swift-transformers"),
                 .product(name: "Hub", package: "swift-transformers"),
@@ -57,7 +58,7 @@ let package = Package(
         ),
         .target(
             name: "TUFFCLICore",
-            dependencies: ["TUFFEngine"],
+            dependencies: ["TUFFModelCatalog", "TUFFEngine"],
             path: "Sources/TUFFCLI",
             exclude: ["Command"]
         ),

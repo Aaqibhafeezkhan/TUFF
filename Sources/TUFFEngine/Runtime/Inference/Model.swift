@@ -65,6 +65,7 @@ public struct Model {
 
     final class StreamersBox: @unchecked Sendable {
         var streamers: [PreadExpertStreamer?]
+        var retiredReadMetrics = ExpertReadMetrics()
         var layerVerified: [Bool]
         var pendingVerification: [Int: VerifiedExpertFile] = [:]
         init(numLayers: Int) {
@@ -1541,6 +1542,9 @@ extension Model {
                 $0 + $1.diagnosticSlotScratchBytes
             }
             if policy == .onDemand {
+                for streamer in streamersBox.streamers.compactMap({ $0 }) {
+                    streamersBox.retiredReadMetrics.add(streamer.readMetrics)
+                }
                 var released = streamersBox.streamers
                 streamersBox.streamers = Array(
                     repeating: nil, count: packedExpertsLayout.numLayers)

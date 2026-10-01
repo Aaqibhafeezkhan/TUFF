@@ -882,7 +882,9 @@ actor RealInferenceSession {
             rdadviseCallsPerToken: Double(now.rdadviseCalls &- base.rdadviseCalls) / forwards,
             rdadviseMegabytesPerToken: Double(now.rdadviseBytes &- base.rdadviseBytes) / 1_048_576.0 / forwards,
             rdadviseSkippedPerToken: Double(now.rdadviseSkipped &- base.rdadviseSkipped) / forwards,
-            rdadviseFailures: now.rdadviseFailures &- base.rdadviseFailures)
+            rdadviseFailures: now.rdadviseFailures &- base.rdadviseFailures,
+            expertReads: now.expertReads.subtracting(base.expertReads),
+            exposedPrefetchWaitMillisecondsPerToken: ms(now.prefetchWait, base.prefetchWait))
     }
 
     private static func stopReason(_ reason: StopReason) -> AppStopReason {
@@ -932,6 +934,8 @@ private final class ProgressState: @unchecked Sendable {
 }
 
 private struct RunnerCounterSnapshot {
+    let expertReads: ExpertReadMetrics
+    let prefetchWait: UInt64
     let cb1: UInt64
     let io: UInt64
     let cb2: UInt64
@@ -943,6 +947,8 @@ private struct RunnerCounterSnapshot {
     let rdadviseSkipped: UInt64
 
     init(_ runner: ModelForwardRunner) {
+        expertReads = runner.expertReadMetrics
+        prefetchWait = runner.exposedPrefetchWaitNanos
         cb1 = runner.totalCb1Nanos
         io = runner.totalIoNanos
         cb2 = runner.totalCb2Nanos

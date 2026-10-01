@@ -1,6 +1,7 @@
 import Foundation
 import Metal
 import TUFFEngine
+import TUFFModelCatalog
 
 /// One row of the `--messages-file` JSON.
 private struct MessageJSON: Decodable {
@@ -165,6 +166,37 @@ public func run(args: Args,
         let runtime = try args.resolvedRuntimeConfiguration(
             forceLogitsHead: !makeConfig(maxNewTokens: args.maxNew).isPureGreedy,
             imagePrompt: input.hasImages)
+
+        if !args.quiet {
+            let memory = TUFFModelCatalog.all.first {
+                $0.architecture.id.rawValue == architecture.variant.rawValue
+            }.map {
+                InferenceMemoryPlan(descriptor: $0, config: architecture,
+                    contextTokens: args.maxContext, expertCacheSlots: runtime.expertCacheSlots,
+                    prefillChunkTokens: runtime.prefillChunkTokens).estimatedWorkingSetBytes
+            }
+            let settings: [String: String] = [
+                "context": String(args.maxContext),
+                "expert_cache_slots": String(runtime.expertCacheSlots),
+                "expert_cache_policy": runtime.expertCachePolicy.rawValue,
+                "prefill": runtime.prefillPolicy.rawValue,
+                "prefill_chunk_tokens": String(runtime.prefillChunkTokens),
+                "prefill_attention_path": runtime.prefillAttentionPath.rawValue,
+                "head_path": runtime.headPath.rawValue,
+                "rdadvise": runtime.rdadvisePolicy.rawValue,
+                "temperature": String(args.temperature), "top_k": args.topK.map(String.init) ?? "off",
+                "thinking": String(describing: effectiveThinking),
+                "reasoning_effort": String(describing: args.reasoningEffort),
+                "repetition_penalty": String(args.repetitionPenalty),
+                "max_new_tokens": String(args.maxNew),
+                "top_p": args.topP.map { String($0) } ?? "off", "seed": args.seed.map(String.init) ?? "random",
+                "estimated_working_set_bytes": memory.map(String.init) ?? "unavailable"
+            ]
+            let json = try JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys])
+            stderr.write(Data("[resolved inference settings] ".utf8))
+            stderr.write(json)
+            stderr.write(Data("\n".utf8))
+        }
 
         if !args.quiet,
            let notice = prefillCoercionNotice(
@@ -342,22 +374,23 @@ public func run(args: Args,
         if ProcessInfo.processInfo.environment["TUFF_PHASES"] == "1" {
             let ms = { (n: UInt64) in String(format: "%.1f", Double(n) / 1e6) }
             let total = stats.decodeSeconds * 1000
-            let accounted = Double(runner.totalCb1Nanos + runner.totalIoNanos
-                                   + runner.totalCb2Nanos) / 1e6
             var lines = "\n[phases over \(stats.newTokens) tokens, decode "
             lines += String(format: "%.0f", total) + " ms]\n"
             lines += "  cb1 encode+commit: " + ms(runner.totalCb1Nanos) + " ms\n"
             lines += "  expert io await:   " + ms(runner.totalIoNanos) + " ms\n"
             lines += "  cb2 encode+commit: " + ms(runner.totalCb2Nanos) + " ms\n"
-            lines += "  unaccounted (GPU waits): "
-            lines += String(format: "%.1f", total - accounted) + " ms\n"
+            lines += "  exposed prefetch wait: " + ms(runner.exposedPrefetchWaitNanos) + " ms\n"
+            lines += "  timings overlap; cumulative runner counters are not a wall-clock decomposition\n"
             lines += "  gpu layer cbs: " + ms(runner.totalGPULayerNanos) + " ms over "
             lines += "\(runner.totalGPULayerCommandBuffers) cbs\n"
             lines += "  gpu head cbs:  " + ms(runner.totalGPUHeadNanos) + " ms\n"
             lines += "  gpu routed cbs: " + ms(runner.totalGPURoutedNanos) + " ms\n"
             lines += "  gpu shared cbs: " + ms(runner.totalGPUSharedNanos) + " ms\n"
-            lines += "  routed expert reads: \(runner.totalRoutedExpertReads)\n"
-            lines += "  routed expert bytes: \(runner.totalRoutedExpertBytes)\n"
+            lines += "  allocated expert slot bytes: \(model.expertCacheAllocatedBytes)\n"
+            let reads = runner.expertReadMetrics
+            lines += "  logical demand expert reads: \(reads.demandReads), bytes: \(reads.demandBytes), failures: \(reads.demandFailures)\n"
+            lines += "  logical prefetch expert reads: \(reads.prefetchReads), bytes: \(reads.prefetchBytes), failures: \(reads.prefetchFailures)\n"
+            lines += "  logical traffic includes prefill and OS-cache hits; physical SSD traffic is not measured\n"
             lines += "  routed expert cache hits: \(runner.totalRoutedExpertCacheHits)\n"
             lines += "  routed expert cache misses: \(runner.totalRoutedExpertCacheMisses)\n"
             if let lookahead = runner.expertLookahead,
@@ -365,7 +398,7 @@ public func run(args: Args,
                 lines += "  expert lookahead: "
                     + String(format: "%.1f%% of predicted experts routed, ",
                              lookahead.precision * 100)
-                    + "\(lookahead.readsIssued) reads ahead"
+                    + "\(lookahead.readsIssued) prefetch batches"
                     + (lookahead.enabled ? "" : ", turned off") + "\n"
             }
             stderr.write(Data(lines.utf8))

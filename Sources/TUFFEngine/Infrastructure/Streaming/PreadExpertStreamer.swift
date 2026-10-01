@@ -75,6 +75,14 @@ public final class PreadExpertStreamer: @unchecked Sendable {
     private var expertUseCount: [Int]
     private var useClock = 0
     private let cacheLock = NSLock()
+    private let metricsLock = NSLock()
+    private var metrics = ExpertReadMetrics()
+
+    public var readMetrics: ExpertReadMetrics {
+        metricsLock.lock()
+        defer { metricsLock.unlock() }
+        return metrics
+    }
 
     public convenience init(layout: StreamLayout,
                             device: MTLDevice,
@@ -182,7 +190,8 @@ public final class PreadExpertStreamer: @unchecked Sendable {
         return try loadExpert(layer: layer, expert: expert, slot: slot)
     }
 
-    public func loadExpert(layer: Int, expert: Int, slot: Int) throws
+    public func loadExpert(layer: Int, expert: Int, slot: Int,
+                           purpose: ExpertReadPurpose = .demand) throws
         -> (buffer: MTLBuffer, offset: UInt64, size: UInt64) {
         guard slot >= 0 && slot < slotCount else {
             throw StreamerError.slotOutOfRange(slot)
@@ -191,10 +200,18 @@ public final class PreadExpertStreamer: @unchecked Sendable {
         guard regionOffset + layout.expertStride <= layout.streamSize else {
             throw StreamerError.offsetOutOfRange(regionOffset)
         }
+        var bytes: UInt64 = 0
+        var succeeded = false
+        defer {
+            metricsLock.lock()
+            metrics.record(purpose: purpose, bytes: bytes, succeeded: succeeded)
+            metricsLock.unlock()
+        }
         try readFull(
             into: slotPointers[slot],
             fileOffset: layout.streamOffset + regionOffset,
-            count: Int(layout.expertStride))
+            count: Int(layout.expertStride), bytesRead: &bytes)
+        succeeded = true
         return (slotBuffers[slot], 0, layout.expertStride)
     }
 
@@ -280,7 +297,8 @@ public final class PreadExpertStreamer: @unchecked Sendable {
             hits: experts.count - misses.count)
     }
 
-    public func executeExpertCachePlan(_ plan: ExpertCachePlan) throws
+    public func executeExpertCachePlan(_ plan: ExpertCachePlan,
+                                       purpose: ExpertReadPurpose = .demand) throws
         -> [(buffer: MTLBuffer, offset: UInt64, size: UInt64)] {
         precondition(plan.experts.count <= slotCount,
                      "expert cache plan exceeds slot count")
@@ -294,9 +312,9 @@ public final class PreadExpertStreamer: @unchecked Sendable {
         if plan.misses.count == 1 {
             let index = plan.misses[0]
             _ = try loadExpert(layer: 0, expert: plan.experts[index],
-                               slot: plan.assignedSlots[index])
+                               slot: plan.assignedSlots[index], purpose: purpose)
         } else {
-            try loadCacheMissesConcurrently(plan)
+            try loadCacheMissesConcurrently(plan, purpose: purpose)
         }
 
         cacheLock.lock()
@@ -308,7 +326,8 @@ public final class PreadExpertStreamer: @unchecked Sendable {
         return expertCachePlanBuffers(plan)
     }
 
-    private func loadCacheMissesConcurrently(_ plan: ExpertCachePlan) throws {
+    private func loadCacheMissesConcurrently(_ plan: ExpertCachePlan,
+                                              purpose: ExpertReadPurpose) throws {
         let errorLock = NSLock()
         nonisolated(unsafe) var firstError: Error?
         DispatchQueue.concurrentPerform(iterations: plan.misses.count) { missOffset in
@@ -317,7 +336,7 @@ public final class PreadExpertStreamer: @unchecked Sendable {
                 _ = try self.loadExpert(
                     layer: 0,
                     expert: plan.experts[index],
-                    slot: plan.assignedSlots[index])
+                    slot: plan.assignedSlots[index], purpose: purpose)
             } catch {
                 errorLock.lock()
                 if firstError == nil { firstError = error }
@@ -421,7 +440,7 @@ public final class PreadExpertStreamer: @unchecked Sendable {
 
     private func readFull(into destination: UnsafeMutableRawPointer,
                           fileOffset: UInt64,
-                          count: Int) throws {
+                          count: Int, bytesRead: inout UInt64) throws {
         var filled = 0
         while filled < count {
             let readCount = pread(
@@ -437,6 +456,7 @@ public final class PreadExpertStreamer: @unchecked Sendable {
                 throw StreamerError.sizeMismatch(expected: UInt64(count), actual: UInt64(filled))
             }
             filled += readCount
+            bytesRead += UInt64(readCount)
         }
     }
 

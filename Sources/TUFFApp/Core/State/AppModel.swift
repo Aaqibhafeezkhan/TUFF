@@ -872,6 +872,9 @@ public final class AppModel {
         coordinator.descriptor.contextEligibility(
             contextTokens: contextTokens,
             expertCacheSlots: expertCacheSlots,
+            prefillChunkTokens: coordinator.id == selectedModelID
+                ? runtimeOptions.prefillChunkTokens
+                : coordinator.descriptor.recommendedPrefillChunkTokens(on: deviceCapabilities),
             on: deviceCapabilities)
     }
 

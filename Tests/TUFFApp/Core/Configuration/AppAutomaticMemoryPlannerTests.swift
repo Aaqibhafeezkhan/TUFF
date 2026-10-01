@@ -78,7 +78,8 @@ import TUFFModelCatalog
         let large = try #require(AppAutomaticMemoryPlanner.plan(
             for: .qwen38FlashNext, on: device(64), profile: .balanced))
         #expect(large.contextTokens > small.contextTokens)
-        #expect(small.contextTokens >= 32_768)
+        #expect(small.contextTokens >= 16_384)
+        #expect(small.estimatedWorkingSetBytes <= small.safeBudgetBytes)
     }
 
     @Test func contextTakesTheLongestWindowThatFits() throws {
@@ -187,6 +188,16 @@ import TUFFModelCatalog
         #expect(resolved.expertCacheSlots
             == RuntimeConfiguration.minimumExpertCacheSlotsForChunkedPrefill)
         #expect(resolved.prefillEnabled)
+    }
+
+
+    @Test func gptOss120DoesNotBuySixteenSlotsOnSixteenGB() throws {
+        let small = try #require(AppAutomaticMemoryPlanner.plan(for: AppModelInstallDescriptor(catalog: TUFFModelCatalog.gptOss_120B), on: device(16)))
+        #expect(small.expertCacheSlots == 4)
+        #expect(small.estimatedWorkingSetBytes <= small.safeBudgetBytes)
+        let large = try #require(AppAutomaticMemoryPlanner.plan(for: AppModelInstallDescriptor(catalog: TUFFModelCatalog.gptOss_120B), on: device(32)))
+        #expect(large.expertCacheSlots == 16)
+        #expect(large.estimatedWorkingSetBytes <= large.safeBudgetBytes)
     }
 
     // MARK: - Budget

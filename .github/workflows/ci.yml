@@ -29,6 +29,11 @@ jobs:
         run: swift build -c release
       - name: Run serial tests
         run: Scripts/test.sh
+      - name: Test benchmark reporting
+        run: |
+          python3 Scripts/test_benchmark_reporting.py
+          ruby Scripts/test_benchmark_simple.rb
+          ruby Scripts/test_benchmark_v2.rb
       - name: Check for tracked symlinks
         run: ruby Scripts/check_tracked_symlinks.rb
       - name: Check Markdown links
