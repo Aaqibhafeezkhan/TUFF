@@ -1,36 +1,75 @@
-name: Performance or benchmark report
-description: Share a reproducible measurement from Apple Silicon.
-title: "[Benchmark]: "
+name: Performance report
+description: TUFF is slower than expected, got slower after an update, or you have a measurement to share.
+title: "[Performance]: "
 labels:
   - performance
+  - needs-triage
 body:
   - type: markdown
     attributes:
-      value: Run Scripts/benchmark_simple.rb or Scripts/benchmark_v2.rb, and remove personal paths or unrelated process details.
-  - type: input
-    id: commit
+      value: |
+        Timing on a Mac varies a lot between runs, especially for models that
+        stream experts from the SSD. Repeated runs with the same settings are far
+        more useful than one number. `Scripts/benchmark_inference.py` runs and
+        records repeated, paired comparisons; see CONTRIBUTING.md.
+
+        Please leave out private prompts and file paths. The built-in benchmark
+        prompts are fine to name.
+  - type: dropdown
+    id: kind
     attributes:
-      label: Commit
-      description: Exact commit SHA used for the measurement.
+      label: What kind of report is this?
+      options:
+        - Slower after updating TUFF
+        - Slower than expected on my Mac
+        - Measurement on hardware not tested before
+        - Comparison between two builds or settings
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: TUFF version or commit
+      description: For a comparison, give both, for example "6.1.0 vs 7.0.0".
+      placeholder: 7.0.0
     validations:
       required: true
   - type: input
     id: hardware
     attributes:
-      label: Mac hardware and memory
-      placeholder: M2 MacBook Air, 8 GB
+      label: Mac, chip, GPU cores and memory
+      placeholder: MacBook Air, M2, 10-core GPU, 16 GB
     validations:
       required: true
   - type: input
     id: environment
     attributes:
-      label: macOS and Swift versions
+      label: macOS version (and Swift version for source builds)
+      placeholder: macOS 26.6, Swift 6.4
+    validations:
+      required: true
+  - type: dropdown
+    id: model
+    attributes:
+      label: Model
+      options:
+        - Gemma 4 E2B
+        - Gemma 4 E4B
+        - Gemma 4 12B QAT
+        - Gemma 4 26B-A4B
+        - Qwen3.6 35B-A3B
+        - Qwen3.8 Flash Next
+        - GPT-OSS 20B
+        - GPT-OSS 120B
+        - MiniMax M2.7
+        - Several models
     validations:
       required: true
   - type: textarea
     id: command
     attributes:
-      label: Command and runtime controls
+      label: Command or settings
+      description: The exact command, or the app settings (context, expert cache, prefill chunk, thinking, sampling).
       render: shell
     validations:
       required: true
@@ -38,20 +77,18 @@ body:
     id: workload
     attributes:
       label: Workload
-      description: Include the sanitized prompt, prompt-token count, generated-token count, and cache state.
+      description: Prompt tokens, generated tokens, whether the model had just been loaded, and what else was running.
     validations:
       required: true
   - type: textarea
     id: results
     attributes:
       label: Results
-      description: Include prefill, TTFT, decode throughput, memory, and repeated-run observations when available.
+      description: Every repetition, not only the best one. Include prefill time, time to first token, decode tok/s and stop reason when you have them.
     validations:
       required: true
   - type: textarea
-    id: parity
+    id: output
     attributes:
-      label: Correctness and output
-      description: Include generated token IDs or text when comparing runtime variants.
-    validations:
-      required: true
+      label: Output check (optional)
+      description: When comparing builds, did both produce the same text or token IDs?

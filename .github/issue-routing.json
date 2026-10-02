@@ -1,0 +1,32 @@
+{
+  "labels": {
+    "bug": "Something isn't working",
+    "enhancement": "New feature or request",
+    "performance": "Speed, memory or benchmark report",
+    "needs-triage": "Not yet reviewed by a maintainer",
+    "accessibility": "Barrier affecting people with disabilities",
+    "documentation": "Improvements or additions to documentation",
+    "area: chat": "Chat, prompts and generation in the app",
+    "area: models": "Model downloads, installation and model support",
+    "area: inference": "Runtime speed, memory and kernels",
+    "area: server": "The local OpenAI-compatible server",
+    "area: cli": "The tuff command line tools",
+    "area: updates": "In-app updates, release withdrawal and recovery",
+    "area: settings": "App settings",
+    "area: build": "Building from source, tests and CI"
+  },
+  "areas": {
+    "Chat and generation": ["area: chat"],
+    "Model downloads and installation": ["area: models"],
+    "New model support": ["area: models"],
+    "Inference speed or memory": ["area: inference"],
+    "Local server (tuff serve or the Server screen)": ["area: server"],
+    "Command line (tuff, TUFFCLI)": ["area: cli"],
+    "Updates and recovery": ["area: updates"],
+    "Settings": ["area: settings"],
+    "Appearance or accessibility": ["accessibility"],
+    "Building from source or tests": ["area: build"],
+    "Documentation, testing or contributing": ["documentation", "area: build"],
+    "Other": []
+  }
+}

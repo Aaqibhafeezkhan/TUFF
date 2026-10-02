@@ -47,6 +47,13 @@ Do not add an undocumented runtime switch, silently change a production
 default, commit model weights, duplicate a local model, or purge someone else's
 download state to make a test pass.
 
+## Setup
+
+Install Xcode with Swift 6.2 or newer, select it with `xcode-select`, then clone
+this repository and run `swift package resolve`. `swift build -c release`
+builds the products. Clone builds store models and settings under `scratch/`;
+packaged builds use Application Support. Do not copy model weights into Git.
+
 ## Tests
 
 Behavior changes should include a focused test in the same commit. Match the
@@ -73,16 +80,31 @@ Before requesting review, also run the checks that apply to your change:
 
 ```bash
 swift build -c release
-ruby Scripts/check_markdown_links.rb
-ruby Scripts/check_brand_assets.rb
-ruby Scripts/check_app_version.rb
+Scripts/check.sh
 ```
 
 If your change affects packaging, verify the archive rather than only the build
 directory:
 
 ```bash
-Scripts/package_app.sh 2.0.0
+Scripts/package_app.sh 7.0.0 dist/v7.0.0
+```
+
+`Scripts/check.sh` runs the serial Swift suite, Python/Ruby harness regressions,
+GitHub configuration, symlink, documentation, brand and version checks, then
+packages an app and exercises isolated signed-updater fixtures. Use
+`Scripts/check.sh --source-only` when iterating on source. Focused Swift tests
+use `Scripts/test.sh --filter SuiteName`.
+
+CI runs the complete model-free gate on non-draft PRs and pushes to main. It
+uses toy/CPU-reference fixtures and ephemeral update keys, with no model packs,
+production signing key or real-model benchmark. Model and hardware qualification
+remain separate. For example:
+
+```sh
+python3 Scripts/validate_release_models.py --help
+python3 Scripts/validate_release_interfaces.py --help
+python3 Scripts/benchmark_inference.py --help
 ```
 
 State exactly what you ran and what you did not run. A model-free green suite
@@ -186,3 +208,38 @@ products, downloaded checkpoints, personal benchmark data, or secrets.
 
 By contributing, you agree that your contribution is licensed under the
 repository's [Apache License 2.0](LICENSE).
+
+## Local Codex review
+
+The repository skill lives at [.agents/skills/tuff-review/SKILL.md](.agents/skills/tuff-review/SKILL.md).
+Codex discovers repository skills under `.agents/skills`; the local
+`skills/list` call also verifies this path. Start a new Codex session in this
+checkout after adding or changing a skill. No separate global installation is
+needed.
+
+Invoke `$tuff-review` and name the scope: staged changes, uncommitted changes,
+or an explicit range such as `5f84318..HEAD`. The review reports actionable
+findings with file:line locations, commands actually run and missing validation.
+It does not push, publish or create a remote review. The repository has no
+remote AI review workflow.
+
+## Direct-to-main release checklist
+
+1. Preserve unrelated work and record the intended release base and version.
+2. Run `Scripts/check.sh` and package the version declared by `TUFFVersion`.
+3. Extract the archive outside the checkout. Verify signatures, resources,
+   version, CLI/app/server interfaces and applicable real-model qualification.
+   Run models sequentially and keep benchmarks separate from builds and tests.
+4. Write measured results and limits in the release validation document.
+5. Run `$tuff-review` over the full candidate diff. Fix substantive findings,
+   rerun affected checks, and repeat review after material changes.
+6. Commit scoped local changes. Stop at any requested human review gate.
+7. Only when publication is authorized, push main and wait for CI. Generate
+   the signed appcast, approve the keychain prompt personally, and publish a
+   new tag and release. Never overwrite existing assets or move tags.
+8. Verify remote commit/tag, downloaded archive/checksum, packaged version,
+   app signature and signed feed before cleaning up generated local artifacts.
+
+See [withdrawal and recovery](docs/RELEASE_RECOVERY.md) for a defective release.
+Never test withdrawal on a real public release, weaken signature verification,
+or change the personal installed app during qualification.

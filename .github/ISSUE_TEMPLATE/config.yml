@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/drumih/turbo-fieldfare/security/advisories/new
+    url: https://github.com/rexmhall09/TUFF/security/advisories/new
     about: Report suspected security vulnerabilities privately.
+  - name: An update broke TUFF or it will not open
+    url: https://github.com/rexmhall09/TUFF/blob/main/docs/RELEASE_RECOVERY.md#if-tuff-will-not-open
+    about: Recovery steps that keep your chats, settings and models. Then open a bug report.

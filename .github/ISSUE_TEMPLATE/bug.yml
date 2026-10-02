@@ -1,60 +1,133 @@
 name: Bug report
-description: Report reproducible incorrect behavior or a crash.
+description: Something in TUFF is broken, crashes, or gives a wrong result.
 title: "[Bug]: "
 labels:
   - bug
+  - needs-triage
 body:
   - type: markdown
     attributes:
-      value: Do not include credentials, private paths, or model weights.
+      value: |
+        Thanks for reporting this. In the app, **Help > Report a Bug** fills in the
+        version, Mac and model details below and lets you preview an optional
+        diagnostic summary before anything is copied.
+
+        You never need to share a private prompt, a chat, an image, a token or a
+        file path. If the problem only happens with a private prompt, describe
+        its shape instead (for example "a 3,000-token pasted log, thinking on").
+        Suspected security problems go to
+        [private vulnerability reporting](https://github.com/rexmhall09/TUFF/security/advisories/new).
   - type: input
-    id: commit
+    id: version
     attributes:
-      label: Commit
-      description: Commit SHA or release where the problem occurs.
+      label: TUFF version
+      description: Shown in TUFF > About TUFF, or run `tuff --version`. For a source build, add the commit (`git rev-parse --short HEAD`).
+      placeholder: 7.0.0, or 7.0.0 at commit abc1234
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install TUFF?
+      options:
+        - Release download or in-app update
+        - Built from source
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Where does the problem show up? Pick all that apply.
+      multiple: true
+      options:
+        - Chat and generation
+        - Model downloads and installation
+        - Local server (tuff serve or the Server screen)
+        - Command line (tuff, TUFFCLI)
+        - Updates and recovery
+        - Settings
+        - Appearance or accessibility
+        - Building from source or tests
+        - Other
     validations:
       required: true
   - type: input
     id: hardware
     attributes:
-      label: Mac hardware and memory
-      placeholder: M2 MacBook Air, 8 GB
+      label: Mac, chip and memory
+      description: Apple menu > About This Mac.
+      placeholder: MacBook Air, M2, 16 GB
     validations:
       required: true
   - type: input
-    id: environment
+    id: macos
     attributes:
-      label: macOS and Swift versions
-      placeholder: macOS 26.x, Swift 6.2
-    validations:
-      required: true
-  - type: textarea
-    id: reproduction
-    attributes:
-      label: Reproduction steps
-      description: Include the smallest command, prompt, or interaction that reproduces the issue.
-    validations:
-      required: true
-  - type: textarea
-    id: expected
-    attributes:
-      label: Expected behavior
-    validations:
-      required: true
-  - type: textarea
-    id: observed
-    attributes:
-      label: Observed behavior
-      description: Include sanitized logs or diagnostics when useful.
+      label: macOS version
+      placeholder: macOS 26.6
     validations:
       required: true
   - type: dropdown
     id: model
     attributes:
-      label: Does this require the installed model?
+      label: Model
+      description: The model loaded when the problem happened.
       options:
-        - "Yes"
-        - "No"
-        - Unsure
+        - Not model-specific
+        - Gemma 4 E2B
+        - Gemma 4 E4B
+        - Gemma 4 12B QAT
+        - Gemma 4 26B-A4B
+        - Qwen3.6 35B-A3B
+        - Qwen3.8 Flash Next
+        - GPT-OSS 20B
+        - GPT-OSS 120B
+        - MiniMax M2.7
+        - Several models
+        - Not sure
     validations:
       required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: The smallest set of steps, command or request that shows the problem. Describe prompts instead of pasting private ones.
+      placeholder: |
+        1. Load Gemma 4 26B-A4B with the default settings.
+        2. Send a short question with thinking off.
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: What happened instead
+      description: Include the exact error text. Does it happen every time?
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostic summary (optional)
+      description: Paste the summary from Help > Report a Bug if you chose to include it. It lists versions, hardware and settings, not chats or paths.
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or crash report (optional)
+      description: Remove your user name, file paths and anything private before pasting.
+      render: shell
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Before submitting
+      options:
+        - label: I removed credentials, private paths, personal prompts and chat content from this report.
+          required: true

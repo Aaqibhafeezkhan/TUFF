@@ -1,0 +1,37 @@
+name: Issue triage
+
+# Adds area labels from the issue form's "Area" answer. The issue body is
+# passed through the environment and only selects labels from
+# .github/issue-routing.json; no contributor code is checked out or run.
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/issue-routing.json
+            Scripts/route_issue.py
+          sparse-checkout-cone-mode: false
+      - name: Add area labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_BODY: ${{ github.event.issue.body }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+        run: |
+          labels="$(python3 Scripts/route_issue.py)"
+          if [ -z "$labels" ]; then
+            echo "No area selected."
+            exit 0
+          fi
+          args=()
+          while IFS= read -r label; do args+=(--add-label "$label"); done <<< "$labels"
+          gh issue edit "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" "${args[@]}"

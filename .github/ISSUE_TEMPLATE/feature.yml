@@ -1,36 +1,69 @@
-name: Feature proposal
-description: Propose a focused runtime, platform, or tooling improvement.
+name: Feature request
+description: Suggest something TUFF should do, or do differently.
 title: "[Feature]: "
 labels:
   - enhancement
+  - needs-triage
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Small ideas are welcome. For a large change to the runtime, model format
+        or a new model family, opening this first lets the direction be agreed
+        before the work gets expensive.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - Chat and generation
+        - Model downloads and installation
+        - New model support
+        - Inference speed or memory
+        - Local server (tuff serve or the Server screen)
+        - Command line (tuff, TUFFCLI)
+        - Updates and recovery
+        - Settings
+        - Appearance or accessibility
+        - Documentation, testing or contributing
+        - Other
+    validations:
+      required: true
   - type: textarea
     id: problem
     attributes:
-      label: Problem
-      description: Describe the concrete limitation or use case.
+      label: Problem or use case
+      description: What are you trying to do, and what gets in the way today?
     validations:
       required: true
   - type: textarea
     id: proposal
     attributes:
-      label: Proposed change
-      description: Describe the smallest useful implementation and affected surfaces.
+      label: Suggested change
+      description: The smallest version that would help. Mention which parts of TUFF it touches if you know.
     validations:
       required: true
   - type: textarea
-    id: evidence
+    id: model
     attributes:
-      label: Evidence or measurements
-      description: Include profiler data, benchmark results, or primary references when applicable.
+      label: Model details (for new model support)
+      description: Repository, revision, license, architecture, and which Macs it should run on.
   - type: textarea
     id: memory
     attributes:
-      label: Bounded-memory behavior
-      description: Explain how the proposal remains valid on an 8 GB Mac without loading full shards or tensors.
-    validations:
-      required: true
+      label: Memory and hardware
+      description: For runtime or model work, how it stays within memory on smaller Macs. Write "Not applicable" otherwise.
   - type: textarea
     id: alternatives
     attributes:
-      label: Alternatives considered
+      label: Alternatives or evidence
+      description: Other approaches, measurements or references.
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Would you like to work on this?
+      options:
+        - "Yes"
+        - Maybe, with some guidance
+        - "No"
