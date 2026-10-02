@@ -6,6 +6,7 @@ import TUFFServerCore
 @MainActor
 @Observable
 public final class AppServerController {
+    public let background = AppBackgroundAPIController()
     public let store: AppServerStore
     private let server: AppHostedServer
     private var operationGeneration: UInt64 = 0
@@ -23,7 +24,7 @@ public final class AppServerController {
     }
 
     public func start(_ configuration: AppHostedServerConfiguration) {
-        guard !store.isBusy else { return }
+        guard !store.isBusy, !background.settings.enabled else { return }
         operationGeneration &+= 1
         let generation = operationGeneration
         store.status = .starting

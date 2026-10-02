@@ -1,6 +1,7 @@
 import Foundation
 import Metal
 import TUFFEngine
+import TUFFModelCatalog
 import Synchronization
 
 final class GenerationTaskRegistry: Sendable {
@@ -65,9 +66,10 @@ public final class RealInferenceClient: AppModelLifecycleClient, @unchecked Send
     private let memorySampler: AppMemorySampler
     private let generationTasks = GenerationTaskRegistry()
 
-    public init(memorySampler: AppMemorySampler = AppMemorySampler()) {
+    public init(memorySampler: AppMemorySampler = AppMemorySampler(),
+                residencyCoordinator: AppResidencyCoordinator? = nil) {
         self.memorySampler = memorySampler
-        self.session = RealInferenceSession()
+        self.session = RealInferenceSession(residencyCoordinator: residencyCoordinator)
     }
 
     public func ensureLoaded(modelDirectory: URL,
@@ -155,6 +157,12 @@ struct TokenizerDirectoryCache: Equatable, Sendable {
 /// here: a reload releases the loaded model, runner, and scratch before constructing
 /// replacements, so two models are never alive at once.
 actor RealInferenceSession {
+    private let residencyCoordinator: AppResidencyCoordinator?
+    private var residencyLease: TUFFResidencyLease?
+
+    init(residencyCoordinator: AppResidencyCoordinator? = nil) {
+        self.residencyCoordinator = residencyCoordinator
+    }
     private var loadedKey: SessionLoadKey?
     private var ctx: MetalContext?
     private var tokenizer: GFTokenizer?
@@ -190,6 +198,7 @@ actor RealInferenceSession {
         loadedKey = nil
         visionRuntime = nil
         visionRuntimeError = nil
+        residencyLease = nil
 
         let start = Date()
         do {
@@ -199,6 +208,13 @@ actor RealInferenceSession {
                 throw AppInferenceError.modelNotFound(key.directory.path)
             }
 
+            if let residencyCoordinator {
+                residencyLease = try await residencyCoordinator.reserve(
+                    directory: key.directory, context: key.maxContext, slots: key.options.expertCacheSlots,
+                    chunk: key.options.prefillChunkTokens)
+            }
+            var loadSucceeded = false
+            defer { if !loadSucceeded { residencyLease = nil } }
             onState(.loading(.tokenizer))
             if tokenizer == nil || tokenizerDirectoryCache.shouldReload(for: key.directory) {
                 do {
@@ -261,6 +277,7 @@ actor RealInferenceSession {
             }
             try Task.checkCancellation()
 
+            loadSucceeded = true
             runner = loadedRunner
             scratch = loadedScratch
             model = loadedModel
@@ -574,6 +591,7 @@ actor RealInferenceSession {
         tokenizer = nil
         tokenizerDirectoryCache.clear()
         loadedKey = nil
+        residencyLease = nil
     }
 
     func run(request: AppGenerationRequest,

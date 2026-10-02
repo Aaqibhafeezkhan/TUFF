@@ -1288,4 +1288,19 @@ import TUFFModelCatalog
                 "a persisted keep-ready came back through the model path change")
     }
 
+    @Test func editingDefaultsCannotOverwriteNewerSettings() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let model = root.appendingPathComponent("model.gturbo")
+        let url = MacAppSettingsFileStore.fileURL(forModelDirectory: model)
+        let data = Data(#"{"version":99,"future":"preserve"}"#.utf8)
+        try data.write(to: url)
+        var settings = MacAppSettingsFileStore.loadOrCreate(forModelDirectory: model)
+        settings.temperature = 0.7
+        #expect(throws: MacAppSettingsFileStore.NewerSettingsOnDisk.self) {
+            try MacAppSettingsFileStore.save(settings, forModelDirectory: model)
+        }
+        #expect(try Data(contentsOf: url) == data)
+    }
+
 }

@@ -466,6 +466,11 @@ enum MacAppSettingsFileStore {
                      fileManager: FileManager = .default) throws {
         guard settings.isValid() else { throw InvalidSettings() }
         let fileURL = fileURL(forModelDirectory: modelDirectory)
+        if let data = try? Data(contentsOf: fileURL),
+           let stamp = try? JSONDecoder().decode(VersionStamp.self, from: data),
+           stamp.version > MacAppSettings.currentVersion {
+            throw NewerSettingsOnDisk(version: stamp.version)
+        }
         try fileManager.createDirectory(
             at: fileURL.deletingLastPathComponent(),
             withIntermediateDirectories: true)
@@ -477,4 +482,5 @@ enum MacAppSettingsFileStore {
     }
 
     private struct InvalidSettings: Error {}
+    struct NewerSettingsOnDisk: Error { let version: Int }
 }

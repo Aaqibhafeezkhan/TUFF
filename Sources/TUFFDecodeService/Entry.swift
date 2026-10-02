@@ -38,7 +38,7 @@ enum DecodeServiceError: Error, CustomStringConvertible {
         }
 
         DecodeUnixSocket.ignoreSIGPIPEProcessWide()
-        let client = RealInferenceClient()
+        let client = RealInferenceClient(residencyCoordinator: .current())
         let commands = DecodeCommandQueue()
         let input = Thread {
             do {

@@ -1,0 +1,65 @@
+import Foundation
+import ServiceManagement
+import Testing
+import TUFFModelCatalog
+@testable import TUFFAppServer
+
+@MainActor private final class FixtureAgent: BackgroundAgentService {
+    var status: SMAppService.Status = .notRegistered
+    var calls: [String] = []
+    var fail = false
+    func register() throws {
+        calls.append("register")
+        if fail { throw NSError(domain: "FixtureRegistration", code: 1) }
+        status = .enabled
+    }
+    func unregister() async throws { calls.append("unregister"); status = .notRegistered }
+}
+
+@Suite(.serialized) struct AppBackgroundAPIControllerTests {
+    @MainActor private func settle(_ controller: AppBackgroundAPIController) async throws {
+        for _ in 0..<1000 {
+            if !controller.isChanging { return }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        throw NSError(domain: "FixtureTimeout", code: 1)
+    }
+    @MainActor @Test func enablePortRestartAndDisablePersistInOrder() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let agent = FixtureAgent(), file = root.appendingPathComponent("settings.json")
+        let controller = AppBackgroundAPIController(service: agent, settingsURL: file)
+        #expect(controller.defaultModelID == TUFFModelCatalog.default.apiModelID)
+        controller.update { $0.enabled = true; $0.port = 65431 }
+        try await settle(controller)
+        #expect(agent.calls == ["register"])
+        controller.updatePort("65432")
+        try await settle(controller)
+        #expect(agent.calls == ["register", "unregister", "register"])
+        controller.update { $0.enabled = false }
+        try await settle(controller)
+        #expect(agent.calls == ["register", "unregister", "register", "unregister"])
+        #expect(TUFFBackgroundServerSettingsStore.load(from: file) == .loaded(controller.settings))
+    }
+    @MainActor @Test func registrationFailureRestoresSavedSettingAndCloneCannotEnable() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let agent = FixtureAgent(), file = root.appendingPathComponent("settings.json")
+        agent.fail = true
+        let controller = AppBackgroundAPIController(service: agent, settingsURL: file)
+        agent.status = .notFound
+        controller.update { $0.defaultModel = "gemma4-e2b" }
+        try await settle(controller)
+        #expect(agent.calls.isEmpty)
+        controller.updatePort("65536")
+        #expect(controller.message == "Port must be a number from 1 to 65535.")
+        controller.update { $0.enabled = true }
+        try await settle(controller)
+        #expect(!controller.settings.enabled)
+        #expect(controller.message?.contains("Could not change") == true)
+        let clone = AppBackgroundAPIController(service: nil, settingsURL: root.appendingPathComponent("clone.json"))
+        clone.update { $0.enabled = true }
+        #expect(!clone.isAvailable && !clone.settings.enabled)
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("clone.json").path))
+    }
+}

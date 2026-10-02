@@ -569,7 +569,9 @@ private struct ServerWorkspaceView: View {
                 WorkspaceTitle(
                     title: "Server",
                     subtitle: "Use TUFF through an OpenAI-compatible loopback endpoint.")
+                BackgroundAPICard(model: model, controller: controller.background)
                 statusCard
+                    .disabled(controller.background.settings.enabled)
                 configurationCard
                 activityCard
                 if !model.serverStore.recentErrors.isEmpty { errorsCard }
@@ -644,7 +646,7 @@ private struct ServerWorkspaceView: View {
                     if let configuration { controller.start(configuration) }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(configuration == nil)
+                .disabled(configuration == nil || controller.background.settings.enabled)
                 .keyboardShortcut("s", modifiers: [.command, .option])
             } else if model.hasStaleLoadedRuntime {
                 Button("Reload Model", action: model.reloadModel)
