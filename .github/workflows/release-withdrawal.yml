@@ -1,0 +1,28 @@
+name: Withdraw defective release
+on:
+  workflow_dispatch:
+    inputs:
+      withdrawn:
+        description: Defective published version (for example 7.0.0)
+        required: true
+        type: string
+      known_good:
+        description: Known-good stable signed-feed version (for example a recovery 7.0.1)
+        required: true
+        type: string
+permissions:
+  contents: write
+concurrency:
+  group: release-withdrawal
+  cancel-in-progress: false
+jobs:
+  withdraw:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Withdraw without deleting tags or assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WITHDRAWN: ${{ inputs.withdrawn }}
+          KNOWN_GOOD: ${{ inputs.known_good }}
+        run: python3 Scripts/release_recovery.py withdraw --withdrawn "$WITHDRAWN" --known-good "$KNOWN_GOOD" --apply

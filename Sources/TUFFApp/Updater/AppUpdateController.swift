@@ -57,6 +57,8 @@ public enum AppUpdateConfigurationError: Error, Equatable, Sendable {
 @MainActor
 @Observable
 public final class AppUpdateController {
+    public var recoveryMessage: String?
+    @ObservationIgnored private var recoveryDelegate: RecoveryUpdaterDelegate?
     public let configuration: AppUpdateConfiguration?
     public private(set) var unavailableReason: String?
     public private(set) var allowsAutomaticUpdates = false
@@ -65,7 +67,7 @@ public final class AppUpdateController {
     public var automaticallyChecksForUpdates: Bool {
         get { checksForUpdates }
         set {
-            guard let updater = standardController?.updater else { return }
+            guard let updater = updater else { return }
             updater.automaticallyChecksForUpdates = newValue
             checksForUpdates = updater.automaticallyChecksForUpdates
             allowsAutomaticUpdates = updater.allowsAutomaticUpdates
@@ -76,7 +78,7 @@ public final class AppUpdateController {
     public var automaticallyDownloadsUpdates: Bool {
         get { downloadsUpdates }
         set {
-            guard let updater = standardController?.updater else { return }
+            guard let updater = updater else { return }
             updater.automaticallyDownloadsUpdates = newValue
             downloadsUpdates = updater.automaticallyDownloadsUpdates
         }
@@ -86,7 +88,8 @@ public final class AppUpdateController {
     private var downloadsUpdates = false
 
     @ObservationIgnored
-    private var standardController: SPUStandardUpdaterController?
+    private var updater: SPUUpdater?
+    @ObservationIgnored private var userDriver: RecoveryUserDriver?
 
     public init(infoDictionary: [String: Any]? = Bundle.main.infoDictionary) {
         switch AppUpdateConfiguration.resolve(infoDictionary: infoDictionary) {
@@ -95,23 +98,33 @@ public final class AppUpdateController {
             unavailableReason = error.userMessage
         case .success(let configuration):
             self.configuration = configuration
-            let controller = SPUStandardUpdaterController(
-                startingUpdater: false,
-                updaterDelegate: nil,
-                userDriverDelegate: nil)
+            let delegate = RecoveryUpdaterDelegate(applicationSupport: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!)
+            recoveryDelegate = delegate
+            delegate.report = { [weak self] in self?.recoveryMessage = $0 }
+            let driver = RecoveryUserDriver(hostBundle: .main, delegate: nil)
+            driver.checkCompatibility = { item in
+                let metadata = RecoveryUpdateMetadata(properties: item.propertiesDictionary)
+                guard metadata.isRecovery else { return }
+                try RecoveryUpdatePolicy.checkForRunningApp(metadata,
+                    local: RecoveryUpdatePolicy.localVersions(applicationSupport: delegate.applicationSupport))
+            }
+            driver.report = { [weak self] in self?.recoveryMessage = $0 }
+            userDriver = driver
+            let controller = SPUUpdater(hostBundle: .main, applicationBundle: .main,
+                userDriver: driver, delegate: delegate)
             do {
-                try controller.updater.start()
-                standardController = controller
-                checksForUpdates = controller.updater.automaticallyChecksForUpdates
-                downloadsUpdates = controller.updater.automaticallyDownloadsUpdates
-                allowsAutomaticUpdates = controller.updater.allowsAutomaticUpdates
+                try controller.start()
+                updater = controller
+                checksForUpdates = controller.automaticallyChecksForUpdates
+                downloadsUpdates = controller.automaticallyDownloadsUpdates
+                allowsAutomaticUpdates = controller.allowsAutomaticUpdates
                 // Sparkle's own scheduler only checks once its interval has
                 // elapsed since the last check, so a launch shortly after the
                 // previous one would otherwise check for nothing. Sparkle's
                 // header docs recommend calling this once, right after
                 // starting, to force a check on every launch instead.
                 if checksForUpdates {
-                    controller.updater.checkForUpdatesInBackground()
+                    controller.checkForUpdatesInBackground()
                 }
             } catch {
                 unavailableReason = "The updater could not start: \(error)"
@@ -119,15 +132,21 @@ public final class AppUpdateController {
         }
     }
 
-    public var isAvailable: Bool { standardController != nil }
+    public var isAvailable: Bool { updater != nil }
 
     public var canCheckForUpdates: Bool {
-        standardController?.updater.canCheckForUpdates ?? false
+        updater?.canCheckForUpdates ?? false
+    }
+
+    public func checkForRecoveryUpdate() {
+        guard let updater = updater, updater.canCheckForUpdates else { return }
+        recoveryMessage = nil
+        recoveryDelegate?.probing = true
+        updater.checkForUpdateInformation()
     }
 
     public func checkForUpdates() {
-        guard let standardController,
-              standardController.updater.canCheckForUpdates else { return }
-        standardController.checkForUpdates(nil)
+        guard let updater, updater.canCheckForUpdates else { return }
+        updater.checkForUpdates()
     }
 }

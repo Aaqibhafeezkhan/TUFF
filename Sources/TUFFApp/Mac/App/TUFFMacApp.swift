@@ -42,6 +42,7 @@ private final class ForegroundAppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct TUFFMacApp: App {
     @NSApplicationDelegateAdaptor private var appDelegate: ForegroundAppDelegate
+    @State private var isReportingBug = false
     @State private var model: AppModel
     @State private var serverController: AppServerController
     @State private var updateController: AppUpdateController
@@ -78,6 +79,14 @@ struct TUFFMacApp: App {
                 model: model,
                 serverController: serverController,
                 updateController: updateController)
+                .sheet(isPresented: $isReportingBug) { BugReportSheet(model: model) }
+                .alert("Recovery Update", isPresented: Binding(
+                    get: { updateController.recoveryMessage != nil },
+                    set: { if !$0 { updateController.recoveryMessage = nil } })) {
+                    Button("OK") { updateController.recoveryMessage = nil }
+                    Button("Check for Updates…") { updateController.checkForUpdates() }
+                        .disabled(!updateController.canCheckForUpdates)
+                } message: { Text(updateController.recoveryMessage ?? "") }
                 // Scaled with the zoom: at 150% the text and the columns that
                 // hold it are half again as wide, so the smallest window that
                 // still fits the layout grows with it.
@@ -118,6 +127,9 @@ struct TUFFMacApp: App {
         .windowResizability(.contentMinSize)
         .commands {
             AppNavigationCommands()
+            CommandGroup(replacing: .help) {
+                Button("Report a Bug…") { isReportingBug = true }
+            }
             // Into the View menu macOS already puts Enter Full Screen in, not a
             // `CommandMenu("View")` — that builds a second menu with the same
             // name and the app ends up with two of them in the bar.
@@ -145,6 +157,8 @@ struct TUFFMacApp: App {
                     updateController.checkForUpdates()
                 }
                 .disabled(!updateController.canCheckForUpdates)
+                Button("Check for Recovery Update…") { updateController.checkForRecoveryUpdate() }
+                    .disabled(!updateController.canCheckForUpdates)
             }
             CommandMenu("Generation") {
                 Button("New Chat") { model.clearOutput() }

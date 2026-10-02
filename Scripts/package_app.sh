@@ -10,6 +10,16 @@ fi
 
 script_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repository_root="$(cd -- "$script_directory/.." && pwd)"
+compiled_version="$(ruby -e 'puts File.read(ARGV[0])[/static let current\s*=\s*"([^"]+)"/, 1]' "$repository_root/Sources/TUFFModelCatalog/TUFFVersion.swift")"
+if [[ "$version" != "$compiled_version" ]]; then
+  echo "package version $version disagrees with TUFFVersion.current ($compiled_version)" >&2
+  exit 64
+fi
+bundle_identifier="${TUFF_BUNDLE_IDENTIFIER:-com.rexmhall09.TUFF}"
+if [[ ! "$bundle_identifier" =~ ^[A-Za-z0-9]+(\.[A-Za-z0-9-]+)+$ ]]; then
+  echo "invalid bundle identifier" >&2
+  exit 64
+fi
 output_directory="${2:-$repository_root/dist}"
 mkdir -p "$output_directory"
 output_directory="$(cd -- "$output_directory" && pwd)"
@@ -198,7 +208,7 @@ plutil -insert CFBundleDisplayName -string TUFF "$info_plist"
 plutil -insert CFBundleExecutable -string TUFF "$info_plist"
 plutil -insert CFBundleIconFile -string "$icon_file" "$info_plist"
 plutil -insert CFBundleIconName -string "$icon_name" "$info_plist"
-plutil -insert CFBundleIdentifier -string com.rexmhall09.TUFF "$info_plist"
+plutil -insert CFBundleIdentifier -string "$bundle_identifier" "$info_plist"
 plutil -insert CFBundleInfoDictionaryVersion -string 6.0 "$info_plist"
 plutil -insert CFBundleName -string TUFF "$info_plist"
 plutil -insert CFBundlePackageType -string APPL "$info_plist"
@@ -222,6 +232,8 @@ if [[ -n "$update_public_key" ]]; then
   fi
   plutil -insert SUFeedURL -string "$update_feed_url" "$info_plist"
   plutil -insert SUPublicEDKey -string "$update_public_key" "$info_plist"
+  plutil -insert SURequireSignedFeed -bool true "$info_plist"
+  plutil -insert SUVerifyUpdateBeforeExtraction -bool true "$info_plist"
   plutil -insert SUEnableAutomaticChecks -bool true "$info_plist"
   plutil -insert SUAllowsAutomaticUpdates -bool true "$info_plist"
   plutil -insert SUAutomaticallyUpdate -bool true "$info_plist"
@@ -229,6 +241,18 @@ else
   echo "warning: no Sparkle update public key; in-app updates are disabled" >&2
 fi
 
+if [[ -f "$repository_root/Sources/TUFFServer/Core/RouterServerRuntime.swift" ]]; then
+agent_directory="$app/Contents/Library/LaunchAgents"
+mkdir -p "$agent_directory"
+agent_plist="$agent_directory/$bundle_identifier.server.plist"
+plutil -create xml1 "$agent_plist"
+plutil -insert Label -string "$bundle_identifier.server" "$agent_plist"
+plutil -insert BundleProgram -string Contents/Resources/bin/TUFFServer "$agent_plist"
+plutil -insert ProgramArguments -json '["TUFFServer", "--background"]' "$agent_plist"
+plutil -insert RunAtLoad -bool true "$agent_plist"
+plutil -insert KeepAlive -json '{"SuccessfulExit":false}' "$agent_plist"
+plutil -lint "$agent_plist"
+fi
 plutil -lint "$info_plist"
 if [[ -n "$update_public_key" ]]; then
   [[ "$(plutil -extract SUEnableAutomaticChecks raw "$info_plist")" == "true" ]]
