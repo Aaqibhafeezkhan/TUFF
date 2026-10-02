@@ -21,6 +21,7 @@ public struct ServerArguments: Equatable, Sendable {
 
     public static let usage = """
     usage: TUFFServer --model <completed .gturbo directory> [options]
+           TUFFServer --all-models [options]   (see TUFFServer --all-models --help)
 
       --model <dir>              Required model directory.
       --vision-pack <dir>        Vision companion pack (default beside text model).

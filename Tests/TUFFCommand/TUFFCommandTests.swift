@@ -187,6 +187,66 @@ struct TUFFCommandTests {
         }
     }
 
+    @Test func versionPrintsTheSharedReleaseVersion() throws {
+        for flag in ["--version", "version"] {
+            #expect(try TUFFCommand.plan(
+                arguments: [flag],
+                executableURL: repository.appendingPathComponent("tuff"),
+                currentDirectoryURL: repository,
+                applicationSupportURL: appSupport,
+                fileExists: { _ in false }) == .version)
+        }
+        let parts = TUFFVersion.current.split(separator: ".")
+        #expect(parts.count == 3 && parts.allSatisfy { Int($0) != nil })
+    }
+
+    @Test func serveAllModelsRoutesWithoutChoosingAModel() throws {
+        // A packaged app serves the models Application Support holds.
+        let packaged = URL(fileURLWithPath: "/Applications/TUFF.app/Contents/Resources/bin/tuff")
+        let packagedPlan = try TUFFCommand.plan(
+            arguments: ["serve", "--all-models", "--unload-after", "60"],
+            executableURL: packaged,
+            currentDirectoryURL: URL(fileURLWithPath: "/tmp", isDirectory: true),
+            applicationSupportURL: appSupport,
+            selectedModel: "gemma4-e2b",
+            fileExists: { $0 == "/Applications/TUFF.app/Contents/Resources/bin/TUFFServer" })
+        guard case .run(let child, let arguments) = packagedPlan else {
+            Issue.record("expected the server")
+            return
+        }
+        #expect(child.lastPathComponent == "TUFFServer")
+        #expect(arguments.contains("--all-models"))
+        #expect(!arguments.contains("--model"))
+        #expect(option("--unload-after", in: arguments) == "60")
+        #expect(option("--models-root", in: arguments)
+            == "/Users/test/Library/Application Support/TUFF/Models")
+
+        // A clone build serves the repository's scratch installs, as `prompt` does.
+        let clonePlan = try TUFFCommand.plan(
+            arguments: ["serve", "--all-models"],
+            executableURL: repository.appendingPathComponent(".build/debug/TUFFCommand"),
+            currentDirectoryURL: repository,
+            applicationSupportURL: appSupport,
+            fileExists: [
+                "/repo/Package.swift", "/repo/Sources/TUFFApp/Mac",
+                "/repo/.build/debug/TUFFServer",
+            ].contains)
+        guard case .run(_, let cloneArguments) = clonePlan else {
+            Issue.record("expected the server")
+            return
+        }
+        #expect(option("--models-root", in: cloneArguments) == "/repo/scratch")
+
+        #expect(throws: TUFFCommandError.unexpectedArgument("--model")) {
+            _ = try TUFFCommand.plan(
+                arguments: ["serve", "--all-models", "--model", "gemma4"],
+                executableURL: packaged,
+                currentDirectoryURL: repository,
+                applicationSupportURL: appSupport,
+                fileExists: { _ in true })
+        }
+    }
+
     private func option(_ flag: String, in arguments: [String]) -> String? {
         guard let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else {
             return nil

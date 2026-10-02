@@ -16,12 +16,9 @@ public actor TUFFHTTPServer {
     public static let idleTimeout = TimeAmount.seconds(120)
 
     private let group: MultiThreadedEventLoopGroup
-    private let modelID: String
-    private let chatDialect: ChatDialect
-    private let backend: any ServerInferenceBackend
-    private let coordinator: ServerCoordinator
+    private let provider: any ServerModelProvider
+    private let control: ServerControl?
     private let heartbeatInterval: TimeAmount
-    private let visionCapability: String
     private let onRequestError: @Sendable (String) -> Void
     private let attachmentRoot: URL
     private let idleTimeout: TimeAmount
@@ -41,14 +38,31 @@ public actor TUFFHTTPServer {
                 attachmentRoot: URL = ServerAttachmentDirectory.root,
                 idleTimeout: TimeAmount = TUFFHTTPServer.idleTimeout,
                 group: MultiThreadedEventLoopGroup = .init(numberOfThreads: 1)) {
+        self.init(
+            provider: FixedServerModelProvider(
+                modelID: modelID, backend: backend, dialect: chatDialect,
+                visionCapability: visionCapability, queueLimit: queueLimit,
+                onActivity: onRequestActivity),
+            heartbeatInterval: heartbeatInterval,
+            onRequestError: onRequestError,
+            attachmentRoot: attachmentRoot,
+            idleTimeout: idleTimeout,
+            group: group)
+    }
+
+    /// A server over any model provider. `control` adds the loopback
+    /// `/tuff/v1/status` and `/tuff/v1/unload` routes.
+    public init(provider: any ServerModelProvider,
+                control: ServerControl? = nil,
+                heartbeatInterval: TimeAmount = .seconds(5),
+                onRequestError: @escaping @Sendable (String) -> Void = { _ in },
+                attachmentRoot: URL = ServerAttachmentDirectory.root,
+                idleTimeout: TimeAmount = TUFFHTTPServer.idleTimeout,
+                group: MultiThreadedEventLoopGroup = .init(numberOfThreads: 1)) {
         self.group = group
-        self.modelID = modelID
-        self.chatDialect = chatDialect
-        self.backend = backend
-        self.coordinator = ServerCoordinator(
-            queueLimit: queueLimit, onActivity: onRequestActivity)
+        self.provider = provider
+        self.control = control
         self.heartbeatInterval = heartbeatInterval
-        self.visionCapability = visionCapability
         self.onRequestError = onRequestError
         self.attachmentRoot = attachmentRoot
         self.idleTimeout = idleTimeout
@@ -56,13 +70,10 @@ public actor TUFFHTTPServer {
     }
 
     public func start(port: Int) async throws -> Channel {
-        let modelID = self.modelID
-        let chatDialect = self.chatDialect
-        let backend = self.backend
-        let coordinator = self.coordinator
+        let provider = self.provider
+        let control = self.control
         let heartbeatInterval = self.heartbeatInterval
         let childChannels = self.childChannels
-        let visionCapability = self.visionCapability
         let onRequestError = self.onRequestError
         let attachmentRoot = self.attachmentRoot
         let idleTimeout = self.idleTimeout
@@ -81,12 +92,9 @@ public actor TUFFHTTPServer {
                     withPipeliningAssistance: true,
                     withErrorHandling: true).flatMap {
                     channel.pipeline.addHandler(ServerHTTPHandler(
-                        modelID: modelID,
-                        chatDialect: chatDialect,
-                        backend: backend,
-                        coordinator: coordinator,
+                        provider: provider,
+                        control: control,
                         heartbeatInterval: heartbeatInterval,
-                        visionCapability: visionCapability,
                         onRequestError: onRequestError,
                         attachmentRoot: attachmentRoot,
                         childChannels: childChannels))
@@ -107,11 +115,11 @@ public actor TUFFHTTPServer {
         let listeningChannel = channel
         channel = nil
         let childChannels = self.childChannels
-        let coordinator = self.coordinator
+        let provider = self.provider
         let group = self.group
         let task = Task { @Sendable in
             var firstError: (any Error)?
-            await coordinator.shutdown()
+            await provider.shutdown()
             if let listeningChannel {
                 do {
                     try await listeningChannel.close().get()
@@ -137,11 +145,11 @@ public actor TUFFHTTPServer {
     }
 
     var queuedRequestCount: Int {
-        get async { await coordinator.queuedCount }
+        get async { await provider.queuedCount }
     }
 
     var hasActiveRequest: Bool {
-        get async { await coordinator.isActive }
+        get async { await provider.isActive }
     }
 
     var acceptedConnectionCount: Int {
@@ -153,13 +161,10 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
     typealias InboundIn = HTTPServerRequestPart
     typealias OutboundOut = HTTPServerResponsePart
 
-    private let modelID: String
-    private let chatDialect: ChatDialect
-    private let backend: any ServerInferenceBackend
-    private let coordinator: ServerCoordinator
+    private let provider: any ServerModelProvider
+    private let control: ServerControl?
     private let heartbeatInterval: TimeAmount
     private let childChannels: ChildChannelRegistry
-    private let visionCapability: String
     private let onRequestError: @Sendable (String) -> Void
     private let attachmentRoot: URL
     private var bodyParser: StreamingChatRequestBody?
@@ -175,21 +180,15 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
     private var head: HTTPRequestHead?
     private var activeTask: Task<Void, Never>?
 
-    init(modelID: String,
-         chatDialect: ChatDialect = .gemma,
-         backend: any ServerInferenceBackend,
-         coordinator: ServerCoordinator,
+    init(provider: any ServerModelProvider,
+         control: ServerControl?,
          heartbeatInterval: TimeAmount,
-         visionCapability: String,
          onRequestError: @escaping @Sendable (String) -> Void,
          attachmentRoot: URL,
          childChannels: ChildChannelRegistry) {
-        self.modelID = modelID
-        self.chatDialect = chatDialect
-        self.backend = backend
-        self.coordinator = coordinator
+        self.provider = provider
+        self.control = control
         self.heartbeatInterval = heartbeatInterval
-        self.visionCapability = visionCapability
         self.onRequestError = onRequestError
         self.attachmentRoot = attachmentRoot
         self.childChannels = childChannels
@@ -220,7 +219,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
             // elsewhere is counted and dropped.
             bodyParser = Self.carriesChatBody(head)
                 ? StreamingChatRequestBody(attachmentRoot: attachmentRoot,
-                                           visionCapability: visionCapability)
+                                           visionCapability: provider.parserVisionCapability)
                 : nil
             bodyError = nil
             receivedBodyBytes = 0
@@ -313,20 +312,13 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                                   omittingEmptySubsequences: false).first.map(String.init) ?? head.uri
         switch (head.method, path) {
         case (.GET, "/health"):
-            writeJSON(context, status: .ok, object: [
-                "status": "ok",
-                "vision": visionCapability,
-            ])
+            writeJSON(context, status: .ok, object: provider.health())
         case (.GET, "/v1/models"):
-            let response = OpenAIModelList(
-                object: "list",
-                data: [.init(id: modelID,
-                             object: "model",
-                             created: 0,
-                             ownedBy: "tuff",
-                             capabilities: visionCapability == "ready"
-                                ? ["text", "image"] : ["text"])])
-            writeCodable(context, status: .ok, response)
+            writeCodable(context, status: .ok, provider.modelList())
+        case (.GET, ServerControl.statusPath) where control != nil:
+            respondToControl(context, head: head, unload: false)
+        case (.POST, ServerControl.unloadPath) where control != nil:
+            respondToControl(context, head: head, unload: true)
         case (.POST, "/v1/chat/completions"):
             guard head.headers.first(name: "content-type")?
                 .lowercased().hasPrefix("application/json") == true else {
@@ -336,7 +328,9 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                 return
             }
             handleCompletion(body: body, context: context)
-        case (_, "/health"), (_, "/v1/models"), (_, "/v1/chat/completions"):
+        case (_, "/health"), (_, "/v1/models"), (_, "/v1/chat/completions"),
+             (_, ServerControl.statusPath) where control != nil,
+             (_, ServerControl.unloadPath) where control != nil:
             writeError(context, status: .methodNotAllowed,
                        OpenAIErrorEnvelope(message: "method not allowed",
                                            code: "method_not_allowed"))
@@ -347,16 +341,49 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
         }
     }
 
+    private func respondToControl(_ context: ChannelHandlerContext,
+                                  head: HTTPRequestHead,
+                                  unload: Bool) {
+        guard let control else { return }
+        if unload, !control.authorizes(head.headers.first(name: "authorization")) {
+            writeError(context, status: .unauthorized,
+                       OpenAIErrorEnvelope(message: "a valid control token is required",
+                                           code: "unauthorized"))
+            return
+        }
+        let contextBox = SendableContext(context)
+        inFlightRequests += 1
+        activeTask = childChannels.startTask {
+            defer {
+                contextBox.value.eventLoop.execute { self.inFlightRequests -= 1 }
+            }
+            // An unload never interrupts work: a busy server answers 409 and
+            // keeps its model.
+            let unloaded = unload ? await control.unloadIfIdle() : true
+            let status = await control.status()
+            self.writeCodable(contextBox.value, status: unloaded ? .ok : .conflict, status)
+        }
+    }
+
     private func handleCompletion(body: ParsedChatRequestBody,
                                   context: ChannelHandlerContext) {
         do {
             let decoded = try JSONDecoder().decode(OpenAIChatRequest.self, from: body.json)
+            let target = try provider.route(decoded.model)
+            let modelID = target.id
             let request = try OpenAIRequestValidator.validate(
                 decoded,
-                modelID: modelID,
-                dialect: chatDialect,
+                modelID: target.requestedID,
+                dialect: target.dialect,
                 preStagedImages: body.stagedImages,
                 attachmentLease: body.lease)
+            // A router stages images before it knows the model, so the model
+            // it chose must take them. Images never pass silently unused.
+            if !request.imageFiles.isEmpty, target.visionCapability != "ready" {
+                throw ServerRequestError.invalid(
+                    message: "\(modelID) does not accept images on this Mac",
+                    param: "messages", code: "image_input_unavailable")
+            }
             let responseID = "chatcmpl-" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
             let created = Int(Date().timeIntervalSince1970)
             let contextBox = SendableContext(context)
@@ -371,7 +398,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                       }) else { return }
                 let future = self.beginStream(
                     contextBox.value,
-                    self.chunk(id: responseID, created: created,
+                    self.chunk(model: modelID, id: responseID, created: created,
                                delta: ["role": "assistant"],
                                finishReason: nil))
                 streamState.setStartFuture(future)
@@ -395,33 +422,41 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                 let started = ContinuousClock.now
                 ServerLog.accepted(id: responseID, streaming: request.stream)
                 do {
-                    let completion = try await self.coordinator.runPreparing(
+                    let completion = try await self.provider.run(
+                        target,
                         onQueued: onQueued,
-                        prepare: {
-                            let prepared = try await self.backend.prepare(request)
+                        prepare: { backend in
+                            if self.provider is RoutedServerModelProvider,
+                               !request.imageFiles.isEmpty, backend.visionCapability != "ready" {
+                                throw ServerRequestError.invalid(
+                                    message: "The loaded model cannot accept images on this Mac",
+                                    param: "messages", code: "image_input_unavailable")
+                            }
+                            let prepared = try await backend.prepare(request)
                             phaseState.set("prepared")
                             ServerLog.prepared(id: responseID,
                                                promptTokens: prepared.promptTokenCount)
                             return prepared
                         },
-                        operation: { prepared in
+                        operation: { backend, prepared in
                             try Task.checkCancellation()
                             startStream()
                             try await streamState.waitUntilStarted()
                             try Task.checkCancellation()
                             phaseState.set("generating")
                             ServerLog.generating(id: responseID)
-                            return try await self.backend.generate(prepared) { event in
+                            return try await backend.generate(prepared) { event in
                                 guard request.stream else { return }
                                 switch event {
                                 case .content(let text):
                                     self.writeStreamChunk(
                                         contextBox.value,
-                                        self.chunk(id: responseID, created: created,
+                                        self.chunk(model: modelID, id: responseID, created: created,
                                                    delta: ["content": text],
                                                    finishReason: nil))
                                 case .toolCall(let call):
                                     self.writeToolCall(contextBox.value,
+                                                       model: modelID,
                                                        id: responseID,
                                                        created: created,
                                                        toolIndex: streamState.nextToolIndex(),
@@ -435,12 +470,14 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                     if request.stream {
                         streamState.stop()
                         self.finishStream(contextBox.value,
+                                          model: modelID,
                                           id: responseID,
                                           created: created,
                                           completion: completion,
                                           includeUsage: request.includeUsage)
                     } else {
                         self.writeCompletion(contextBox.value,
+                                             model: modelID,
                                              id: responseID,
                                              created: created,
                                              completion: completion)
@@ -467,6 +504,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
     }
 
     private func writeCompletion(_ context: ChannelHandlerContext,
+                                 model modelID: String,
                                  id: String,
                                  created: Int,
                                  completion: ServerCompletion) {
@@ -528,6 +566,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
     }
 
     private func writeToolCall(_ context: ChannelHandlerContext,
+                               model modelID: String,
                                id: String,
                                created: Int,
                                toolIndex: Int,
@@ -544,20 +583,21 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
             }
             writeStreamChunk(
                 context,
-                chunk(id: id, created: created,
+                chunk(model: modelID, id: id, created: created,
                       delta: ["tool_calls": [tool]],
                       finishReason: nil))
         }
     }
 
     private func finishStream(_ context: ChannelHandlerContext,
+                              model modelID: String,
                               id: String,
                               created: Int,
                               completion: ServerCompletion,
                               includeUsage: Bool) {
         writeStreamChunk(
             context,
-            chunk(id: id, created: created,
+            chunk(model: modelID, id: id, created: created,
                   delta: [:],
                   finishReason: completion.finishReason))
         if includeUsage {
@@ -578,7 +618,8 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
         }
     }
 
-    private func chunk(id: String,
+    private func chunk(model modelID: String,
+                       id: String,
                        created: Int,
                        delta: [String: Any],
                        finishReason: String?) -> [String: Any] {
@@ -778,10 +819,12 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
 private extension ServerRequestError {
     var httpStatus: HTTPResponseStatus {
         switch self {
-        case .unknownModel:
+        case .unknownModel, .modelUnavailable:
             .notFound
         case .queueFull:
             .tooManyRequests
+        case .modelMemoryBusy:
+            .serviceUnavailable
         case .invalid(_, _, let code):
             switch code {
             case "request_too_large", "image_too_large", "too_many_images":

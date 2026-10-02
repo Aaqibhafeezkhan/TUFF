@@ -1,5 +1,6 @@
 import Foundation
 import TUFFCommandCore
+import TUFFModelCatalog
 
 private func writeError(_ text: String) {
     FileHandle.standardError.write(Data((text + "\n").utf8))
@@ -42,6 +43,9 @@ do {
     switch plan {
     case .help:
         print(TUFFCommand.usage)
+        exit(0)
+    case .version:
+        print("tuff \(TUFFVersion.current)")
         exit(0)
     case .run(let child, let arguments):
         exit(try run(child, arguments: arguments))

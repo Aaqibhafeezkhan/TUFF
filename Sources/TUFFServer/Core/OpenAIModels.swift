@@ -432,9 +432,19 @@ public enum ServerRequestError: Error, Equatable, Sendable {
     case invalid(message: String, param: String?, code: String)
     case unknownModel
     case queueFull
+    /// A known model that cannot be served here: not installed, or too large
+    /// for this Mac.
+    case modelUnavailable(String)
+    /// The model would fit on its own, but another TUFF process holds enough
+    /// memory that loading it now would overcommit the Mac.
+    case modelMemoryBusy(String)
 
     public var envelope: OpenAIErrorEnvelope {
         switch self {
+        case .modelUnavailable(let message):
+            OpenAIErrorEnvelope(message: message, param: "model", code: "model_not_found")
+        case .modelMemoryBusy(let message):
+            OpenAIErrorEnvelope(message: message, code: "model_memory_busy")
         case .invalid(let message, let param, let code):
             OpenAIErrorEnvelope(message: message, param: param, code: code)
         case .unknownModel:

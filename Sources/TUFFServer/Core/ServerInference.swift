@@ -262,6 +262,7 @@ public struct ServerPreparedRequest: Sendable {
 }
 
 public protocol ServerInferenceBackend: Sendable {
+    var visionCapability: String { get }
     func prepare(_ request: ValidatedChatRequest) async throws -> ServerPreparedRequest
     func generate(_ request: ValidatedChatRequest,
                   onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void) async throws -> ServerCompletion
@@ -280,6 +281,7 @@ public struct ServerCoordinatorActivity: Equatable, Sendable {
 }
 
 public extension ServerInferenceBackend {
+    var visionCapability: String { "missing" }
     func prepare(_ request: ValidatedChatRequest) async throws -> ServerPreparedRequest {
         ServerPreparedRequest(request: request)
     }
@@ -578,7 +580,10 @@ public actor ServerModelSession: ServerInferenceBackend {
                             visionPackURL: URL? = nil,
                             visionResidencyPolicy: VisionResidencyPolicy = .onDemand,
                             promptCacheMode: ServerPromptCacheMode = .singlePrefix,
-                            runtimeConfiguration: RuntimeConfiguration) async throws -> ServerModelSession {
+                            runtimeConfiguration: RuntimeConfiguration,
+                            context sharedContext: MetalContext? = nil,
+                            integrityPolicy: ModelIntegrityPolicy = .fullSha256
+    ) async throws -> ServerModelSession {
         let tokenizerFolder = GFTokenizer.tokenizerFolder(forModelDirectory: modelDirectory)
         guard let tokenizerFolder else {
             throw GFTokenizerError.missingToolTemplate
@@ -588,14 +593,16 @@ public actor ServerModelSession: ServerInferenceBackend {
             throw GFTokenizerError.missingToolTemplate
         }
         let tokenizer = try await GFTokenizer.load(from: tokenizerFolder)
-        let context = try MetalContext()
+        // A server that loads and unloads models on demand passes one context
+        // in, so each load does not compile the shader library again.
+        let context = try sharedContext ?? MetalContext()
         let runtime = runtimeConfiguration
         let model = try Model.load(
             directoryURL: modelDirectory,
             device: context.device,
             streamingMode: .pread(slotCount: runtime.expertCacheSlots),
             expertCachePolicy: runtime.modelExpertCachePolicy,
-            integrityPolicy: .fullSha256)
+            integrityPolicy: integrityPolicy)
         let runner = try ModelForwardRunner(model: model,
                                            context: context,
                                            maxContext: maxContext,

@@ -12,10 +12,25 @@ setvbuf(stdout, nil, _IOLBF, 0)
 // Before anything in this process creates a Metal device.
 MetalContext.relaxInteractivityWatchdog()
 
+let commandLine = Array(CommandLine.arguments.dropFirst())
+if RouterServerArguments.isRouterInvocation(commandLine) {
+    do {
+        let routerArguments = try RouterServerArguments.parse(commandLine)
+        exit(await RouterServerRuntime.run(routerArguments))
+    } catch ServerArgumentError.help {
+        print(RouterServerArguments.usage)
+        exit(0)
+    } catch {
+        FileHandle.standardError.write(
+            Data("error: \(error)\n\n\(RouterServerArguments.usage)\n".utf8))
+        exit(2)
+    }
+}
+
 let arguments: ServerArguments
 let runtimeConfiguration: RuntimeConfiguration
 do {
-    arguments = try ServerArguments.parse(Array(CommandLine.arguments.dropFirst()))
+    arguments = try ServerArguments.parse(commandLine)
     // Resolved here so an unusable flag combination exits with usage instead of
     // failing after the model has started loading.
     runtimeConfiguration = try arguments.resolvedRuntimeConfiguration()

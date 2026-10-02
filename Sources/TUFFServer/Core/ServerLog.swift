@@ -18,6 +18,14 @@ enum ServerLog {
         write("request \(id) generating")
     }
 
+    static func modelLoaded(_ model: String) {
+        write("model \(model) loaded")
+    }
+
+    static func modelUnloaded(_ model: String) {
+        write("model \(model) unloaded")
+    }
+
     static func completed(id: String,
                           duration: Duration,
                           completion: ServerCompletion) {

@@ -3,6 +3,7 @@ import TUFFModelCatalog
 
 public enum TUFFCommandPlan: Equatable, Sendable {
     case help
+    case version
     case run(executableURL: URL, arguments: [String])
     case load(
         launcherURL: URL,
@@ -51,11 +52,14 @@ public enum TUFFCommand {
       tuff prompt <text> [--model <name|path>] [generation options]
       tuff load [model]
       tuff serve [--model <name|path>] [server options]
+      tuff serve --all-models [--default-model <name>] [--unload-after <seconds>]
+      tuff --version
 
     commands:
       prompt   Run a one-shot chat prompt. Uses the selected app model by default.
       load     Select an installed model, open TUFF, and load it into the app.
-      serve    Start the local OpenAI-compatible server in the foreground.
+      serve    Start the local OpenAI-compatible server in the foreground. With
+               --all-models, every installed model is served and loads on demand.
 
     model names include gemma4-e2b, gemma4-e4b, gemma4-12b-qat, gemma4,
     qwen36, qwen38-flash-next, gpt-oss-20b, gpt-oss-120b, and minimax-m2.7.
@@ -76,6 +80,9 @@ public enum TUFFCommand {
         guard let command = arguments.first else { return .help }
         if command == "help" || command == "--help" || command == "-h" {
             return .help
+        }
+        if command == "--version" || command == "version" {
+            return .version
         }
 
         let remaining = Array(arguments.dropFirst())
@@ -189,6 +196,26 @@ public enum TUFFCommand {
         selectedModel: String?,
         fileExists: (String) -> Bool
     ) throws -> TUFFCommandPlan {
+        if arguments.contains("--all-models") {
+            // The router picks each model's settings itself; it only needs to
+            // know where installed models live, which differs for clone builds.
+            guard !arguments.contains("--model") else {
+                throw TUFFCommandError.unexpectedArgument("--model")
+            }
+            var forwarded = arguments
+            if !forwarded.contains("--models-root") {
+                let root = installURL(
+                    descriptor: TUFFModelCatalog.default,
+                    executableURL: executableURL,
+                    currentDirectoryURL: currentDirectoryURL,
+                    applicationSupportURL: applicationSupportURL,
+                    fileExists: fileExists).deletingLastPathComponent()
+                forwarded += ["--models-root", root.path]
+            }
+            let child = try bundledExecutable(
+                named: "TUFFServer", beside: executableURL, fileExists: fileExists)
+            return .run(executableURL: child, arguments: forwarded)
+        }
         let extracted = try extractModel(arguments)
         let model = try resolveModel(
             selection: extracted.selection,
