@@ -4,7 +4,7 @@
 # published GitHub releases.
 #
 # Most users build from a clone, where there is no Info.plist, so the compiled
-# constant in AboutPanelPresentation is the version they see. Nothing bumps it
+# shared TUFFVersion.current constant is the version they see. Nothing bumps it
 # automatically, so without this check it silently ages: the About panel would
 # claim an old version on a current checkout.
 #
@@ -19,13 +19,13 @@ require "net/http"
 require "uri"
 
 ROOT = File.expand_path("..", __dir__)
-SOURCE = File.join(ROOT, "Sources/TUFFApp/MacPresentation/AboutPanelPresentation.swift")
+SOURCE = File.join(ROOT, "Sources/TUFFModelCatalog/TUFFVersion.swift")
 RELEASES_URL = "https://api.github.com/repos/rexmhall09/TUFF/releases?per_page=100"
 
 def compiled_version
   source = File.read(SOURCE)
-  match = source[/fallbackShortVersion\s*=\s*"([^"]+)"/, 1]
-  abort "could not find fallbackShortVersion in #{SOURCE}" unless match
+  match = source[/static let current\s*=\s*"([^"]+)"/, 1]
+  abort "could not find TUFFVersion.current in #{SOURCE}" unless match
 
   match
 end
@@ -96,8 +96,8 @@ if compare(compiled, floor) < 0
   abort <<~MESSAGE
     app version #{compiled} is more than one release behind (latest #{latest})
 
-    Update fallbackShortVersion in
-    Sources/TUFFApp/MacPresentation/AboutPanelPresentation.swift
+    Update TUFFVersion.current in
+    Sources/TUFFModelCatalog/TUFFVersion.swift
     so a clone build reports the version it actually corresponds to.
   MESSAGE
 end

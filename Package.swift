@@ -88,6 +88,7 @@ let package = Package(
         .target(
             name: "TUFFMacPresentation",
             dependencies: [
+                "TUFFModelCatalog",
                 "TUFFAppCore",
                 .product(name: "SwiftMath", package: "SwiftMath"),
             ],

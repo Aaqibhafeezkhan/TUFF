@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Testing
+import TUFFModelCatalog
 @testable import TUFFMacPresentation
 
 @Suite struct AboutPanelPresentationTests {
@@ -12,7 +13,7 @@ import Testing
     }
 
     @Test func cloneBuildFallsBackToTheCompiledVersion() {
-        #expect(AboutPanelPresentation.fallbackShortVersion == "6.1.0")
+        #expect(AboutPanelPresentation.fallbackShortVersion == TUFFVersion.current)
         #expect(AboutPanelPresentation.shortVersion(infoDictionary: nil)
             == AboutPanelPresentation.fallbackShortVersion)
         #expect(AboutPanelPresentation.shortVersion(infoDictionary: [:])

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import TUFFModelCatalog
 
 public struct AboutPanelContent: Equatable, Sendable {
     public let applicationName: String
@@ -15,9 +16,8 @@ public enum AboutPanelPresentation {
     public static let applicationName = "TUFF"
 
     // Most users build from a clone, where there is no Info.plist to read a
-    // version from, so this constant is what they see. Scripts/check_app_version.rb
-    // fails CI when it falls behind the newest published release.
-    public static let fallbackShortVersion = "6.1.0"
+    // version from, so the shared constant is what they see.
+    public static let fallbackShortVersion = TUFFVersion.current
 
     private static let licenseURL = URL(
         string: "https://github.com/rexmhall09/TUFF/blob/main/LICENSE")!
