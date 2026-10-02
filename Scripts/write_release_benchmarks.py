@@ -47,19 +47,30 @@ def render(report, version):
              '| Model | All decode rates (tok/s) | Median | Min..max | Spread | Prefill median | Peak RSS max |',
              '| --- | --- | ---: | --- | ---: | ---: | ---: |']
     labels = {row['model']: row['label'] for row in rows}
+    eligible = {summary['model']: summary for summary in summarize(
+        [row for row in rows if row.get('performance_eligible', True)])}
     for summary in summarize(rows):
-        rates = summary['tps']
+        measured = eligible.get(summary['model'])
+        rates = measured['tps'] if measured else None
         if not rates:
             lines.append(f"| {labels[summary['model']]} | unavailable | | | | | |")
             continue
-        prefill = summary['prefill_seconds']
-        rss = summary['peak_rss_bytes']
-        values = ', '.join(f'{value:.3f}' for value in rates['values'])
+        prefill = measured['prefill_seconds']
+        rss = measured['peak_rss_bytes']
+        values = ', '.join(f"{row['tps']:.3f}" + ('†' if not row.get('performance_eligible', True) else '')
+                           for row in text_rows if row['model']==summary['model'] and 'tps' in row)
         lines.append(f"| {labels[summary['model']]} | {values} | {rates['median']:.3f} | "
                      f"{rates['minimum']:.3f}..{rates['maximum']:.3f} | {rates['spread']:.3f} | "
                      f"{prefill['median']:.2f} s | {rss['maximum']/1048576:.0f} MiB |")
+    excluded = [row for row in rows if not row.get('performance_eligible', True)]
+    if excluded:
+        lines += ['', '† Timing excluded from median, range, spread, prefill and RSS summaries. '
+                  'Every raw observation remains in this report. Exclusions require a recorded '
+                  'measurement interruption; slow or failed runs are otherwise retained.', '']
+        lines += [f"- {row['label']} / {row['kind']} / attempt {row['attempt']+1}: "
+                  f"{row.get('performance_exclusion', 'recorded measurement interruption')}" for row in excluded]
     lines += ['', 'Peak RSS is the process resident set, not total model or Metal memory. '
-              'Slow runs have no assigned cause. Machine-state snapshots record available '
+              'Other timing variation has no assigned cause. Machine-state snapshots record available '
               'thermal, power, swap, VM and memory-pressure probes before and after each run; '
               'unavailable probes are marked below.', '', '## Resolved settings', '',
               '| Model | Context | Cache slots | Prefill | Chunk | Sampling T / K / P |',

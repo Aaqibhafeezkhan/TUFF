@@ -83,6 +83,40 @@ import TUFFValidationSupport
         #expect(Fp16Buffer.read(logits, count: config.vocabSize) == expected)
     }
 
+    @Test(arguments: [ExpertCachePolicy.lfu, .lru])
+    func prefetchedExpertsMatchColdLogitsAndCountTheirFirstDemandHit(policy: ExpertCachePolicy) async throws {
+        let config = ArchConfig.qwen4ExpToy()
+        let dir = try Qwen4ExpToySynthetic.write()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let ctx = try MetalContext()
+        let coldModel = try Model.load(directoryURL: dir, device: ctx.device,
+                                      expecting: config, expertCachePolicy: policy)
+        let prefetchedModel = try Model.load(directoryURL: dir, device: ctx.device,
+                                            expecting: config, expertCachePolicy: policy)
+        for layer in 0..<config.numLayers {
+            let plan = try #require(try prefetchedModel.planRoutedExperts(
+                layer: layer, experts: Array(0..<8), purpose: .prefetch))
+            let operation = try prefetchedModel.expertPrefetchOperation(plan: plan)
+            try await Task.detached { try operation() }.value
+        }
+        #expect(prefetchedModel.expertReadMetrics.usefulPrefetchReads == 0)
+        let cold = try RealForwardRunner(model: coldModel, context: ctx, maxContext: 64)
+        let prefetched = try RealForwardRunner(model: prefetchedModel, context: ctx, maxContext: 64)
+        let logits = try makeLogits(ctx, vocab: config.vocabSize)
+        try await cold.produce(token: 7, position: 0, into: logits)
+        let expected = Fp16Buffer.read(logits, count: config.vocabSize)
+        try await prefetched.produce(token: 7, position: 0, into: logits)
+        #expect(Fp16Buffer.read(logits, count: config.vocabSize) == expected)
+        #expect(prefetchedModel.expertReadMetrics.usefulPrefetchReads >= 2)
+        let beforeRepeat = prefetchedModel.expertReadMetrics
+        let misses = prefetched.totalRoutedExpertCacheMisses
+        prefetched.reset()
+        try await prefetched.produce(token: 7, position: 0, into: logits)
+        #expect(Fp16Buffer.read(logits, count: config.vocabSize) == expected)
+        #expect(prefetched.totalRoutedExpertCacheMisses == misses)
+        #expect(prefetchedModel.expertReadMetrics.usefulPrefetchReads == beforeRepeat.usefulPrefetchReads)
+    }
+
     /// One decode step over the full layer graph.
     @Test func decodeProducesLogitsOverTheFourStreamGraph() async throws {
         let (dir, ctx, runner) = try makeRunner()

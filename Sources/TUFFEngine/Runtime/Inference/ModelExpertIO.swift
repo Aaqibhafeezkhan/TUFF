@@ -111,12 +111,20 @@ extension Model {
     public func planRoutedExperts(layer: Int,
                                   experts: [Int],
                                   avoidingSlots: Set<Int> = []) throws -> RoutedExpertFetchPlan? {
+        try planRoutedExperts(layer: layer, experts: experts,
+                              avoidingSlots: avoidingSlots, purpose: .demand)
+    }
+
+    public func planRoutedExperts(layer: Int,
+                                  experts: [Int],
+                                  avoidingSlots: Set<Int> = [],
+                                  purpose: ExpertReadPurpose) throws -> RoutedExpertFetchPlan? {
         try ensureLayerOpened(layer)
         let streamer = streamersQueue.sync { streamersBox.streamers[layer]! }
         let validSlots = Set(avoidingSlots.filter { $0 >= 0 && $0 < streamer.slotCount })
         return RoutedExpertFetchPlan(
             layer: layer,
-            cachePlan: streamer.planExpertsCached(experts: experts, avoidingSlots: validSlots))
+            cachePlan: streamer.planExpertsCached(experts: experts, avoidingSlots: validSlots, purpose: purpose))
     }
 
     public func planRoutedExpertsIfPossible(layer: Int,
@@ -164,15 +172,17 @@ extension Model {
             streamer: streamer, layer: plan.layer, cachePlan: plan.cachePlan)
     }
 
-    /// Reads a plan's misses into their cache slots on the calling thread.
-    /// Decode lookahead runs this on a background queue for the next layer
-    /// while the current one computes; the caller must not plan or fetch the
-    /// same layer until it returns.
-    func prefetchRoutedExperts(plan: RoutedExpertFetchPlan) throws {
-        guard !plan.misses.isEmpty else { return }
+    /// Retains only the synchronized streamer and immutable plan across the
+    /// background read. Resolve model ownership on the runner's thread. The
+    /// caller must drain this operation before planning the same layer again.
+    func expertPrefetchOperation(plan: RoutedExpertFetchPlan) throws
+        -> @Sendable () throws -> Void {
         try ensureLayerOpened(plan.layer)
         let streamer = streamersQueue.sync { streamersBox.streamers[plan.layer]! }
-        _ = try streamer.executeExpertCachePlan(plan.cachePlan, purpose: .prefetch)
+        let cachePlan = plan.cachePlan
+        return {
+            _ = try streamer.executeExpertCachePlan(cachePlan, purpose: .prefetch)
+        }
     }
 
     public func fetchRoutedExperts(layer: Int, experts: [Int]) async throws -> [TensorView] {

@@ -12,12 +12,13 @@ import TUFFValidationSupport
 @Suite struct Qwen4ExpPrefillTests {
 
     private func makeRunner(maxContext: Int = 128,
-                            config: ArchConfig = .qwen4ExpToy())
+                            config: ArchConfig = .qwen4ExpToy(),
+                            cacheSlots: Int = 16)
         throws -> (URL, MetalContext, RealForwardRunner) {
         let dir = try Qwen4ExpToySynthetic.write(config: config)
         let ctx = try MetalContext()
         let model = try Model.load(directoryURL: dir, device: ctx.device,
-                                   expecting: config)
+                                   expecting: config, streamingMode: .pread(slotCount: cacheSlots))
         let runner = try RealForwardRunner(model: model, context: ctx,
                                            maxContext: maxContext)
         return (dir, ctx, runner)
@@ -30,6 +31,30 @@ import TUFFValidationSupport
             throw ModelError.residentBufferWrapFailed
         }
         return buf
+    }
+
+    @Test(arguments: [16, 32])
+    func largerExpertCachePreservesPrefillAndFollowingDecode(cacheSlots: Int) async throws {
+        let config = ArchConfig.qwen4ExpToy(numExperts: 32)
+        let tokens = (0..<65).map { Int32(($0 * 7 + 11) % 31) }
+        let (dirA, ctxA, decode) = try makeRunner(config: config, cacheSlots: cacheSlots)
+        defer { try? FileManager.default.removeItem(at: dirA) }
+        let logitsA = try makeLogits(ctxA, vocab: config.vocabSize)
+        for (position, token) in tokens.enumerated() {
+            try await decode.produce(token: token, position: position, into: logitsA)
+        }
+        let reference = Fp16Buffer.read(logitsA, count: config.vocabSize)
+        let (dirB, ctxB, prefill) = try makeRunner(config: config, cacheSlots: cacheSlots)
+        defer { try? FileManager.default.removeItem(at: dirB) }
+        let logitsB = try makeLogits(ctxB, vocab: config.vocabSize)
+        _ = try await prefill.prefillChunked(tokens: tokens[...], startPosition: 0,
+            outputMode: .logits, config: .production(chunkTokens: 32), into: logitsB,
+            onProgress: { _ in })
+        #expect(RelError.compute(actual: Fp16Buffer.read(logitsB, count: config.vocabSize), reference: reference) < 0.02)
+        try await decode.produce(token: 7, position: 65, into: logitsA)
+        try await prefill.produce(token: 7, position: 65, into: logitsB)
+        #expect(RelError.compute(actual: Fp16Buffer.read(logitsB, count: config.vocabSize),
+            reference: Fp16Buffer.read(logitsA, count: config.vocabSize)) < 0.025)
     }
 
     @Test func imageGatherPlaceholdersDoNotChangeNgramSemantics() async throws {

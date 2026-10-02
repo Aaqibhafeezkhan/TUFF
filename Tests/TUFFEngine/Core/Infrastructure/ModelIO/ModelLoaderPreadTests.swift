@@ -135,4 +135,40 @@ import Metal
         #expect(model.expertReadMetrics.demandReads == before.demandReads + 1)
     }
 
+    @Test func prefetchHandleRetainsExpertStorageAfterDroppingTheModelValue() async throws {
+        let dir = try ModelLoaderTests.writeToySynthetic()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        var model: Model? = try Model.load(directoryURL: dir, device: device,
+          expecting: .gemma4Toy(), streamingMode: .pread(slotCount: 3))
+        let plan = try #require(try model!.planRoutedExperts(layer: 1, experts: [4, 2], purpose: .prefetch))
+        let operation = try model!.expertPrefetchOperation(plan: plan)
+        let views = try model!.routedExpertBuffers(for: plan)
+        model = nil
+        try await Task.detached { try operation() }.value
+        for (index, expert) in [4, 2].enumerated() {
+            let bytes = Self.readBytes(views[index])
+            #expect(bytes[0] == 1)
+            #expect(bytes[1] == UInt8(expert))
+            #expect(bytes[2] == 0xC1)
+            #expect(bytes[3] == 0xC2)
+        }
+    }
+
+    @Test func modelPrefetchPurposeReachesPlanningReadsAndDemandDiagnostics() async throws {
+        let dir = try ModelLoaderTests.writeToySynthetic()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let model = try Model.load(directoryURL: dir, device: device,
+          expecting: .gemma4Toy(), streamingMode: .pread(slotCount: 3))
+        let plan = try #require(try model.planRoutedExperts(layer: 1, experts: [4, 2], purpose: .prefetch))
+        try model.expertPrefetchOperation(plan: plan)()
+        #expect(model.expertReadMetrics.prefetchReads == 2)
+        #expect(model.expertReadMetrics.demandReads == 0)
+        let demanded = try await model.fetchRoutedExperts(layer: 1, experts: [2, 4])
+        #expect(Self.readBytes(demanded[0])[1] == 2)
+        #expect(model.expertReadMetrics.usefulPrefetchReads == 2)
+        #expect(model.expertReadMetrics.demandReads == 0)
+    }
+
 }

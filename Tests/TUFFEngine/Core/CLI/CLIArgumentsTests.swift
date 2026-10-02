@@ -87,6 +87,16 @@ import TUFFEngine
         #expect(options == expected)
     }
 
+    @Test func cacheSlotHelpMatchesSharedRuntimeChoices() throws {
+        let choices = RuntimeConfiguration.allowedExpertCacheSlots.map(String.init).joined(separator: ", ")
+        #expect(Args.usage.contains("Expert-cache slots: \(choices) (default 16)."))
+        for count in RuntimeConfiguration.allowedExpertCacheSlots {
+            let args = try Args.parse(["--model", "m.gturbo", "--prompt", "hi",
+                "--prefill", "off", "--expert-cache-slots", String(count)])
+            #expect(args.expertCacheSlots == count)
+        }
+    }
+
     @Test func autoChunkCapDefaultsToTheHistoricalSize() throws {
         let direct = try Args.parse([
             "--model", "m.gturbo", "--prompt", "hi", "--prefill-chunk-tokens", "auto"])

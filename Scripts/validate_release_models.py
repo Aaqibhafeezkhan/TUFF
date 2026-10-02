@@ -16,7 +16,8 @@ import re
 import signal
 import subprocess
 import time
-from benchmark_reporting import machine_state, resolved_settings, summarize, expert_io
+from benchmark_reporting import machine_state, resolved_settings, summarize, expert_io, require_idle_inference
+from benchmark_inference import sys_exit_signal
 
 ROOT = Path(__file__).resolve().parent.parent
 VISION_MODELS = {'gemma4-e2b', 'gemma4-e4b', 'gemma4-12b-qat', 'gemma4',
@@ -40,6 +41,15 @@ def atomic_json(path, value):
     temporary.replace(path)
 
 
+def selected_models(models, selection):
+    if selection is None:
+        return models
+    names = selection.split(',')
+    if not names or any(name not in models for name in names) or len(set(names)) != len(names):
+        raise ValueError('models must be a nonempty list of distinct supported model names')
+    return {name: config for name, config in models.items() if name in names}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--app', required=True, type=Path)
@@ -52,6 +62,7 @@ def main():
                         help='finish the sweep with the Paris runs alone')
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--repeat', type=int, default=3)
+    parser.add_argument('--models', help='Limit a targeted recheck to comma-separated supported model names')
     parser.add_argument('--timeout', type=int, default=2400)
     parser.add_argument('--resume', action='store_true')
     args = parser.parse_args()
@@ -67,6 +78,10 @@ def main():
     metadata = json.loads(subprocess.check_output(
         ['ruby', '-rjson', '-e', 'require File.expand_path("Scripts/benchmark_models", Dir.pwd); '
          'puts JSON.generate({models: BENCHMARK_MODELS, labels: BENCHMARK_MODEL_LABELS})'], cwd=ROOT))
+    try:
+        metadata['models'] = selected_models(metadata['models'], args.models)
+    except ValueError as error:
+        parser.error(str(error))
     identity = dict(cli_sha256=digest(cli), harness_sha256=digest(__file__),
                     reporting_sha256=digest(ROOT / 'Scripts/benchmark_reporting.py'),
                     source_sha256=hashlib.sha256(''.join(
@@ -79,6 +94,7 @@ def main():
                     model_table_sha256=digest(ROOT / 'Scripts/benchmark_models.rb'),
                     image_sha256=digest(image) if image else None,
                     image_prompt=args.image_prompt, image_keywords=args.image_keywords, model_root=str(model_root), repeat=args.repeat,
+                    models=list(metadata['models']),
                     timeout=args.timeout, prompt_sha256=digest(ROOT / 'docs/benchmark-prompts/capital-of-france.json'))
     result_path = output / 'results.json'
     if result_path.exists():
@@ -119,6 +135,7 @@ def main():
             for attempt in range(args.repeat if kind == 'paris' else 1):
                 if (model, kind, attempt) in completed:
                     continue
+                require_idle_inference()
                 row = dict(model=model, label=metadata['labels'][model], kind=kind, attempt=attempt,
                            started=time.time(), status='failed')
                 prefix = output / f'{kind}-{model}-{attempt + 1}'
@@ -150,6 +167,15 @@ def main():
                             except subprocess.TimeoutExpired:
                                 os.killpg(proc.pid, signal.SIGKILL)
                                 proc.wait()
+                            raise
+                        except BaseException:
+                            if proc.poll() is None:
+                                os.killpg(proc.pid, signal.SIGTERM)
+                                try:
+                                    proc.wait(timeout=5)
+                                except subprocess.TimeoutExpired:
+                                    os.killpg(proc.pid, signal.SIGKILL)
+                                    proc.wait()
                             raise
                     row['exit_code'] = proc.returncode
                     answer = Path(str(prefix) + '.stdout.txt').read_text()
@@ -201,4 +227,5 @@ def main():
 
 
 if __name__ == '__main__':
+    signal.signal(signal.SIGTERM, lambda signum, frame: sys_exit_signal(signum))
     raise SystemExit(main())

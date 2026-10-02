@@ -1,8 +1,28 @@
 import Testing
+import Darwin
 import TUFFModelCatalog
 @testable import TUFFEngine
 
 @Suite struct InferenceMemoryPlanTests {
+    @Test func newCacheTrackingArraysHaveAConservativeAllLayerReserve() throws {
+        let page = UInt64(sysconf(_SC_PAGESIZE))
+        for descriptor in TUFFModelCatalog.all {
+            let variant = try #require(ModelVariant(rawValue: descriptor.architecture.id.rawValue))
+            let config = try #require(ArchConfig.registeredArchitectures[variant])
+            let plan = InferenceMemoryPlan(descriptor: descriptor, config: config,
+                contextTokens: 4096, expertCacheSlots: descriptor.runtimeDefaults.expertCacheSlots,
+                prefillChunkTokens: 512)
+            // Flash's 512-entry counter needs two pages on a 4 KB host once
+            // its allocation header is included; other arrays fit one page.
+            let pages: UInt64 = page == 4096 && config.numExperts == 512 ? 3 : 2
+            let expected = config.numExperts > 0 ? pages * page * UInt64(config.numLayers) : 0
+            #expect(plan.cacheTrackingMetadataReserveBytes == expected)
+            #expect(plan.estimatedWorkingSetBytes >= descriptor.memory.estimatedWorkingSetBytes(
+                contextTokens: 4096, expertCacheSlots: descriptor.runtimeDefaults.expertCacheSlots)
+                + expected)
+        }
+    }
+
     @Test func everyCatalogModelIncludesChunkScratchAndRuntimeKV() throws {
         for descriptor in TUFFModelCatalog.all {
             let variant = try #require(ModelVariant(rawValue: descriptor.architecture.id.rawValue))

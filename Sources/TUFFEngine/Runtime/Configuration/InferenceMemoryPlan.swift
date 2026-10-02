@@ -1,4 +1,5 @@
 import TUFFModelCatalog
+import Darwin
 
 /// Admission estimate, not resident pages or a measured process footprint.
 /// Adds runtime allocations conservatively to the qualified catalog baseline:
@@ -7,12 +8,15 @@ public struct InferenceMemoryPlan: Sendable, Equatable {
     public let prefillScratchBytes: UInt64
     public let kvCacheBytes: UInt64
     public let additionalRingBytes: UInt64
+    public let cacheTrackingMetadataReserveBytes: UInt64
     public let estimatedWorkingSetBytes: UInt64
 
     public init(descriptor: TUFFModelDescriptor, config: ArchConfig,
                 contextTokens: Int, expertCacheSlots: Int,
                 prefillChunkTokens: Int) {
         let context = max(1, contextTokens)
+        cacheTrackingMetadataReserveBytes = Self.trackingMetadataReserve(
+            config: config, slots: expertCacheSlots)
         let chunk = max(PrefillRuntimeConfig.baselineChunkTokens,
                         min(PrefillRuntimeConfig.maxChunkTokens, prefillChunkTokens))
         // The affine runner reserves image capacity even for a text request.
@@ -49,11 +53,32 @@ public struct InferenceMemoryPlan: Sendable, Equatable {
         // Flash Next's full KV grows geometrically; the old buffers can coexist
         // with their replacements. Reserve a full additional KV allocation.
         let growth = config.family == .qwen4Exp ? kv.totalBytes : 0
-        for bytes in [prefillScratchBytes, additionalRingBytes, growth] {
+        for bytes in [prefillScratchBytes, additionalRingBytes, growth, cacheTrackingMetadataReserveBytes] {
             let sum = estimate.addingReportingOverflow(bytes)
             estimate = sum.overflow ? .max : sum.partialValue
         }
         estimatedWorkingSetBytes = estimate
+    }
+
+    private static func trackingMetadataReserve(config: ArchConfig, slots: Int) -> UInt64 {
+        guard config.numExperts > 0, config.numLayers > 0 else { return 0 }
+        let page = UInt64(max(1, sysconf(_SC_PAGESIZE)))
+        // Two new host arrays per opened expert layer: prediction counts and
+        // unused-prefetch flags. Allow 64 bytes per allocation and whole pages.
+        func allocation(_ bytes: UInt64) -> UInt64 {
+            let header = bytes.addingReportingOverflow(64)
+            let rounded = header.partialValue.addingReportingOverflow(page - 1)
+            guard !header.overflow && !rounded.overflow else { return .max }
+            return rounded.partialValue / page * page
+        }
+        let counters = UInt64(config.numExperts).multipliedReportingOverflow(
+            by: UInt64(MemoryLayout<Int>.stride))
+        guard !counters.overflow else { return .max }
+        let flags = UInt64(min(max(1, slots), config.numExperts))
+        let layer = allocation(counters.partialValue).addingReportingOverflow(allocation(flags))
+        guard !layer.overflow else { return .max }
+        let total = layer.partialValue.multipliedReportingOverflow(by: UInt64(config.numLayers))
+        return total.overflow ? .max : total.partialValue
     }
 }
 

@@ -1041,16 +1041,16 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
                 min(Int(predictedPointer[$0]), config.numExperts - 1)
             }
             var reads: DispatchGroup?
-            if let plan = try model.planRoutedExperts(layer: layer + 1, experts: predicted),
+            if let plan = try model.planRoutedExperts(layer: layer + 1, experts: predicted, purpose: .prefetch),
                !plan.misses.isEmpty {
                 // Dispatched after this layer's own fetch so the two reads
                 // do not split the SSD's bandwidth.
+                let prefetch = try model.expertPrefetchOperation(plan: plan)
                 let group = DispatchGroup()
                 group.enter()
-                let model = self.model
                 lookaheadDispatch = {
                     DispatchQueue.global(qos: .userInitiated).async {
-                        try? model.prefetchRoutedExperts(plan: plan)
+                        try? prefetch()
                         group.leave()
                     }
                 }

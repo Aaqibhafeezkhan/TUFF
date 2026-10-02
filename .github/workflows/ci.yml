@@ -31,6 +31,7 @@ jobs:
         run: Scripts/test.sh
       - name: Test benchmark reporting
         run: |
+          python3 Scripts/test_release_harnesses.py
           python3 Scripts/test_benchmark_reporting.py
           ruby Scripts/test_benchmark_simple.rb
           ruby Scripts/test_benchmark_v2.rb

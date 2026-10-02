@@ -615,7 +615,8 @@ extension ArchConfig {
         layerMask: [UInt8] = [2, 1, 2, 1],
         int4GroupSize: Int = 32,
         ngramLayer: Int? = nil,
-        indexer: AttentionIndexerConfig = .none
+        indexer: AttentionIndexerConfig = .none,
+        numExperts: Int = 16
     ) -> ArchConfig {
         ArchConfig(
             hiddenSize: 128,
@@ -633,7 +634,7 @@ extension ArchConfig {
             fullRopeTheta: 10_000_000.0,
             partialRotaryFactor: 0.25,
             numLayers: layerMask.count,
-            numExperts: 16,
+            numExperts: numExperts,
             topKExperts: 10,
             tieWordEmbeddings: false,
             attentionKEqV: false,

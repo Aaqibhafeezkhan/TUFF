@@ -1,4 +1,6 @@
 import Metal
+import Foundation
+import Darwin
 import Testing
 @testable import TUFFEngine
 
@@ -79,14 +81,15 @@ import Testing
 
         func draw(seed: UInt64,
                   temperature: Float = 1.0,
-                  topP: Float) -> (current: UInt32, candidate: UInt32) {
+                  topP: Float,
+                  topK: UInt32 = 64) -> (current: UInt32, candidate: UInt32) {
             let cb = context.queue.makeCommandBuffer()!
             current.encode(commandBuffer: cb,
                            probs: probs,
                            outToken: currentOutput,
                            v: UInt32(vocab),
                            temperature: temperature,
-                           topK: 64,
+                           topK: topK,
                            topP: topP,
                            seed: seed)
             candidate.encode(commandBuffer: cb,
@@ -94,7 +97,7 @@ import Testing
                              outToken: candidateOutput,
                              temperature: temperature,
                              topP: topP,
-                             seed: seed)
+                             seed: seed, topK: topK)
             cb.commit()
             cb.waitUntilCompleted()
             return (currentOutput.contents().load(as: UInt32.self),
@@ -102,32 +105,35 @@ import Testing
         }
     }
 
-    @Test func productionVocabularyMatchesCurrentSampler() throws {
+    @Test(arguments: [UInt32(20), 40, 64])
+    func productionVocabularyMatchesCurrentSampler(topK: UInt32) throws {
         let rig = try Rig(vocab: 262_144)
         #expect(rig.candidate.scratchBytes == 139_264)
         rig.write { i in
             let mixed = UInt64(i) &* 6364136223846793005 &+ 1442695040888963407
-            return Float(UInt32(mixed >> 40) + 1) * (1.0 / 16_777_217.0)
+            return Float(UInt32(mixed >> 40) + 1)
+                * (1.0 / 16_777_217.0) * (2.0 / Float(rig.vocab))
         }
 
-        for temperature: Float in [0.7, 0.85, 1.0] {
+        for temperature: Float in [0.2, 0.7, 0.85, 1.0, 1.5] {
             for seed: UInt64 in [1, 2, 0x1234_5678_9ABC_DEF0, UInt64.max] {
-                let result = rig.draw(seed: seed, temperature: temperature, topP: 0.95)
+                let result = rig.draw(seed: seed, temperature: temperature, topP: 0.95, topK: topK)
                 #expect(result.candidate == result.current,
                         "temperature \(temperature), seed \(seed): candidate \(result.candidate), current \(result.current)")
             }
         }
     }
 
-    @Test func tiesAndPartialTailMatchCurrentSampler() throws {
+    @Test(arguments: [UInt32(20), 40, 64])
+    func tiesAndPartialTailMatchCurrentSampler(topK: UInt32) throws {
         let rig = try Rig(vocab: 1_003)
         rig.write { _ in 1.0 }
 
         for seed in UInt64(1)...UInt64(8) {
-            let result = rig.draw(seed: seed, topP: 0.95)
+            let result = rig.draw(seed: seed, topP: 0.95, topK: topK)
             #expect(result.candidate == result.current,
                     "seed \(seed): candidate \(result.candidate), current \(result.current)")
-            #expect(result.candidate < 64)
+            #expect(result.candidate < topK)
         }
     }
 
@@ -147,4 +153,119 @@ import Testing
         }
         #expect(sawLastThree, "Top-P incorrectly truncated the renormalized Top-64 set")
     }
+    @Test(arguments: [1, 19, 20, 39, 40, 63, 64, 1025, 200003])
+    func smallVocabularyAndTailBoundariesMatch(vocab: Int) throws {
+        let rig = try Rig(vocab: vocab)
+        rig.write { i in Float((i * 37) % 101 + 1) / 1000 }
+        for k: UInt32 in [20, 40, 64] {
+            for p: Float in [0.01, 0.5, 0.95, 1] {
+                for seed: UInt64 in [0, 1, 9, UInt64.max] {
+                    let result = rig.draw(seed: seed, temperature: 0.85, topP: p, topK: k)
+                    #expect(result.current == result.candidate)
+                }
+            }
+        }
+    }
+
+    @Test(arguments: [UInt32(20), 40, 64])
+    func nonfiniteAndUnderflowInputsKeepReferenceBehavior(topK: UInt32) throws {
+        let rig = try Rig(vocab: 1025)
+        let cases: [(Int) -> Float] = [
+            { i in i == 1024 ? 0.5 : (i % 3 == 0 ? .nan : -.infinity) },
+            { i in i == 7 || i == 1024 ? .infinity : 0.01 },
+            { _ in .nan }, { _ in -.infinity }, { _ in 0 },
+            { i in Float(i % 13 + 1) * 0.00001 }
+        ]
+        for values in cases {
+            rig.write(values)
+            for temperature: Float in [0.2, 1, 1.5] {
+                for seed: UInt64 in [0, 1, 42, UInt64.max] {
+                    let result = rig.draw(seed: seed, temperature: temperature, topP: 0.95, topK: topK)
+                    #expect(result.candidate == result.current)
+                }
+            }
+        }
+    }
+
+    @Test(arguments: [UInt32(20), 40, 64])
+    func independentSortedCDFMatchesSeededDraw(topK: UInt32) throws {
+        let rig = try Rig(vocab: 2049)
+        let probabilities = (0..<rig.vocab).map { i in
+            Float(Float16(Float((i * 29) % 41 + 1) / 43000))
+        }
+        rig.write { probabilities[$0] }
+        let ranked = probabilities.indices.sorted {
+            probabilities[$0] == probabilities[$1] ? $0 < $1 : probabilities[$0] > probabilities[$1]
+        }
+        for p: Float in [0.001, 0.01, 0.95, 1] {
+            var selected = Array(ranked.prefix(Int(topK)))
+            if p < 1 {
+                var cumulative: Float = 0
+                for (rank, index) in selected.enumerated() {
+                    cumulative += probabilities[index]
+                    if cumulative >= p { selected = Array(selected.prefix(rank + 1)); break }
+                }
+            }
+            let sum = selected.reduce(Float(0)) { $0 + probabilities[$1] }
+            for seed: UInt64 in [0, 1, 7, 42, UInt64.max] {
+                var state = seed
+                func advance() -> UInt64 {
+                    state ^= state << 13; state ^= state >> 7; state ^= state << 17
+                    return state &* 2685821657736338717
+                }
+                _ = advance()
+                let threshold = Float(UInt32(advance() >> 40)) / 16777216 * sum
+                var cumulative: Float = 0
+                var expected = selected[0]
+                for index in selected {
+                    cumulative += probabilities[index]
+                    if threshold <= cumulative { expected = index; break }
+                }
+                let result = rig.draw(seed: seed, topP: p, topK: topK)
+                #expect(result.candidate == UInt32(expected))
+                #expect(result.current == UInt32(expected))
+            }
+        }
+    }
+
+    @Test func optionalSequentialSamplerTiming() throws {
+        guard ProcessInfo.processInfo.environment["TUFF_SAMPLER_BENCHMARK"] == "1" else { return }
+        let cases: [(UInt32, Int)] = [(20, 248320), (40, 200064), (64, 262144)]
+        for (k, vocab) in cases {
+            let rig = try Rig(vocab: vocab)
+            rig.write { i in Float((i * 37) % 1009 + 1) / 132000000 }
+            var oldTimes = [Double](), newTimes = [Double]()
+            var oldGPU = [Double](), newGPU = [Double]()
+            for repetition in 0..<40 {
+                for candidate in repetition.isMultiple(of: 2) ? [false, true] : [true, false] {
+                    let cb = rig.context.queue.makeCommandBuffer()!
+                    let start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+                    if candidate {
+                        rig.candidate.encode(commandBuffer: cb, probs: rig.probs,
+                          outToken: rig.candidateOutput, temperature: 1, topP: 0.95, seed: 42, topK: k)
+                    } else {
+                        rig.current.encode(commandBuffer: cb, probs: rig.probs,
+                          outToken: rig.currentOutput, v: UInt32(rig.vocab), temperature: 1,
+                          topK: k, topP: 0.95, seed: 42)
+                    }
+                    cb.commit(); cb.waitUntilCompleted()
+                    #expect(cb.status == .completed)
+                    let elapsed = Double(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - start) / 1e6
+                    if repetition >= 4 {
+                        let gpu = max(0, cb.gpuEndTime - cb.gpuStartTime) * 1000
+                        if candidate { newTimes.append(elapsed); newGPU.append(gpu) }
+                        else { oldTimes.append(elapsed); oldGPU.append(gpu) }
+                    }
+                }
+                #expect(rig.currentOutput.contents().load(as: UInt32.self)
+                  == rig.candidateOutput.contents().load(as: UInt32.self))
+            }
+            let data = try JSONSerialization.data(withJSONObject:
+              ["top_k": k, "vocab": rig.vocab, "reference_ms": oldTimes,
+               "hierarchical_ms": newTimes, "reference_gpu_ms": oldGPU,
+               "hierarchical_gpu_ms": newGPU], options: [.sortedKeys])
+            print("[sampler timing] " + String(decoding: data, as: UTF8.self))
+        }
+    }
+
 }

@@ -360,10 +360,8 @@ void sample(
     // 3. Temperature reweights the survivors as p^(1/T).
     // 4. CDF inverse-transform sample with the seeded PRNG.
     //
-    // We use a *single* thread for the top-k / top-p / sample logic. Each
-    // top-k slot costs one full V-pass, so explicit small top_k stays
-    // tolerable; the k=256 worst case is exactly what the fast path above
-    // removes from the default configuration.
+    // Each top-k slot uses a parallel full-vocabulary argmax pass.
+    // Top-p and the final draw then run on one thread over the survivors.
     // ------------------------------------------------------------------
 
     // -- Threadgroup buffers for the sampler state. 256 floats + 256 indices
@@ -556,8 +554,12 @@ void sample_topk64_stage1(
     for (uint i = lid; i < 1024; i += 256) {
         uint source = base + i;
         bool valid = source < V;
-        values[i] = valid ? float(probs[source]) : -INFINITY;
-        indices[i] = valid ? source : 0xFFFFFFFFu;
+        // The reference scan ignores NaN and -infinity, but ranks +infinity.
+        half probability = valid ? probs[source] : half(-INFINITY);
+        ushort bits = as_type<ushort>(probability);
+        bool rankable = valid && (bits & 0x7FFFu) <= 0x7C00u && bits != 0xFC00u;
+        values[i] = rankable ? float(probability) : -INFINITY;
+        indices[i] = rankable ? source : 0xFFFFFFFFu;
     }
     sample_topk64_sort_tile(values, indices, lid);
 
@@ -605,6 +607,7 @@ void sample_topk64_final(
     constant float& temperature [[buffer(4)]],
     constant float& top_p [[buffer(5)]],
     constant uint64_t& seed [[buffer(6)]],
+    constant uint& top_k [[buffer(7)]],
     uint lid [[thread_position_in_threadgroup]]) {
     threadgroup float values[1024];
     threadgroup uint indices[1024];
@@ -618,7 +621,7 @@ void sample_topk64_final(
 
     if (lid == 0) {
         uint kept = 0;
-        while (kept < 64
+        while (kept < min(top_k, 64u)
                && indices[kept] != 0xFFFFFFFFu
                && isfinite(values[kept])) {
             kept += 1;

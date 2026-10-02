@@ -31,6 +31,11 @@ struct ExpertLookahead {
     private(set) var enabled = true
     var pending: Pending?
 
+    // Read once when the runner is created, never while GPU work is in flight.
+    init(environment: [String: String] = ProcessInfo.processInfo.environment) {
+        enabled = environment["TUFF_EXPERT_LOOKAHEAD"] != "off"
+    }
+
     var precision: Double {
         predicted == 0 ? 0 : Double(correct) / Double(predicted)
     }

@@ -1,24 +1,31 @@
-# TUFF 6.0.2 model validation
+# TUFF 6.1.0 model validation
 
 Host model and memory: Mac14,2, 17179869184.
 
-Measured 2026-09-30. These are short correctness smoke checks, not model-quality or sustained-performance qualification. Each attempt uses a fresh process. Decode rate excludes load and prefill. Prefill includes first-use expert integrity checks; filesystem caching is uncontrolled. Timings may overlap; logical expert reads include OS-cache hits and do not measure physical SSD traffic.
+Measured 2026-10-01. These are short correctness smoke checks, not model-quality or sustained-performance qualification. Each attempt uses a fresh process. Decode rate excludes load and prefill. Prefill includes first-use expert integrity checks; filesystem caching is uncontrolled. Timings may overlap; logical expert reads include OS-cache hits and do not measure physical SSD traffic.
 
-Text smoke passes: 27/27. Image smoke passes: 6/6.
+Text smoke passes: 31/31. Image smoke passes: 6/6.
 
 | Model | All decode rates (tok/s) | Median | Min..max | Spread | Prefill median | Peak RSS max |
 | --- | --- | ---: | --- | ---: | ---: | ---: |
-| Qwen3.8 Flash Next 4-bit | 1.074, 1.300, 0.223 | 1.074 | 0.223..1.300 | 1.077 | 28.18 s | 2636 MiB |
-| Gemma 4 26B-A4B IT | 5.448, 4.084, 4.107 | 4.107 | 4.084..5.448 | 1.364 | 8.79 s | 1748 MiB |
-| Gemma 4 E2B IT | 35.031, 34.626, 37.790 | 35.031 | 34.626..37.790 | 3.164 | 0.62 s | 327 MiB |
-| Gemma 4 E4B IT | 15.804, 16.414, 17.140 | 16.414 | 15.804..17.140 | 1.336 | 0.92 s | 324 MiB |
-| Gemma 4 12B IT QAT | 3.843, 3.785, 3.072 | 3.785 | 3.072..3.843 | 0.771 | 25.93 s | 402 MiB |
-| Qwen3.6 35B-A3B | 7.216, 7.223, 6.916 | 7.216 | 6.916..7.223 | 0.307 | 9.44 s | 1422 MiB |
-| GPT-OSS 20B | 1.443, 1.898, 1.738 | 1.738 | 1.443..1.898 | 0.455 | 9.27 s | 2441 MiB |
-| GPT-OSS 120B | 1.469, 1.430, 1.506 | 1.469 | 1.430..1.506 | 0.076 | 105.77 s | 1963 MiB |
-| MiniMax M2.7 4-bit | 0.132, 0.137, 0.197 | 0.137 | 0.132..0.197 | 0.065 | 81.99 s | 1944 MiB |
+| Qwen3.8 Flash Next 4-bit | 0.194†, 0.716†, 1.711, 1.681, 0.604 | 1.681 | 0.604..1.711 | 1.107 | 28.46 s | 3043 MiB |
+| Gemma 4 26B-A4B IT | 8.322, 7.428, 6.903 | 7.428 | 6.903..8.322 | 1.419 | 4.52 s | 1849 MiB |
+| Gemma 4 E2B IT | 52.007, 53.591, 52.703 | 52.703 | 52.007..53.591 | 1.584 | 0.42 s | 324 MiB |
+| Gemma 4 E4B IT | 31.121, 30.987, 30.967 | 30.987 | 30.967..31.121 | 0.154 | 0.71 s | 324 MiB |
+| Gemma 4 12B IT QAT | 7.267, 7.475, 7.473 | 7.473 | 7.267..7.475 | 0.208 | 4.58 s | 385 MiB |
+| Qwen3.6 35B-A3B | 8.923, 8.481, 7.283 | 8.481 | 7.283..8.923 | 1.640 | 6.38 s | 1426 MiB |
+| GPT-OSS 20B | 4.670, 5.053, 4.904 | 4.904 | 4.670..5.053 | 0.383 | 5.42 s | 3036 MiB |
+| GPT-OSS 120B | 1.956, 1.952, 1.959 | 1.956 | 1.952..1.959 | 0.007 | 64.39 s | 1898 MiB |
+| MiniMax M2.7 4-bit | 0.030†, 0.374, 0.007†, 0.234, 0.223 | 0.234 | 0.223..0.374 | 0.151 | 52.64 s | 2733 MiB |
 
-Peak RSS is the process resident set, not total model or Metal memory. Slow runs have no assigned cause. Machine-state snapshots record available thermal, power, swap, VM and memory-pressure probes before and after each run; unavailable probes are marked below.
+† Timing excluded from median, range, spread, prefill and RSS summaries. Every raw observation remains in this report. Exclusions require a recorded measurement interruption; slow or failed runs are otherwise retained.
+
+- Qwen3.8 Flash Next 4-bit / paris / attempt 1: Recorded system sleep overlapped this attempt.
+- Qwen3.8 Flash Next 4-bit / paris / attempt 2: Recorded system sleep overlapped this attempt.
+- MiniMax M2.7 4-bit / paris / attempt 1: Recorded system sleep overlapped this attempt.
+- MiniMax M2.7 4-bit / paris / attempt 3: Recorded system sleep overlapped this attempt.
+
+Peak RSS is the process resident set, not total model or Metal memory. Other timing variation has no assigned cause. Machine-state snapshots record available thermal, power, swap, VM and memory-pressure probes before and after each run; unavailable probes are marked below.
 
 ## Resolved settings
 
@@ -40,12 +47,15 @@ Full resolved runtime settings (including kernel preferences):
 
 ```json
 {
+  "cache_tracking_metadata_reserve_bytes": "1572864",
   "context": "4096",
-  "estimated_working_set_bytes": "10195324416",
+  "estimated_working_set_bytes": "10196897280",
   "expert_cache_policy": "lfu",
   "expert_cache_slots": "32",
+  "expert_lookahead": "auto",
   "head_path": "logits",
   "max_new_tokens": "128",
+  "model_integrity": "full-sha256",
   "prefill": "chunked",
   "prefill_attention_path": "full-tensorops-2d-preferred",
   "prefill_chunk_tokens": "2048",
@@ -64,12 +74,15 @@ Full resolved runtime settings (including kernel preferences):
 
 ```json
 {
+  "cache_tracking_metadata_reserve_bytes": "983040",
   "context": "4096",
-  "estimated_working_set_bytes": "2376451686",
+  "estimated_working_set_bytes": "2377434726",
   "expert_cache_policy": "lfu",
   "expert_cache_slots": "16",
+  "expert_lookahead": "auto",
   "head_path": "logits",
   "max_new_tokens": "128",
+  "model_integrity": "full-sha256",
   "prefill": "chunked",
   "prefill_attention_path": "full-tensorops-2d-preferred",
   "prefill_chunk_tokens": "512",
@@ -88,12 +101,15 @@ Full resolved runtime settings (including kernel preferences):
 
 ```json
 {
+  "cache_tracking_metadata_reserve_bytes": "0",
   "context": "4096",
   "estimated_working_set_bytes": "1843596240",
   "expert_cache_policy": "lfu",
   "expert_cache_slots": "16",
+  "expert_lookahead": "auto",
   "head_path": "logits",
   "max_new_tokens": "128",
+  "model_integrity": "full-sha256",
   "prefill": "chunked",
   "prefill_attention_path": "full-tensorops-2d-preferred",
   "prefill_chunk_tokens": "256",
@@ -112,12 +128,15 @@ Full resolved runtime settings (including kernel preferences):
 
 ```json
 {
+  "cache_tracking_metadata_reserve_bytes": "0",
   "context": "4096",
   "estimated_working_set_bytes": "1935625168",
   "expert_cache_policy": "lfu",
   "expert_cache_slots": "16",
+  "expert_lookahead": "auto",
   "head_path": "logits",
   "max_new_tokens": "128",
+  "model_integrity": "full-sha256",
   "prefill": "chunked",
   "prefill_attention_path": "full-tensorops-2d-preferred",
   "prefill_chunk_tokens": "256",
@@ -136,12 +155,15 @@ Full resolved runtime settings (including kernel preferences):
 
 ```json
 {
+  "cache_tracking_metadata_reserve_bytes": "0",
   "context": "4096",
   "estimated_working_set_bytes": "6120815616",
   "expert_cache_policy": "lfu",
   "expert_cache_slots": "16",
+  "expert_lookahead": "auto",
   "head_path": "logits",
   "max_new_tokens": "128",
+  "model_integrity": "full-sha256",
   "prefill": "chunked",
   "prefill_attention_path": "full-tensorops-2d-preferred",
   "prefill_chunk_tokens": "256",
@@ -160,12 +182,15 @@ Full resolved runtime settings (including kernel preferences):
 
 ```json
 {
+  "cache_tracking_metadata_reserve_bytes": "1310720",
   "context": "4096",
-  "estimated_working_set_bytes": "2114068480",
+  "estimated_working_set_bytes": "2115379200",
   "expert_cache_policy": "lfu",
   "expert_cache_slots": "16",
+  "expert_lookahead": "auto",
   "head_path": "logits",
   "max_new_tokens": "128",
+  "model_integrity": "full-sha256",
   "prefill": "chunked",
   "prefill_attention_path": "full-tensorops-2d-preferred",
   "prefill_chunk_tokens": "2048",
@@ -184,12 +209,15 @@ Full resolved runtime settings (including kernel preferences):
 
 ```json
 {
+  "cache_tracking_metadata_reserve_bytes": "786432",
   "context": "4096",
-  "estimated_working_set_bytes": "9369225536",
+  "estimated_working_set_bytes": "9370011968",
   "expert_cache_policy": "lfu",
   "expert_cache_slots": "16",
+  "expert_lookahead": "auto",
   "head_path": "logits",
   "max_new_tokens": "128",
+  "model_integrity": "full-sha256",
   "prefill": "chunked",
   "prefill_attention_path": "full-tensorops-2d-preferred",
   "prefill_chunk_tokens": "512",
@@ -208,12 +236,15 @@ Full resolved runtime settings (including kernel preferences):
 
 ```json
 {
+  "cache_tracking_metadata_reserve_bytes": "1179648",
   "context": "4096",
-  "estimated_working_set_bytes": "8219370024",
+  "estimated_working_set_bytes": "8220549672",
   "expert_cache_policy": "lfu",
   "expert_cache_slots": "4",
+  "expert_lookahead": "auto",
   "head_path": "logits",
   "max_new_tokens": "128",
+  "model_integrity": "full-sha256",
   "prefill": "off",
   "prefill_attention_path": "full-tensorops-2d-preferred",
   "prefill_chunk_tokens": "2048",
@@ -232,12 +263,15 @@ Full resolved runtime settings (including kernel preferences):
 
 ```json
 {
+  "cache_tracking_metadata_reserve_bytes": "2031616",
   "context": "4096",
-  "estimated_working_set_bytes": "11805876352",
+  "estimated_working_set_bytes": "11807907968",
   "expert_cache_policy": "lfu",
   "expert_cache_slots": "16",
+  "expert_lookahead": "auto",
   "head_path": "logits",
   "max_new_tokens": "256",
+  "model_integrity": "full-sha256",
   "prefill": "chunked",
   "prefill_attention_path": "full-tensorops-2d-preferred",
   "prefill_chunk_tokens": "2048",
@@ -259,44 +293,48 @@ Wall is elapsed harness-attempt time, including before-run probes and metadata c
 
 | Model | Attempt | Status / stop | Prompt / generated | Prefill | Decode | tok/s | Wall |
 | --- | ---: | --- | --- | ---: | ---: | ---: | ---: |
-| Qwen3.8 Flash Next 4-bit | 1 | passed / endOfTurn | 19 / 9 | 27.860 | 8.380 | 1.074 | 41.936 |
-| Qwen3.8 Flash Next 4-bit | 2 | passed / endOfTurn | 19 / 9 | 28.180 | 6.920 | 1.300 | 39.176 |
-| Qwen3.8 Flash Next 4-bit | 3 | passed / endOfTurn | 19 / 9 | 46.170 | 40.340 | 0.223 | 92.137 |
-| Gemma 4 26B-A4B IT | 1 | passed / endOfTurn | 20 / 9 | 8.760 | 1.650 | 5.448 | 17.785 |
-| Gemma 4 26B-A4B IT | 2 | passed / endOfTurn | 20 / 9 | 9.260 | 2.200 | 4.084 | 18.126 |
-| Gemma 4 26B-A4B IT | 3 | passed / endOfTurn | 20 / 9 | 8.790 | 2.190 | 4.107 | 17.511 |
-| Gemma 4 E2B IT | 1 | passed / endOfTurn | 16 / 9 | 0.670 | 0.260 | 35.031 | 8.695 |
-| Gemma 4 E2B IT | 2 | passed / endOfTurn | 16 / 9 | 0.620 | 0.260 | 34.626 | 8.984 |
-| Gemma 4 E2B IT | 3 | passed / endOfTurn | 16 / 9 | 0.570 | 0.240 | 37.790 | 8.168 |
-| Gemma 4 E4B IT | 1 | passed / endOfTurn | 16 / 9 | 0.960 | 0.570 | 15.804 | 9.965 |
-| Gemma 4 E4B IT | 2 | passed / endOfTurn | 16 / 9 | 0.920 | 0.550 | 16.414 | 10.228 |
-| Gemma 4 E4B IT | 3 | passed / endOfTurn | 16 / 9 | 0.890 | 0.530 | 17.140 | 9.988 |
-| Gemma 4 12B IT QAT | 1 | passed / endOfTurn | 20 / 8 | 22.700 | 2.080 | 3.843 | 37.109 |
-| Gemma 4 12B IT QAT | 2 | passed / endOfTurn | 20 / 8 | 25.930 | 2.110 | 3.785 | 44.045 |
-| Gemma 4 12B IT QAT | 3 | passed / endOfTurn | 20 / 8 | 32.950 | 2.600 | 3.072 | 53.789 |
-| Qwen3.6 35B-A3B | 1 | passed / endOfTurn | 19 / 9 | 9.240 | 1.250 | 7.216 | 17.616 |
-| Qwen3.6 35B-A3B | 2 | passed / endOfTurn | 19 / 9 | 9.440 | 1.250 | 7.223 | 15.922 |
-| Qwen3.6 35B-A3B | 3 | passed / endOfTurn | 19 / 9 | 10.470 | 1.300 | 6.916 | 17.839 |
-| GPT-OSS 20B | 1 | passed / eos | 74 / 20 | 10.670 | 13.860 | 1.443 | 33.375 |
-| GPT-OSS 20B | 2 | passed / eos | 74 / 20 | 8.650 | 10.540 | 1.898 | 29.361 |
-| GPT-OSS 20B | 3 | passed / eos | 74 / 20 | 9.270 | 11.510 | 1.738 | 28.454 |
-| GPT-OSS 120B | 1 | passed / eos | 74 / 23 | 104.820 | 15.660 | 1.469 | 129.902 |
-| GPT-OSS 120B | 2 | passed / eos | 74 / 23 | 105.770 | 16.080 | 1.430 | 134.392 |
-| GPT-OSS 120B | 3 | passed / eos | 74 / 23 | 138.000 | 15.270 | 1.506 | 163.213 |
-| MiniMax M2.7 4-bit | 1 | passed / endOfTurn | 46 / 42 | 90.660 | 317.390 | 0.132 | 418.503 |
-| MiniMax M2.7 4-bit | 2 | passed / endOfTurn | 46 / 42 | 81.990 | 305.690 | 0.137 | 394.505 |
-| MiniMax M2.7 4-bit | 3 | passed / endOfTurn | 46 / 42 | 65.400 | 213.030 | 0.197 | 284.645 |
+| Qwen3.8 Flash Next 4-bit | 1 | passed / endOfTurn | 19 / 9 | 1256.340 | 46.410 | 0.194 | 1309.497 |
+| Qwen3.8 Flash Next 4-bit | 2 | passed / endOfTurn | 19 / 9 | 3609.560 | 12.570 | 0.716 | 3630.452 |
+| Qwen3.8 Flash Next 4-bit | 3 | passed / endOfTurn | 19 / 9 | 28.460 | 5.260 | 1.711 | 38.164 |
+| Gemma 4 26B-A4B IT | 1 | passed / endOfTurn | 20 / 9 | 4.510 | 1.080 | 8.322 | 8.689 |
+| Gemma 4 26B-A4B IT | 2 | passed / endOfTurn | 20 / 9 | 4.590 | 1.210 | 7.428 | 8.690 |
+| Gemma 4 26B-A4B IT | 3 | passed / endOfTurn | 20 / 9 | 4.520 | 1.300 | 6.903 | 8.811 |
+| Gemma 4 E2B IT | 1 | passed / endOfTurn | 16 / 9 | 0.440 | 0.170 | 52.007 | 4.074 |
+| Gemma 4 E2B IT | 2 | passed / endOfTurn | 16 / 9 | 0.420 | 0.170 | 53.591 | 3.832 |
+| Gemma 4 E2B IT | 3 | passed / endOfTurn | 16 / 9 | 0.400 | 0.170 | 52.703 | 3.790 |
+| Gemma 4 E4B IT | 1 | passed / endOfTurn | 16 / 9 | 0.820 | 0.290 | 31.121 | 5.481 |
+| Gemma 4 E4B IT | 2 | passed / endOfTurn | 16 / 9 | 0.710 | 0.290 | 30.987 | 5.096 |
+| Gemma 4 E4B IT | 3 | passed / endOfTurn | 16 / 9 | 0.690 | 0.290 | 30.967 | 5.092 |
+| Gemma 4 12B IT QAT | 1 | passed / endOfTurn | 20 / 8 | 13.460 | 1.100 | 7.267 | 21.907 |
+| Gemma 4 12B IT QAT | 2 | passed / endOfTurn | 20 / 8 | 4.370 | 1.070 | 7.475 | 13.035 |
+| Gemma 4 12B IT QAT | 3 | passed / endOfTurn | 20 / 8 | 4.580 | 1.070 | 7.473 | 13.499 |
+| Qwen3.6 35B-A3B | 1 | passed / endOfTurn | 19 / 9 | 6.220 | 1.010 | 8.923 | 9.914 |
+| Qwen3.6 35B-A3B | 2 | passed / endOfTurn | 19 / 9 | 6.380 | 1.060 | 8.481 | 10.152 |
+| Qwen3.6 35B-A3B | 3 | passed / endOfTurn | 19 / 9 | 6.380 | 1.240 | 7.283 | 10.262 |
+| GPT-OSS 20B | 1 | passed / eos | 74 / 20 | 6.210 | 4.280 | 4.670 | 14.904 |
+| GPT-OSS 20B | 2 | passed / eos | 74 / 20 | 5.420 | 3.960 | 5.053 | 13.515 |
+| GPT-OSS 20B | 3 | passed / eos | 74 / 20 | 5.330 | 4.080 | 4.904 | 13.412 |
+| GPT-OSS 120B | 1 | passed / eos | 74 / 22 | 65.490 | 11.250 | 1.956 | 81.051 |
+| GPT-OSS 120B | 2 | passed / eos | 74 / 22 | 64.390 | 11.270 | 1.952 | 80.109 |
+| GPT-OSS 120B | 3 | passed / eos | 74 / 22 | 62.660 | 11.230 | 1.959 | 78.305 |
+| MiniMax M2.7 4-bit | 1 | passed / endOfTurn | 46 / 42 | 50.460 | 1384.720 | 0.030 | 1439.014 |
+| MiniMax M2.7 4-bit | 2 | passed / endOfTurn | 46 / 42 | 49.920 | 112.320 | 0.374 | 166.168 |
+| MiniMax M2.7 4-bit | 3 | passed / endOfTurn | 46 / 42 | 47.860 | 6069.870 | 0.007 | 6121.603 |
+| Qwen3.8 Flash Next 4-bit | 4 | passed / endOfTurn | 19 / 9 | 27.480 | 5.350 | 1.681 | 37.687 |
+| Qwen3.8 Flash Next 4-bit | 5 | passed / endOfTurn | 19 / 9 | 30.810 | 14.900 | 0.604 | 50.950 |
+| MiniMax M2.7 4-bit | 4 | passed / endOfTurn | 46 / 42 | 61.450 | 179.640 | 0.234 | 246.880 |
+| MiniMax M2.7 4-bit | 5 | passed / endOfTurn | 46 / 42 | 52.640 | 188.710 | 0.223 | 246.394 |
 
 ## Logical expert I/O (prefill and decode combined)
 
 | Model / attempt | Demand records / bytes | Prefetch records / bytes | Exposed wait ms | Slot allocations |
 | --- | --- | --- | ---: | ---: |
-| Qwen3.8 Flash Next 4-bit / 1 | 4408 / 13577486336 | 1651 / 5085396992 | 582.4 | 4731174912 |
-| Qwen3.8 Flash Next 4-bit / 2 | 4408 / 13577486336 | 1651 / 5085396992 | 633.6 | 4731174912 |
-| Qwen3.8 Flash Next 4-bit / 3 | 4408 / 13577486336 | 1651 / 5085396992 | 210.6 | 4731174912 |
-| Gemma 4 26B-A4B IT / 1 | 1777 / 5968445440 | 803 / 2697052160 | 207.6 | 1612185600 |
-| Gemma 4 26B-A4B IT / 2 | 1777 / 5968445440 | 803 / 2697052160 | 185.4 | 1612185600 |
-| Gemma 4 26B-A4B IT / 3 | 1777 / 5968445440 | 803 / 2697052160 | 270.1 | 1612185600 |
+| Qwen3.8 Flash Next 4-bit / 1 | 4408 / 13577486336 | 1651 / 5085396992 | 430.2 | 4731174912 |
+| Qwen3.8 Flash Next 4-bit / 2 | 4408 / 13577486336 | 1651 / 5085396992 | 767.3 | 4731174912 |
+| Qwen3.8 Flash Next 4-bit / 3 | 4408 / 13577486336 | 1651 / 5085396992 | 484.4 | 4731174912 |
+| Gemma 4 26B-A4B IT / 1 | 1777 / 5968445440 | 803 / 2697052160 | 260.3 | 1612185600 |
+| Gemma 4 26B-A4B IT / 2 | 1777 / 5968445440 | 803 / 2697052160 | 261.8 | 1612185600 |
+| Gemma 4 26B-A4B IT / 3 | 1777 / 5968445440 | 803 / 2697052160 | 250.8 | 1612185600 |
 | Gemma 4 E2B IT / 1 | 0 / 0 | 0 / 0 | 0.0 | 0 |
 | Gemma 4 E2B IT / 2 | 0 / 0 | 0 / 0 | 0.0 | 0 |
 | Gemma 4 E2B IT / 3 | 0 / 0 | 0 / 0 | 0.0 | 0 |
@@ -306,18 +344,22 @@ Wall is elapsed harness-attempt time, including before-run probes and metadata c
 | Gemma 4 12B IT QAT / 1 | 0 / 0 | 0 / 0 | 0.0 | 0 |
 | Gemma 4 12B IT QAT / 2 | 0 / 0 | 0 / 0 | 0.0 | 0 |
 | Gemma 4 12B IT QAT / 3 | 0 / 0 | 0 / 0 | 0.0 | 0 |
-| Qwen3.6 35B-A3B / 1 | 2747 / 4860739584 | 1302 / 2303852544 | 228.2 | 1132462080 |
-| Qwen3.6 35B-A3B / 2 | 2747 / 4860739584 | 1302 / 2303852544 | 244.5 | 1132462080 |
-| Qwen3.6 35B-A3B / 3 | 2747 / 4860739584 | 1302 / 2303852544 | 238.2 | 1132462080 |
-| GPT-OSS 20B / 1 | 713 / 9438887936 | 302 / 3997958144 | 848.4 | 5083496448 |
-| GPT-OSS 20B / 2 | 713 / 9438887936 | 302 / 3997958144 | 900.1 | 5083496448 |
-| GPT-OSS 20B / 3 | 713 / 9438887936 | 302 / 3997958144 | 1190.5 | 5083496448 |
-| GPT-OSS 120B / 1 | 2944 / 38973472768 | 10020 / 132647485440 | 15732.8 | 1906311168 |
-| GPT-OSS 120B / 2 | 2944 / 38973472768 | 10020 / 132647485440 | 16751.3 | 1906311168 |
-| GPT-OSS 120B / 3 | 2944 / 38973472768 | 10020 / 132647485440 | 14117.2 | 1906311168 |
-| MiniMax M2.7 4-bit / 1 | 11347 / 90351894528 | 11646 / 92732719104 | 26943.1 | 7898923008 |
-| MiniMax M2.7 4-bit / 2 | 11347 / 90351894528 | 11646 / 92732719104 | 32333.0 | 7898923008 |
-| MiniMax M2.7 4-bit / 3 | 11347 / 90351894528 | 11646 / 92732719104 | 39646.1 | 7898923008 |
+| Qwen3.6 35B-A3B / 1 | 2747 / 4860739584 | 1302 / 2303852544 | 232.3 | 1132462080 |
+| Qwen3.6 35B-A3B / 2 | 2747 / 4860739584 | 1302 / 2303852544 | 252.6 | 1132462080 |
+| Qwen3.6 35B-A3B / 3 | 2747 / 4860739584 | 1302 / 2303852544 | 309.2 | 1132462080 |
+| GPT-OSS 20B / 1 | 727 / 9624223744 | 301 / 3984719872 | 413.2 | 5083496448 |
+| GPT-OSS 20B / 2 | 727 / 9624223744 | 301 / 3984719872 | 416.4 | 5083496448 |
+| GPT-OSS 20B / 3 | 727 / 9624223744 | 301 / 3984719872 | 424.2 | 5083496448 |
+| GPT-OSS 120B / 1 | 2931 / 38801375232 | 9819 / 129986592768 | 28480.0 | 1906311168 |
+| GPT-OSS 120B / 2 | 2931 / 38801375232 | 9819 / 129986592768 | 27417.6 | 1906311168 |
+| GPT-OSS 120B / 3 | 2931 / 38801375232 | 9819 / 129986592768 | 26736.8 | 1906311168 |
+| MiniMax M2.7 4-bit / 1 | 11347 / 90351894528 | 11646 / 92732719104 | 25341.2 | 7898923008 |
+| MiniMax M2.7 4-bit / 2 | 11347 / 90351894528 | 11646 / 92732719104 | 16325.4 | 7898923008 |
+| MiniMax M2.7 4-bit / 3 | 11347 / 90351894528 | 11646 / 92732719104 | 30397.7 | 7898923008 |
+| Qwen3.8 Flash Next 4-bit / 4 | 4408 / 13577486336 | 1651 / 5085396992 | 506.8 | 4731174912 |
+| Qwen3.8 Flash Next 4-bit / 5 | 4408 / 13577486336 | 1651 / 5085396992 | 273.4 | 4731174912 |
+| MiniMax M2.7 4-bit / 4 | 11347 / 90351894528 | 11646 / 92732719104 | 27986.6 | 7898923008 |
+| MiniMax M2.7 4-bit / 5 | 11347 / 90351894528 | 11646 / 92732719104 | 25417.5 | 7898923008 |
 
 ## Image smoke checks
 
@@ -336,49 +378,53 @@ These probes do not establish the cause of a timing difference. Memory free is t
 
 | Model / kind / attempt | Memory free | Swap | Thermal | Power | VM counters |
 | --- | --- | --- | --- | --- | --- |
-| Qwen3.8 Flash Next 4-bit / paris / 1 | 75% / 72% | total = 6144.00M  used = 5166.88M  free = 977.12M  (encrypted) / total = 6144.00M  used = 5349.94M  free = 794.06M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	96%; charging; 0:27 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	97%; charging; 0:25 remaining present: true | 6498791330, 4704297, 748256747, 770906171 / 6504360653, 4704965, 748364384, 771026683 |
-| Qwen3.8 Flash Next 4-bit / paris / 2 | 73% / 74% | total = 6144.00M  used = 5349.94M  free = 794.06M  (encrypted) / total = 7168.00M  used = 5710.81M  free = 1457.19M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	97%; charging; 0:25 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	97%; charging; 0:25 remaining present: true | 6504361107, 4704965, 748364384, 771026683 / 6509890568, 4705220, 748428187, 771114311 |
-| Qwen3.8 Flash Next 4-bit / paris / 3 | 74% / 76% | total = 7168.00M  used = 5710.81M  free = 1457.19M  (encrypted) / total = 7168.00M  used = 5659.56M  free = 1508.44M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	97%; charging; 0:25 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	97%; charging; 0:24 remaining present: true | 6509890829, 4705220, 748428246, 771114311 / 6515402850, 4705637, 748498072, 771180667 |
-| Gemma 4 26B-A4B IT / paris / 1 | 76% / 77% | total = 7168.00M  used = 5659.56M  free = 1508.44M  (encrypted) / total = 7168.00M  used = 5611.56M  free = 1556.44M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	97%; charging; 0:24 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	97%; charging; 0:24 remaining present: true | 6515402891, 4705637, 748498124, 771180667 / 6516437453, 4705771, 748501344, 771180667 |
-| Gemma 4 26B-A4B IT / paris / 2 | 77% / 77% | total = 7168.00M  used = 5611.56M  free = 1556.44M  (encrypted) / total = 7168.00M  used = 5435.56M  free = 1732.44M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	97%; charging; 0:24 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	97%; charging; 0:24 remaining present: true | 6516437462, 4705771, 748501364, 771180667 / 6517376706, 4705782, 748512320, 771180667 |
-| Gemma 4 26B-A4B IT / paris / 3 | 76% / 77% | total = 7168.00M  used = 5435.56M  free = 1732.44M  (encrypted) / total = 6144.00M  used = 5330.44M  free = 813.56M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	97%; charging; 0:24 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	97%; charging; 0:22 remaining present: true | 6517376752, 4705782, 748512324, 771180667 / 6518330302, 4705871, 748515689, 771180671 |
-| Gemma 4 E2B IT / paris / 1 | 77% / 70% | total = 6144.00M  used = 5330.44M  free = 813.56M  (encrypted) / total = 6144.00M  used = 5322.44M  free = 821.56M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	97%; charging; 0:22 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	97%; charging; 0:22 remaining present: true | 6518330311, 4705871, 748515701, 771180671 / 6518491681, 4705909, 748516153, 771180671 |
-| Gemma 4 E2B IT / paris / 2 | 77% / 60% | total = 6144.00M  used = 5322.44M  free = 821.56M  (encrypted) / total = 6144.00M  used = 5298.44M  free = 845.56M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	97%; charging; 0:22 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	97%; charging; 0:22 remaining present: true | 6518491729, 4705909, 748516153, 771180671 / 6518494458, 4705950, 748518231, 771180671 |
-| Gemma 4 E2B IT / paris / 3 | 72% / 76% | total = 6144.00M  used = 5298.44M  free = 845.56M  (encrypted) / total = 6144.00M  used = 5290.44M  free = 853.56M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	97%; charging; 0:22 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	97%; charging; 0:22 remaining present: true | 6518494479, 4705950, 748518231, 771180671 / 6518495060, 4705950, 748518981, 771180671 |
-| Gemma 4 E4B IT / paris / 1 | 76% / 56% | total = 6144.00M  used = 5290.44M  free = 853.56M  (encrypted) / total = 6144.00M  used = 5266.44M  free = 877.56M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	97%; charging; 0:22 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	98%; charging; 0:21 remaining present: true | 6518495067, 4705950, 748518981, 771180671 / 6518754877, 4705975, 748520200, 771180671 |
-| Gemma 4 E4B IT / paris / 2 | 77% / 67% | total = 6144.00M  used = 5266.44M  free = 877.56M  (encrypted) / total = 6144.00M  used = 5258.44M  free = 885.56M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	98%; charging; 0:21 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	98%; charging; 0:21 remaining present: true | 6518754890, 4705975, 748520200, 771180671 / 6518787209, 4706018, 748520584, 771180671 |
-| Gemma 4 E4B IT / paris / 3 | 76% / 67% | total = 6144.00M  used = 5258.44M  free = 885.56M  (encrypted) / total = 6144.00M  used = 5194.44M  free = 949.56M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	98%; charging; 0:21 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	98%; charging; 0:21 remaining present: true | 6518787226, 4706018, 748520584, 771180671 / 6518815929, 4706068, 748524728, 771180671 |
-| Gemma 4 12B IT QAT / paris / 1 | 77% / 61% | total = 6144.00M  used = 5194.44M  free = 949.56M  (encrypted) / total = 7168.00M  used = 5980.31M  free = 1187.69M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	98%; charging; 0:21 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	98%; charging; 0:21 remaining present: true | 6518815977, 4706068, 748524728, 771180671 / 6520248912, 4706271, 748594376, 771302439 |
-| Gemma 4 12B IT QAT / paris / 2 | 77% / 64% | total = 7168.00M  used = 5972.31M  free = 1195.69M  (encrypted) / total = 7168.00M  used = 6005.00M  free = 1163.00M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	98%; charging; 0:21 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	98%; charging; 0:21 remaining present: true | 6520251949, 4706271, 748595071, 771302439 / 6521713970, 4706631, 748695627, 771411207 |
-| Gemma 4 12B IT QAT / paris / 3 | 63% / 76% | total = 7168.00M  used = 6005.00M  free = 1163.00M  (encrypted) / total = 7168.00M  used = 5952.12M  free = 1215.88M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	98%; charging; 0:21 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	98%; charging; 0:20 remaining present: true | 6521715670, 4706631, 748695743, 771411207 / 6523251538, 4707249, 748896913, 771609559 |
-| Qwen3.6 35B-A3B / paris / 1 | 76% / 76% | total = 7168.00M  used = 5952.12M  free = 1215.88M  (encrypted) / total = 7168.00M  used = 5728.12M  free = 1439.88M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	98%; charging; 0:20 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	98%; charging; 0:20 remaining present: true | 6523255069, 4707249, 748897332, 771609559 / 6524636176, 4707308, 748911237, 771609559 |
-| Qwen3.6 35B-A3B / paris / 2 | 76% / 76% | total = 7168.00M  used = 5720.12M  free = 1447.88M  (encrypted) / total = 7168.00M  used = 5656.12M  free = 1511.88M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	98%; charging; 0:20 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	98%; charging; 0:19 remaining present: true | 6524636316, 4707308, 748911313, 771609559 / 6525905710, 4707346, 748916308, 771609559 |
-| Qwen3.6 35B-A3B / paris / 3 | 76% / 77% | total = 7168.00M  used = 5656.12M  free = 1511.88M  (encrypted) / total = 7168.00M  used = 5496.12M  free = 1671.88M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	98%; charging; 0:19 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	98%; charging; 0:19 remaining present: true | 6525905758, 4707346, 748916340, 771609559 / 6527188158, 4707437, 748926011, 771609559 |
-| GPT-OSS 20B / paris / 1 | 77% / 74% | total = 7168.00M  used = 5496.12M  free = 1671.88M  (encrypted) / total = 6144.00M  used = 5304.25M  free = 839.75M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	98%; charging; 0:19 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	98%; charging; 0:17 remaining present: true | 6527188167, 4707437, 748926011, 771609559 / 6528488715, 4707678, 749001023, 771686135 |
-| GPT-OSS 20B / paris / 2 | 73% / 74% | total = 6144.00M  used = 5304.25M  free = 839.75M  (encrypted) / total = 6144.00M  used = 5326.94M  free = 817.06M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	98%; charging; 0:17 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	98%; charging; 0:17 remaining present: true | 6528488907, 4707678, 749001023, 771686135 / 6529778402, 4707882, 749072226, 771759327 |
-| GPT-OSS 20B / paris / 3 | 74% / 74% | total = 6144.00M  used = 5318.94M  free = 825.06M  (encrypted) / total = 6144.00M  used = 5328.12M  free = 815.88M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	98%; charging; 0:17 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; finishing charge; 0:17 remaining present: true | 6529778560, 4707882, 749072514, 771759327 / 6531056361, 4708129, 749146258, 771835691 |
-| GPT-OSS 120B / paris / 1 | 74% / 67% | total = 6144.00M  used = 5328.12M  free = 815.88M  (encrypted) / total = 6144.00M  used = 4928.12M  free = 1215.88M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; finishing charge; 0:17 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; finishing charge; 0:14 remaining present: true | 6531057874, 4708129, 749146342, 771835691 / 6544877666, 4708741, 749171631, 771835691 |
-| GPT-OSS 120B / paris / 2 | 73% / 75% | total = 6144.00M  used = 4928.12M  free = 1215.88M  (encrypted) / total = 6144.00M  used = 4768.06M  free = 1375.94M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; finishing charge; 0:14 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; finishing charge; 0:13 remaining present: true | 6544877757, 4708741, 749171631, 771835691 / 6558719019, 4709338, 749181961, 771835691 |
-| GPT-OSS 120B / paris / 3 | 73% / 69% | total = 6144.00M  used = 4768.06M  free = 1375.94M  (encrypted) / total = 6144.00M  used = 4536.06M  free = 1607.94M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; finishing charge; 0:13 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; finishing charge; 0:08 remaining present: true | 6558719157, 4709338, 749181965, 771835691 / 6572849871, 4710136, 749196472, 771835691 |
-| MiniMax M2.7 4-bit / paris / 1 | 68% / 74% | total = 6144.00M  used = 4536.06M  free = 1607.94M  (encrypted) / total = 8192.00M  used = 6895.88M  free = 1296.12M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; finishing charge; 0:08 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; finishing charge; 0:00 remaining present: true | 6572849959, 4710136, 749196472, 771835691 / 6590182374, 4713456, 751939948, 774798599 |
-| MiniMax M2.7 4-bit / paris / 2 | 74% / 73% | total = 8192.00M  used = 6003.94M  free = 2188.06M  (encrypted) / total = 8192.00M  used = 6870.56M  free = 1321.44M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; finishing charge; 0:00 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; finishing charge; 0:00 remaining present: true | 6590182496, 4713456, 751941052, 774798599 / 6607386331, 4716555, 755695387, 778650242 |
-| MiniMax M2.7 4-bit / paris / 3 | 73% / 76% | total = 8192.00M  used = 6297.88M  free = 1894.12M  (encrypted) / total = 8192.00M  used = 7461.69M  free = 730.31M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; finishing charge; 0:00 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; finishing charge; 0:00 remaining present: true | 6607387727, 4716555, 755696452, 778650242 / 6624635598, 4720594, 758044584, 781157118 |
-| Qwen3.8 Flash Next 4-bit / vision / 1 | 75% / 70% | total = 8192.00M  used = 6827.69M  free = 1364.31M  (encrypted) / total = 6144.00M  used = 4855.00M  free = 1289.00M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; finishing charge; 0:00 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; finishing charge; 0:00 remaining present: true | 6624635715, 4720594, 758045827, 781157118 / 6634624637, 4721333, 758460910, 781530786 |
-| Gemma 4 26B-A4B IT / vision / 1 | 70% / 74% | total = 6144.00M  used = 4855.00M  free = 1289.00M  (encrypted) / total = 6144.00M  used = 4767.00M  free = 1377.00M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; finishing charge; 0:00 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; finishing charge; 0:00 remaining present: true | 6634624707, 4721333, 758460938, 781530786 / 6636473199, 4721358, 758466977, 781530786 |
-| Gemma 4 E2B IT / vision / 1 | 74% / 58% | total = 6144.00M  used = 4767.00M  free = 1377.00M  (encrypted) / total = 6144.00M  used = 4735.00M  free = 1409.00M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; finishing charge; 0:00 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; finishing charge; 0:00 remaining present: true | 6636473210, 4721358, 758467005, 781530786 / 6636657305, 4721400, 758468530, 781530786 |
-| Gemma 4 E4B IT / vision / 1 | 74% / 73% | total = 6144.00M  used = 4735.00M  free = 1409.00M  (encrypted) / total = 6144.00M  used = 4711.00M  free = 1433.00M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; finishing charge; 0:00 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; finishing charge; 0:00 remaining present: true | 6636657314, 4721400, 758468530, 781530786 / 6636938932, 4721472, 758469915, 781530786 |
-| Gemma 4 12B IT QAT / vision / 1 | 75% / 65% | total = 6144.00M  used = 4711.00M  free = 1433.00M  (encrypted) / total = 7168.00M  used = 5588.44M  free = 1579.56M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; finishing charge; 0:00 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; finishing charge; 0:00 remaining present: true | 6636938941, 4721472, 758469915, 781530786 / 6638485314, 4722270, 758833982, 781956098 |
-| Qwen3.6 35B-A3B / vision / 1 | 77% / 75% | total = 7168.00M  used = 5588.44M  free = 1579.56M  (encrypted) / total = 6144.00M  used = 5205.38M  free = 938.62M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; finishing charge; 0:00 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; finishing charge; 0:00 remaining present: true | 6638487820, 4722270, 758834187, 781956098 / 6640781706, 4722362, 758853185, 781956182 |
+| Qwen3.8 Flash Next 4-bit / paris / 1 | 80% / 78% | total = 5120.00M  used = 3488.00M  free = 1632.00M  (encrypted) / total = 6144.00M  used = 4901.88M  free = 1242.12M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; (no estimate) present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; (no estimate) present: true | 7614924677, 4835113, 782344971, 807170327 / 7620550490, 4836036, 782414241, 807329423 |
+| Qwen3.8 Flash Next 4-bit / paris / 2 | 78% / 71% | total = 6144.00M  used = 4893.88M  free = 1250.12M  (encrypted) / total = 5120.00M  used = 4179.12M  free = 940.88M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; (no estimate) present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; (no estimate) present: true | 7620551070, 4836036, 782415206, 807329423 / 7626185286, 4837501, 782646877, 807525351 |
+| Qwen3.8 Flash Next 4-bit / paris / 3 | 70% / 79% | total = 5120.00M  used = 4179.12M  free = 940.88M  (encrypted) / total = 6144.00M  used = 5374.38M  free = 769.62M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; (no estimate) present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; (no estimate) present: true | 7626198321, 4837501, 782647017, 807525351 / 7631762021, 4838166, 782697496, 807652151 |
+| Gemma 4 26B-A4B IT / paris / 1 | 79% / 81% | total = 6144.00M  used = 5366.38M  free = 777.62M  (encrypted) / total = 6144.00M  used = 5278.38M  free = 865.62M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; (no estimate) present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; (no estimate) present: true | 7631762409, 4838166, 782697620, 807652151 / 7632794014, 4838218, 782703275, 807652151 |
+| Gemma 4 26B-A4B IT / paris / 2 | 81% / 80% | total = 6144.00M  used = 5270.38M  free = 873.62M  (encrypted) / total = 6144.00M  used = 5198.38M  free = 945.62M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; (no estimate) present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; (no estimate) present: true | 7632795696, 4838218, 782703583, 807652151 / 7633726973, 4838275, 782708766, 807652151 |
+| Gemma 4 26B-A4B IT / paris / 3 | 80% / 79% | total = 6144.00M  used = 5198.38M  free = 945.62M  (encrypted) / total = 6144.00M  used = 4998.38M  free = 1145.62M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; (no estimate) present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; (no estimate) present: true | 7633727151, 4838275, 782708962, 807652151 / 7634672828, 4838361, 782721549, 807652151 |
+| Gemma 4 E2B IT / paris / 1 | 79% / 80% | total = 6144.00M  used = 4998.38M  free = 1145.62M  (encrypted) / total = 6144.00M  used = 4974.38M  free = 1169.62M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; (no estimate) present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; (no estimate) present: true | 7634672872, 4838361, 782721553, 807652151 / 7634834584, 4838426, 782722539, 807652151 |
+| Gemma 4 E2B IT / paris / 2 | 81% / 80% | total = 6144.00M  used = 4966.38M  free = 1177.62M  (encrypted) / total = 6144.00M  used = 4966.38M  free = 1177.62M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; (no estimate) present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; (no estimate) present: true | 7634834625, 4838426, 782723149, 807652151 / 7634834878, 4838426, 782723565, 807652151 |
+| Gemma 4 E2B IT / paris / 3 | 80% / 74% | total = 6144.00M  used = 4966.38M  free = 1177.62M  (encrypted) / total = 6144.00M  used = 4958.38M  free = 1185.62M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; (no estimate) present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; (no estimate) present: true | 7634835317, 4838426, 782723899, 807652151 / 7634835689, 4838426, 782724402, 807652151 |
+| Gemma 4 E4B IT / paris / 1 | 80% / 53% | total = 6144.00M  used = 4958.38M  free = 1185.62M  (encrypted) / total = 6144.00M  used = 4838.31M  free = 1305.69M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; (no estimate) present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; (no estimate) present: true | 7634835700, 4838426, 782724429, 807652151 / 7635094533, 4838455, 782731615, 807652151 |
+| Gemma 4 E4B IT / paris / 2 | 79% / 65% | total = 6144.00M  used = 4838.31M  free = 1305.69M  (encrypted) / total = 6144.00M  used = 4822.31M  free = 1321.69M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; (no estimate) present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; (no estimate) present: true | 7635094588, 4838455, 782731615, 807652151 / 7635110160, 4838488, 782732464, 807652151 |
+| Gemma 4 E4B IT / paris / 3 | 80% / 65% | total = 6144.00M  used = 4822.31M  free = 1321.69M  (encrypted) / total = 6144.00M  used = 4822.31M  free = 1321.69M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; (no estimate) present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; (no estimate) present: true | 7635110313, 4838488, 782732512, 807652151 / 7635124256, 4838497, 782732880, 807652151 |
+| Gemma 4 12B IT QAT / paris / 1 | 79% / 27% | total = 6144.00M  used = 4822.31M  free = 1321.69M  (encrypted) / total = 7168.00M  used = 6215.44M  free = 952.56M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; (no estimate) present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; 2:24 remaining present: true | 7635124271, 4838497, 782732888, 807652151 / 7636504691, 4838602, 782752721, 807760471 |
+| Gemma 4 12B IT QAT / paris / 2 | 82% / 81% | total = 7168.00M  used = 6167.44M  free = 1000.56M  (encrypted) / total = 7168.00M  used = 5967.38M  free = 1200.62M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; 2:24 remaining present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; 2:24 remaining present: true | 7636506700, 4838602, 782754385, 807760471 / 7637219833, 4838689, 782768524, 807760471 |
+| Gemma 4 12B IT QAT / paris / 3 | 81% / 69% | total = 7168.00M  used = 5959.38M  free = 1208.62M  (encrypted) / total = 7168.00M  used = 5911.38M  free = 1256.62M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; 2:24 remaining present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; 2:24 remaining present: true | 7637223625, 4838689, 782768788, 807760471 / 7637992090, 4838708, 782771141, 807760471 |
+| Qwen3.6 35B-A3B / paris / 1 | 81% / 82% | total = 7168.00M  used = 5911.38M  free = 1256.62M  (encrypted) / total = 7168.00M  used = 5903.38M  free = 1264.62M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; 2:24 remaining present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; 2:24 remaining present: true | 7637995491, 4838708, 782771185, 807760471 / 7639320453, 4838758, 782772404, 807760471 |
+| Qwen3.6 35B-A3B / paris / 2 | 82% / 81% | total = 7168.00M  used = 5863.38M  free = 1304.62M  (encrypted) / total = 7168.00M  used = 5519.31M  free = 1648.69M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; 2:24 remaining present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; 2:14 remaining present: true | 7639321099, 4838758, 782774414, 807760471 / 7640608418, 4838837, 782796461, 807760471 |
+| Qwen3.6 35B-A3B / paris / 3 | 81% / 80% | total = 7168.00M  used = 5503.31M  free = 1664.69M  (encrypted) / total = 6144.00M  used = 5155.75M  free = 988.25M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; 2:14 remaining present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; 2:14 remaining present: true | 7640608634, 4838837, 782797693, 807760471 / 7641872199, 4838897, 782816252, 807768475 |
+| GPT-OSS 20B / paris / 1 | 80% / 81% | total = 6144.00M  used = 5139.75M  free = 1004.25M  (encrypted) / total = 6144.00M  used = 5461.88M  free = 682.12M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; 2:14 remaining present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; 2:14 remaining present: true | 7641872495, 4838897, 782817090, 807768475 / 7643141706, 4839019, 782834949, 807806499 |
+| GPT-OSS 20B / paris / 2 | 81% / 81% | total = 6144.00M  used = 5413.88M  free = 730.12M  (encrypted) / total = 6144.00M  used = 5550.38M  free = 593.62M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; 2:14 remaining present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; 2:14 remaining present: true | 7643142826, 4839019, 782837107, 807806499 / 7644366692, 4839051, 782838732, 807816771 |
+| GPT-OSS 20B / paris / 3 | 81% / 81% | total = 6144.00M  used = 5550.38M  free = 593.62M  (encrypted) / total = 6144.00M  used = 5624.62M  free = 519.38M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	100%; discharging; 2:14 remaining present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	99%; discharging; 2:17 remaining present: true | 7644366911, 4839051, 782838764, 807816771 / 7645570406, 4839138, 782844359, 807826131 |
+| GPT-OSS 120B / paris / 1 | 81% / 80% | total = 6144.00M  used = 5608.62M  free = 535.38M  (encrypted) / total = 6144.00M  used = 5040.62M  free = 1103.38M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	99%; discharging; 2:17 remaining present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	98%; discharging; 2:19 remaining present: true | 7645571514, 4839138, 782844907, 807826131 / 7659060001, 4839753, 782881003, 807826131 |
+| GPT-OSS 120B / paris / 2 | 80% / 78% | total = 6144.00M  used = 5032.62M  free = 1111.38M  (encrypted) / total = 6144.00M  used = 4864.62M  free = 1279.38M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	98%; discharging; 2:19 remaining present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	97%; discharging; 2:15 remaining present: true | 7659060802, 4839753, 782881211, 807826131 / 7672688747, 4840690, 782892221, 807826131 |
+| GPT-OSS 120B / paris / 3 | 78% / 55% | total = 6144.00M  used = 4864.62M  free = 1279.38M  (encrypted) / total = 6144.00M  used = 4784.62M  free = 1359.38M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	97%; discharging; 2:15 remaining present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	96%; discharging; 2:03 remaining present: true | 7672688846, 4840690, 782892221, 807826131 / 7686297383, 4841252, 782897406, 807826131 |
+| MiniMax M2.7 4-bit / paris / 1 | 77% / 79% | total = 6144.00M  used = 4784.62M  free = 1359.38M  (encrypted) / total = 8192.00M  used = 6825.50M  free = 1366.50M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	96%; discharging; 2:03 remaining present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	94%; discharging; (no estimate) present: true | 7686297494, 4841252, 782897418, 807826131 / 7703212191, 4844793, 784585889, 809652191 |
+| MiniMax M2.7 4-bit / paris / 2 | 79% / 83% | total = 8192.00M  used = 6809.50M  free = 1382.50M  (encrypted) / total = 7168.00M  used = 6451.12M  free = 716.88M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	94%; discharging; (no estimate) present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	92%; discharging; 1:52 remaining present: true | 7703215065, 4844793, 784587407, 809652191 / 7719455712, 4845361, 785197338, 810311343 |
+| MiniMax M2.7 4-bit / paris / 3 | 83% / 81% | total = 7168.00M  used = 6435.12M  free = 732.88M  (encrypted) / total = 7168.00M  used = 6528.50M  free = 639.50M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	92%; discharging; 1:52 remaining present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	89%; discharging; (no estimate) present: true | 7719455949, 4845361, 785198086, 810311343 / 7735923122, 4848081, 786686726, 811835659 |
+| Qwen3.8 Flash Next 4-bit / vision / 1 | 80% / 82% | total = 7168.00M  used = 6520.50M  free = 647.50M  (encrypted) / total = 8192.00M  used = 6762.12M  free = 1429.88M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	89%; discharging; (no estimate) present: true / Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	89%; discharging; (no estimate) present: true | 7735924358, 4848081, 786688247, 811835659 / 7745516514, 4849884, 786801632, 811965823 |
+| Gemma 4 26B-A4B IT / vision / 1 | 82% / 73% | total = 8192.00M  used = 6746.12M  free = 1445.88M  (encrypted) / total = 6144.00M  used = 4684.81M  free = 1459.19M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'Battery Power';  -InternalBattery-0 (id=36044899)	89%; discharging; (no estimate) present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	89%; charging; (no estimate) present: true | 7745517470, 4849884, 786802828, 811965823 / 7747510090, 4850401, 786889380, 811987936 |
+| Gemma 4 E2B IT / vision / 1 | 77% / 70% | total = 6144.00M  used = 4684.81M  free = 1459.19M  (encrypted) / total = 6144.00M  used = 4652.81M  free = 1491.19M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	89%; charging; (no estimate) present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	89%; charging; (no estimate) present: true | 7747512721, 4850401, 786889492, 811987936 / 7747740593, 4851720, 786891081, 811987936 |
+| Gemma 4 E4B IT / vision / 1 | 77% / 51% | total = 6144.00M  used = 4652.81M  free = 1491.19M  (encrypted) / total = 6144.00M  used = 4596.81M  free = 1547.19M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	89%; charging; (no estimate) present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	89%; charging; (no estimate) present: true | 7747745962, 4851720, 786891137, 811987936 / 7748086367, 4851961, 786895208, 811987936 |
+| Gemma 4 12B IT QAT / vision / 1 | 73% / 64% | total = 6144.00M  used = 4596.81M  free = 1547.19M  (encrypted) / total = 8192.00M  used = 6941.62M  free = 1250.38M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	89%; charging; (no estimate) present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	89%; charging; 2:37 remaining present: true | 7748095303, 4851961, 786895427, 811987936 / 7750120561, 4855433, 787881185, 813150814 |
+| Qwen3.6 35B-A3B / vision / 1 | 75% / 75% | total = 8192.00M  used = 6653.56M  free = 1538.44M  (encrypted) / total = 7168.00M  used = 5625.31M  free = 1542.69M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	89%; charging; 2:37 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	89%; charging; 2:37 remaining present: true | 7750135510, 4855433, 787897651, 813150814 / 7752559024, 4855941, 787952486, 813150958 |
+| Qwen3.8 Flash Next 4-bit / paris / 4 | 74% / 79% | total = 7168.00M  used = 5823.44M  free = 1344.56M  (encrypted) / total = 7168.00M  used = 6281.94M  free = 886.06M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; charged; 0:00 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; charged; 0:00 remaining present: true | 8073085454, 4930343, 812453410, 838217724 / 8078594843, 4930680, 812508221, 838301872 |
+| Qwen3.8 Flash Next 4-bit / paris / 5 | 79% / 74% | total = 7168.00M  used = 6185.94M  free = 982.06M  (encrypted) / total = 7168.00M  used = 5585.12M  free = 1582.88M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; charged; 0:00 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; charged; 0:00 remaining present: true | 8078595575, 4930680, 812514067, 838301872 / 8084178405, 4931572, 812689494, 838440940 |
+| MiniMax M2.7 4-bit / paris / 4 | 74% / 81% | total = 7168.00M  used = 5577.12M  free = 1590.88M  (encrypted) / total = 8192.00M  used = 7185.88M  free = 1006.12M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; charged; 0:00 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; charged; 0:00 remaining present: true | 8084179957, 4931572, 812689589, 838440940 / 8101166337, 4933510, 814484386, 840355579 |
+| MiniMax M2.7 4-bit / paris / 5 | 82% / 80% | total = 8192.00M  used = 7113.88M  free = 1078.12M  (encrypted) / total = 8192.00M  used = 7200.12M  free = 991.88M  (encrypted) | Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded / Note: No thermal warning level has been recorded; Note: No performance warning level has been recorded; Note: No CPU power status has been recorded | Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; charged; 0:00 remaining present: true / Now drawing from 'AC Power';  -InternalBattery-0 (id=36044899)	100%; charged; 0:00 remaining present: true | 8101174236, 4933510, 814487472, 840355579 / 8117743944, 4935528, 816137142, 842084951 |
 
 ## Scope and identity
 
 Text checks require the answer to name Paris. Image checks use the supplied prompt and keywords. Neither test establishes reasoning, tool or general vision quality. Independent toy and kernel regressions run separately in the serial suite.
 
-Packaged CLI SHA-256: `0cc6a91593634522ceb5d376b4594ad9c67b737ab69d5a066f191e7ec398a026`.
+Packaged CLI SHA-256: `bf573b7fe283d77e17fb084046357fda3efb0f42a65eb13c9248a8fd15bb6212`.
 
-Sources fingerprint: `e4a7594163dbf0c50057d1ba3c35acb355b459ea0b30e598ad2232fd81b8afc3`.
+Sources fingerprint: `5731f7a5051094df42e3a63067d6e35c830e3b253e6ebac758703ab57a88ffee`.
 
-Packaged shaders fingerprint: `ea844fb5b8fdd097c16b366c8e949158677ffcf1e661cc8903ea7f544d3a7e53`.
+Packaged shaders fingerprint: `5f6a36affa152af2a6e19322160a531d27da36b95cc6c43db08efc70cd259c63`.
 
 Text prompt SHA-256: `294eed775185e538ad70908db2e226a443ae8df35e918af45acf66b369e427c9`.
 

@@ -239,4 +239,30 @@ import TUFFValidationSupport
         #expect(distinct > v / 4, "only \(distinct)/\(v) tokens drawn — too concentrated")
     }
 
+    @Test(arguments: [20, 40, 64])
+    func hierarchicalDefaultsMatchLegacyAfterSoftcapPenaltyAndSeedAdvance(topK: Int) throws {
+        let rig = try Rig(vocab: 4099)
+        let reference = try Sample(context: rig.ctx)
+        let output = try #require(rig.ctx.device.makeBuffer(length: 4, options: .storageModeShared))
+        let logits = (0..<rig.vocab).map { Float(($0 * 29) % 97 - 48) / 10 }
+        for penalty: Float in [1, 1.1] {
+            for position in [0, 1, 31, 1024] {
+                for seed: UInt64 in [0, 42, UInt64.max] {
+                    rig.writeLogits(logits)
+                    let config = GenerationConfig(temperature: 0.85, topK: topK,
+                      topP: 0.95, repetitionPenalty: penalty, seed: seed)
+                    let cb = rig.ctx.queue.makeCommandBuffer()!
+                    rig.sampler.sample(commandBuffer: cb, logits: rig.logits, probs: rig.probs,
+                      history: [3, 3, 47, 4098], config: config, position: position, outToken: rig.outToken)
+                    reference.encode(commandBuffer: cb, probs: rig.probs, outToken: output,
+                      v: UInt32(rig.vocab), temperature: config.temperature, topK: UInt32(topK),
+                      topP: config.topP!, seed: Sampler.seedFor(config: config, position: position))
+                    cb.commit(); cb.waitUntilCompleted()
+                    #expect(cb.status == .completed)
+                    #expect(rig.outToken.contents().load(as: UInt32.self) == output.contents().load(as: UInt32.self))
+                }
+            }
+        }
+    }
+
 }

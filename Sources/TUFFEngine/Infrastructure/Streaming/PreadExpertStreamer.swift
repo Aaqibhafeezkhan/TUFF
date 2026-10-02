@@ -39,12 +39,20 @@ public struct ExpertCachePlan: Sendable, Equatable {
     public let assignedSlots: [Int]
     public let misses: [Int]
     public let hits: Int
+    public let purpose: ExpertReadPurpose
 
     public init(experts: [Int], assignedSlots: [Int], misses: [Int], hits: Int) {
+        self.init(experts: experts, assignedSlots: assignedSlots, misses: misses,
+                  hits: hits, purpose: .demand)
+    }
+
+    public init(experts: [Int], assignedSlots: [Int], misses: [Int], hits: Int,
+                purpose: ExpertReadPurpose) {
         self.experts = experts
         self.assignedSlots = assignedSlots
         self.misses = misses
         self.hits = hits
+        self.purpose = purpose
     }
 }
 
@@ -72,7 +80,9 @@ public final class PreadExpertStreamer: @unchecked Sendable {
 
     private var slotExpert: [Int]
     private var slotLastUse: [Int]
-    private var expertUseCount: [Int]
+    private var slotUnusedPrefetch: [Bool]
+    private var expertDemandUseCount: [Int]
+    private var expertPredictionUseCount: [Int]
     private var useClock = 0
     private let cacheLock = NSLock()
     private let metricsLock = NSLock()
@@ -173,7 +183,9 @@ public final class PreadExpertStreamer: @unchecked Sendable {
         self.slotBuffers = buffers
         self.slotExpert = [Int](repeating: -1, count: slotCount)
         self.slotLastUse = [Int](repeating: 0, count: slotCount)
-        self.expertUseCount = [Int](repeating: 0, count: max(1, layout.expertsPerLayer))
+        self.slotUnusedPrefetch = [Bool](repeating: false, count: slotCount)
+        self.expertDemandUseCount = [Int](repeating: 0, count: max(1, layout.expertsPerLayer))
+        self.expertPredictionUseCount = [Int](repeating: 0, count: max(1, layout.expertsPerLayer))
         closeFDOnFailure = false
     }
 
@@ -222,7 +234,13 @@ public final class PreadExpertStreamer: @unchecked Sendable {
 
     public func planExpertsCached(experts: [Int],
                                   avoidingSlots: Set<Int> = []) -> ExpertCachePlan {
-        guard let plan = makeExpertCachePlan(experts: experts, avoidingSlots: avoidingSlots) else {
+        planExpertsCached(experts: experts, avoidingSlots: avoidingSlots, purpose: .demand)
+    }
+
+    public func planExpertsCached(experts: [Int],
+                                  avoidingSlots: Set<Int> = [],
+                                  purpose: ExpertReadPurpose) -> ExpertCachePlan {
+        guard let plan = makeExpertCachePlan(experts: experts, avoidingSlots: avoidingSlots, purpose: purpose) else {
             preconditionFailure("expert cache cannot place requested misses")
         }
         return plan
@@ -230,11 +248,18 @@ public final class PreadExpertStreamer: @unchecked Sendable {
 
     public func planExpertsCachedIfPossible(experts: [Int],
                                             avoidingSlots: Set<Int> = []) -> ExpertCachePlan? {
-        makeExpertCachePlan(experts: experts, avoidingSlots: avoidingSlots)
+        planExpertsCachedIfPossible(experts: experts, avoidingSlots: avoidingSlots, purpose: .demand)
+    }
+
+    public func planExpertsCachedIfPossible(experts: [Int],
+                                            avoidingSlots: Set<Int> = [],
+                                            purpose: ExpertReadPurpose) -> ExpertCachePlan? {
+        makeExpertCachePlan(experts: experts, avoidingSlots: avoidingSlots, purpose: purpose)
     }
 
     private func makeExpertCachePlan(experts: [Int],
-                                     avoidingSlots rawAvoidingSlots: Set<Int>) -> ExpertCachePlan? {
+                                     avoidingSlots rawAvoidingSlots: Set<Int>,
+                                     purpose: ExpertReadPurpose) -> ExpertCachePlan? {
         precondition(experts.count <= slotCount,
                      "expert cache needs at least \(experts.count) slots")
         let avoidingSlots = Set(rawAvoidingSlots.filter { $0 >= 0 && $0 < slotCount })
@@ -262,11 +287,25 @@ public final class PreadExpertStreamer: @unchecked Sendable {
         guard misses.count <= reserved.lazy.filter({ !$0 }).count else { return nil }
 
         useClock = clock
-        for expert in experts where expert >= 0 && expert < expertUseCount.count {
-            expertUseCount[expert] &+= 1
+        for expert in experts where expert >= 0 && expert < expertDemandUseCount.count {
+            if purpose == .demand {
+                if expertDemandUseCount[expert] < Int.max { expertDemandUseCount[expert] += 1 }
+            } else {
+                if expertPredictionUseCount[expert] < Int.max { expertPredictionUseCount[expert] += 1 }
+            }
         }
+        metricsLock.lock()
+        if purpose == .demand { metrics.demandRequests += UInt64(experts.count) }
+        else { metrics.predictionRequests += UInt64(experts.count) }
+        metricsLock.unlock()
         for slot in assignedSlots where slot >= 0 {
             slotLastUse[slot] = clock
+            if purpose == .demand && slotUnusedPrefetch[slot] {
+                metricsLock.lock()
+                metrics.usefulPrefetchReads += 1
+                metricsLock.unlock()
+                slotUnusedPrefetch[slot] = false
+            }
         }
         // Decode selects only a small top-k (four or eight experts). Scanning
         // once per miss avoids allocating and sorting every unreserved cache
@@ -286,6 +325,12 @@ public final class PreadExpertStreamer: @unchecked Sendable {
             guard let slot = selectedSlot else { return nil }
             assignedSlots[index] = slot
             reserved[slot] = true
+            if slotUnusedPrefetch[slot] {
+                metricsLock.lock()
+                metrics.unusedPrefetchEvictions += 1
+                metricsLock.unlock()
+            }
+            slotUnusedPrefetch[slot] = false
             slotExpert[slot] = -1
             slotLastUse[slot] = clock
         }
@@ -294,17 +339,23 @@ public final class PreadExpertStreamer: @unchecked Sendable {
             experts: experts,
             assignedSlots: assignedSlots,
             misses: misses,
-            hits: experts.count - misses.count)
+            hits: experts.count - misses.count, purpose: purpose)
+    }
+
+    public func executeExpertCachePlan(_ plan: ExpertCachePlan) throws
+        -> [(buffer: MTLBuffer, offset: UInt64, size: UInt64)] {
+        try executeExpertCachePlan(plan, purpose: plan.purpose)
     }
 
     public func executeExpertCachePlan(_ plan: ExpertCachePlan,
-                                       purpose: ExpertReadPurpose = .demand) throws
+                                       purpose: ExpertReadPurpose) throws
         -> [(buffer: MTLBuffer, offset: UInt64, size: UInt64)] {
         precondition(plan.experts.count <= slotCount,
                      "expert cache plan exceeds slot count")
         precondition(plan.assignedSlots.count == plan.experts.count,
                      "expert cache plan slot count mismatch")
 
+        let readPurpose = purpose
         guard !plan.misses.isEmpty else { return expertCachePlanBuffers(plan) }
 
         // A single read already runs on the caller's I/O worker. Only fan
@@ -312,14 +363,15 @@ public final class PreadExpertStreamer: @unchecked Sendable {
         if plan.misses.count == 1 {
             let index = plan.misses[0]
             _ = try loadExpert(layer: 0, expert: plan.experts[index],
-                               slot: plan.assignedSlots[index], purpose: purpose)
+                               slot: plan.assignedSlots[index], purpose: readPurpose)
         } else {
-            try loadCacheMissesConcurrently(plan, purpose: purpose)
+            try loadCacheMissesConcurrently(plan, purpose: readPurpose)
         }
 
         cacheLock.lock()
         for index in plan.misses {
             slotExpert[plan.assignedSlots[index]] = plan.experts[index]
+            slotUnusedPrefetch[plan.assignedSlots[index]] = readPurpose == .prefetch
         }
         cacheLock.unlock()
 
@@ -404,10 +456,26 @@ public final class PreadExpertStreamer: @unchecked Sendable {
         if lhsExpert < 0 || rhsExpert < 0 {
             return lhsExpert < rhsExpert
         }
-        let lhsCount = lhsExpert < expertUseCount.count ? expertUseCount[lhsExpert] : 0
-        let rhsCount = rhsExpert < expertUseCount.count ? expertUseCount[rhsExpert] : 0
+        // Keep the qualified 6.0.2 ranking. Demand-only frequency and a
+        // separate unused-prefetch priority did not qualify end to end.
+        // Demand and prediction histories remain separate for accounting.
+        let lhsCount = combinedPlanFrequency(expert: lhsExpert)
+        let rhsCount = combinedPlanFrequency(expert: rhsExpert)
         if lhsCount != rhsCount { return lhsCount < rhsCount }
         return slotLastUse[lhs] < slotLastUse[rhs]
+    }
+
+    private func combinedPlanFrequency(expert: Int) -> Int {
+        guard expert >= 0 && expert < expertDemandUseCount.count else { return 0 }
+        let sum = expertDemandUseCount[expert].addingReportingOverflow(expertPredictionUseCount[expert])
+        return sum.overflow ? Int.max : sum.partialValue
+    }
+
+    func diagnosticExpertUseCounts(expert: Int) -> (demand: Int, prediction: Int) {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        guard expert >= 0 && expert < expertDemandUseCount.count else { return (0, 0) }
+        return (expertDemandUseCount[expert], expertPredictionUseCount[expert])
     }
 
     private func expertAdviceRanges(experts: [Int]) -> [(offset: UInt64, count: UInt64)] {

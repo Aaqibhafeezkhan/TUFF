@@ -3352,21 +3352,21 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                     min(Int(predictedPtr[$0]), cfg.numExperts - 1)
                 }
                 var reads: DispatchGroup?
-                if let plan = try model.planRoutedExperts(layer: L + 1, experts: predicted),
+                if let plan = try model.planRoutedExperts(layer: L + 1, experts: predicted, purpose: .prefetch),
                    !plan.misses.isEmpty {
                     // Entered now, dispatched after this layer's own fetch:
                     // started together, the two reads split the SSD's
                     // bandwidth and gained nothing, while after it the read
                     // overlaps this layer's routed work and the next
                     // layer's attention on the GPU.
+                    let prefetch = try model.expertPrefetchOperation(plan: plan)
                     let group = DispatchGroup()
                     group.enter()
-                    let model = self.model
                     lookaheadDispatch = {
                         DispatchQueue.global(qos: .userInitiated).async {
                             // A failed read only loses the head start: the
                             // layer's own fetch reads whatever is missing.
-                            try? model.prefetchRoutedExperts(plan: plan)
+                            try? prefetch()
                             group.leave()
                         }
                     }

@@ -30,15 +30,30 @@ class ReportingTests(unittest.TestCase):
         self.assertNotIn('Best of', text)
         self.assertIn('`fixture-manifest`', text)
 
+    def test_report_labels_interrupted_timings_and_keeps_raw_observations(self):
+        rows=[dict(model='test',label='Test',kind='paris',status='passed',attempt=i,
+                   tps=tps,prefill_seconds=1,peak_rss_bytes=1024) for i,tps in enumerate([1,7,0.007])]
+        rows[2].update(performance_eligible=False,performance_exclusion='Recorded system sleep overlapped attempt.')
+        text=render(dict(results=rows,started=0,identity=dict(cli_sha256='abc',source_sha256='def')),'6.1.0')
+        self.assertIn('1.000, 7.000, 0.007† | 4.000 | 1.000..7.000 | 6.000',text)
+        self.assertIn('Recorded system sleep overlapped attempt.',text)
+        self.assertIn('| Test | 3 | passed /',text)
+
     def test_logical_demand_and_prefetch_remain_separate(self):
-        text = ('logical demand expert reads: 2, bytes: 4096, failures: 0\n'
+        text = ('cache demand requests: 144, predictions: 99\n'
+                'logical demand expert reads: 2, bytes: 4096, failures: 0\n'
                 'logical prefetch expert reads: 3, bytes: 6144, failures: 1\n'
-                'exposed prefetch wait: 12.5 ms\n')
+                'exposed prefetch wait: 12.5 ms\n'
+                'useful prefetched records: 7, evicted unused: 9\n')
         metrics = expert_io(text)
+        self.assertEqual(metrics['demand_requests'],144)
+        self.assertEqual(metrics['prediction_requests'],99)
         self.assertEqual(metrics['demand']['bytes'], 4096)
         self.assertEqual(metrics['prefetch']['reads'], 3)
         self.assertEqual(metrics['prefetch']['failures'], 1)
         self.assertEqual(metrics['exposed_prefetch_wait_ms'], 12.5)
+        self.assertEqual(metrics['useful_prefetch_reads'], 7)
+        self.assertEqual(metrics['unused_prefetch_evictions'], 9)
         self.assertEqual(expert_io(''), {})
 
     def test_public_report_preserves_machine_observations_and_missing_probes(self):

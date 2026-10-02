@@ -173,16 +173,18 @@ public func run(args: Args,
             }.map {
                 InferenceMemoryPlan(descriptor: $0, config: architecture,
                     contextTokens: args.maxContext, expertCacheSlots: runtime.expertCacheSlots,
-                    prefillChunkTokens: runtime.prefillChunkTokens).estimatedWorkingSetBytes
+                    prefillChunkTokens: runtime.prefillChunkTokens)
             }
             let settings: [String: String] = [
                 "context": String(args.maxContext),
                 "expert_cache_slots": String(runtime.expertCacheSlots),
                 "expert_cache_policy": runtime.expertCachePolicy.rawValue,
+                "expert_lookahead": ProcessInfo.processInfo.environment["TUFF_EXPERT_LOOKAHEAD"] == "off" ? "off" : "auto",
                 "prefill": runtime.prefillPolicy.rawValue,
                 "prefill_chunk_tokens": String(runtime.prefillChunkTokens),
                 "prefill_attention_path": runtime.prefillAttentionPath.rawValue,
                 "head_path": runtime.headPath.rawValue,
+                "model_integrity": "full-sha256",
                 "rdadvise": runtime.rdadvisePolicy.rawValue,
                 "temperature": String(args.temperature), "top_k": args.topK.map(String.init) ?? "off",
                 "thinking": String(describing: effectiveThinking),
@@ -190,7 +192,8 @@ public func run(args: Args,
                 "repetition_penalty": String(args.repetitionPenalty),
                 "max_new_tokens": String(args.maxNew),
                 "top_p": args.topP.map { String($0) } ?? "off", "seed": args.seed.map(String.init) ?? "random",
-                "estimated_working_set_bytes": memory.map(String.init) ?? "unavailable"
+                "cache_tracking_metadata_reserve_bytes": memory.map { String($0.cacheTrackingMetadataReserveBytes) } ?? "unavailable",
+                "estimated_working_set_bytes": memory.map { String($0.estimatedWorkingSetBytes) } ?? "unavailable"
             ]
             let json = try JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys])
             stderr.write(Data("[resolved inference settings] ".utf8))
@@ -388,8 +391,10 @@ public func run(args: Args,
             lines += "  gpu shared cbs: " + ms(runner.totalGPUSharedNanos) + " ms\n"
             lines += "  allocated expert slot bytes: \(model.expertCacheAllocatedBytes)\n"
             let reads = runner.expertReadMetrics
+            lines += "  cache demand requests: \(reads.demandRequests), predictions: \(reads.predictionRequests)\n"
             lines += "  logical demand expert reads: \(reads.demandReads), bytes: \(reads.demandBytes), failures: \(reads.demandFailures)\n"
             lines += "  logical prefetch expert reads: \(reads.prefetchReads), bytes: \(reads.prefetchBytes), failures: \(reads.prefetchFailures)\n"
+            lines += "  useful prefetched records: \(reads.usefulPrefetchReads), evicted unused: \(reads.unusedPrefetchEvictions)\n"
             lines += "  logical traffic includes prefill and OS-cache hits; physical SSD traffic is not measured\n"
             lines += "  routed expert cache hits: \(runner.totalRoutedExpertCacheHits)\n"
             lines += "  routed expert cache misses: \(runner.totalRoutedExpertCacheMisses)\n"

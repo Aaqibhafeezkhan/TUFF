@@ -8,7 +8,7 @@ TUFF runs language models locally on Apple Silicon. It includes a native Mac
 chat app, model downloader, Swift and Metal inference engine, command-line
 tools, and a local OpenAI-compatible server.
 
-[Download 6.0.2](https://github.com/rexmhall09/TUFF/releases/tag/v6.0.2) ·
+[Download 6.1.0](https://github.com/rexmhall09/TUFF/releases/tag/v6.1.0) ·
 [Website](https://rexmhall09.github.io/TUFF/) · [Contribute](CONTRIBUTING.md)
 
 ![TUFF chat with Qwen3.8 Flash Next](docs/assets/tuff-chat.png)
@@ -31,7 +31,7 @@ Their measured rates and variation are listed below.
 Here is how that focus compares with other local-model tools. The linked
 project documentation was checked September 30, 2026.
 
-| | TUFF 6.0.2 | [LM Studio](https://lmstudio.ai/docs/app) | [Ollama](https://ollama.com/blog/new-app) | [Colibrì](https://github.com/JustVugg/colibri) | [TurboFieldfare](https://github.com/drumih/turbo-fieldfare) |
+| | TUFF 6.1.0 | [LM Studio](https://lmstudio.ai/docs/app) | [Ollama](https://ollama.com/blog/new-app) | [Colibrì](https://github.com/JustVugg/colibri) | [TurboFieldfare](https://github.com/drumih/turbo-fieldfare) |
 | --- | :-: | :-: | :-: | :-: | :-: |
 | Designed exclusively for Apple Silicon Macs | ✅ | ❌ | ❌ | ❌ | ✅ |
 | Desktop chat interface | ✅ | ✅ | ✅ | ◐ | ✅ |
@@ -62,12 +62,13 @@ Ollama documents [model memory allocation and scheduling](https://ollama.com/blo
 LM Studio's [desktop app has proprietary terms](https://lmstudio.ai/app-terms).
 Ollama's app and runtime are in its [open-source repository](https://github.com/ollama/ollama).
 
-In 6.0.2, the app, CLI and server share corrected memory estimates that include
-every layer's expert slots, prefill scratch and sliding-window growth.
-Diagnostics separate demand reads, prefetch reads and exposed prefetch waits.
-Release reports retain every repetition, resolved settings and available
-machine-state observations. These improvements make memory choices and timing
-results easier to inspect; they do not establish a performance lead.
+6.1.0 extends the bounded GPU sampler to Flash Next’s top-k 20 and
+MiniMax’s top-k 40. Cache diagnostics distinguish demand requests from
+predictions and report first demand hits on prefetched records and unused
+prefetch evictions. The app, CLI and server share the added metadata reserve.
+The release keeps the qualified eviction policy; experimental cache policies
+were inconsistent in repeated measurements. See the
+[release validation](docs/RELEASE_6.1.0_VALIDATION.md) for results and limits.
 
 TUFF's catalog is smaller than general model libraries. Its release validation
 covers the exact checkpoints and settings documented here. Other streaming
@@ -90,7 +91,7 @@ You can inspect the source and build it yourself instead.
 Check the downloaded archive against the checksum from the same release:
 
 ```sh
-shasum -a 256 -c TUFF-v6.0.2-macos-arm64.zip.sha256
+shasum -a 256 -c TUFF-v6.1.0-macos-arm64.zip.sha256
 ```
 
 Sparkle checks for updates automatically and verifies archives against the
@@ -155,25 +156,29 @@ estimated-memory gates. Such settings may swap or fail to allocate.
 
 Release measurements and their limits are in
 [the model validation report](docs/MODEL_VALIDATION.md), with build and
-integration checks in [the 6.0.2 release validation](docs/RELEASE_6.0.2_VALIDATION.md).
+integration checks in [the 6.1.0 release validation](docs/RELEASE_6.1.0_VALIDATION.md).
 
-Measured September 30, 2026 on a 16 GB M2 MacBook Air, macOS 26.6.2.
+Measured October 1, 2026 on a 16 GB M2 MacBook Air, macOS 26.6.2.
 Each run starts a fresh packaged CLI process with a 4,096-token context and
 seed 20260721. The output cap is 128 tokens, or 256 for MiniMax. Every text
 attempt answered Paris and stopped at EOS or end of turn. These short responses
 are correctness smoke checks, not model-quality or sustained-throughput scores.
 
-| Model | All decode runs (tok/s) | Median | Min..max | Spread | Prefill median |
+| Model | All eligible decode runs (tok/s) | Median | Min..max | Spread | Prefill median |
 | --- | --- | ---: | --- | ---: | ---: |
-| Qwen3.8 Flash Next 4-bit | 1.074, 1.300, 0.223 | 1.074 | 0.223..1.300 | 1.077 | 28.18 s |
-| Gemma 4 26B-A4B IT | 5.448, 4.084, 4.107 | 4.107 | 4.084..5.448 | 1.364 | 8.79 s |
-| Gemma 4 E2B IT | 35.031, 34.626, 37.790 | 35.031 | 34.626..37.790 | 3.164 | 0.62 s |
-| Gemma 4 E4B IT | 15.804, 16.414, 17.140 | 16.414 | 15.804..17.140 | 1.336 | 0.92 s |
-| Gemma 4 12B IT QAT | 3.843, 3.785, 3.072 | 3.785 | 3.072..3.843 | 0.771 | 25.93 s |
-| Qwen3.6 35B-A3B | 7.216, 7.223, 6.916 | 7.216 | 6.916..7.223 | 0.307 | 9.44 s |
-| GPT-OSS 20B | 1.443, 1.898, 1.738 | 1.738 | 1.443..1.898 | 0.455 | 9.27 s |
-| GPT-OSS 120B | 1.469, 1.430, 1.506 | 1.469 | 1.430..1.506 | 0.076 | 105.77 s |
-| MiniMax M2.7 4-bit | 0.132, 0.137, 0.197 | 0.137 | 0.132..0.197 | 0.065 | 81.99 s |
+| Qwen3.8 Flash Next 4-bit | 1.711, 1.681, 0.604 | 1.681 | 0.604..1.711 | 1.107 | 28.46 s |
+| Gemma 4 26B-A4B IT | 8.322, 7.428, 6.903 | 7.428 | 6.903..8.322 | 1.419 | 4.52 s |
+| Gemma 4 E2B IT | 52.007, 53.591, 52.703 | 52.703 | 52.007..53.591 | 1.584 | 0.42 s |
+| Gemma 4 E4B IT | 31.121, 30.987, 30.967 | 30.987 | 30.967..31.121 | 0.154 | 0.71 s |
+| Gemma 4 12B IT QAT | 7.267, 7.475, 7.473 | 7.473 | 7.267..7.475 | 0.208 | 4.58 s |
+| Qwen3.6 35B-A3B | 8.923, 8.481, 7.283 | 8.481 | 7.283..8.923 | 1.640 | 6.38 s |
+| GPT-OSS 20B | 4.670, 5.053, 4.904 | 4.904 | 4.670..5.053 | 0.383 | 5.42 s |
+| GPT-OSS 120B | 1.956, 1.952, 1.959 | 1.956 | 1.952..1.959 | 0.007 | 64.39 s |
+| MiniMax M2.7 4-bit | 0.374, 0.234, 0.223 | 0.234 | 0.223..0.374 | 0.151 | 52.64 s |
+
+Four attempts crossed recorded system sleep. Their raw observations remain
+marked in the report; four awake replacements supply three eligible timings
+per model above. MiniMax and GPT-OSS rates include native reasoning tokens.
 
 Decode excludes load and prefill. Prefill includes first-use expert checks;
 fresh processes do not guarantee a cold filesystem cache. Available pressure,
@@ -182,7 +187,7 @@ variation was not measured, and these results do not establish a speedup.
 
 ```sh
 python3 Scripts/validate_release_models.py \
-  --app dist/v6.0.2/TUFF.app \
+  --app dist/v6.1.0/TUFF.app \
   --model-root "$HOME/Library/Application Support/TUFF/Models" \
   --repeat 3 --text-only \
   --output benchmark-results/release-validation
@@ -196,11 +201,46 @@ For an image smoke check, supply `--image`, `--image-prompt` and
 `--image-keywords` that describe your fixture. The release report records its
 fixture and criteria. A single-image check is not a vision accuracy score.
 
-`TUFF_PHASES=1` reports demand and prefetch expert records, logical bytes and
-failures separately, along with exposed prefetch waits. Logical `pread` bytes
+`TUFF_PHASES=1` reports demand requests, predictions, demand and prefetch reads,
+logical bytes, failures and exposed waits. It also reports first demand hits on
+prefetched records and their unused evictions. Request counts describe accepted
+cache plans; grouped prefill plans are not per-token frequency. Unused records
+still resident at shutdown are excluded from eviction counts. Warm-request
+useful hits can refer to earlier reads. Logical `pread` bytes
 can be served from the OS cache; they are not physical SSD traffic. Phase
 counters are cumulative and may overlap CPU and GPU work. They cannot be added
 into a wall-clock breakdown, and unexplained time has no inferred cause.
+
+For repeated prefill and decode comparisons, use the sequential runner:
+
+```sh
+python3 Scripts/benchmark_inference.py \
+  --cli dist/v6.1.0/TUFF.app/Contents/Resources/bin/TUFFCLI \
+  --comparison-cli /path/to/reference/TUFF.app/Contents/Resources/bin/TUFFCLI \
+  --model-root "$HOME/Library/Application Support/TUFF/models" \
+  --repeat 3 --max-new 128 --output benchmark-results/paired
+```
+
+It alternates binary order and records every short/long, greedy/default sampled
+run, resolved settings, model identity and available machine observations.
+Each process starts with cold expert and KV caches. Filesystem caching remains
+uncontrolled. `Scripts/validate_release_interfaces.py` exercises the packaged
+app decode service and loopback server serially. Repeated unrelated app-service
+requests retain expert slots and reset KV state; this is separate from prefix
+reuse and from a GUI walkthrough.
+
+The interface runner also accepts `--comparison-app` and alternates complete
+sessions. `--repeat` controls requests per prompt in each warm session;
+`--comparison-repeat` controls session pairs. Each comparison launches one
+model process at a time. Both runners accept separate cache-slot, chunk and
+lookahead overrides for the two variants and record the selected settings.
+For a visible-answer interface smoke check, pass an explicit `--prompt` and
+`--required-word`; thinking text alone does not satisfy the app check.
+
+`TUFF_EXPERT_LOOKAHEAD=off` disables expert lookahead when a runner is created.
+The default retains the existing adaptive policy. Use `--lookahead on` and
+`--comparison-lookahead off` with the same binary in the comparison runner to
+measure that choice. Restart the runner after changing the setting.
 
 ## Images
 
@@ -236,7 +276,7 @@ swift build -c release
 Build the complete arm64 app, ZIP and checksum with:
 
 ```sh
-Scripts/package_app.sh 6.0.2 dist/v6.0.2
+Scripts/package_app.sh 6.1.0 dist/v6.1.0
 ```
 
 The packaged app stores models in
