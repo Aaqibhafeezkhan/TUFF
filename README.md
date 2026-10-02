@@ -8,7 +8,7 @@ TUFF runs language models locally on Apple Silicon. It includes a native Mac
 chat app, model downloader, Swift and Metal inference engine, command-line
 tools, and a local OpenAI-compatible server.
 
-[Download 6.1.0](https://github.com/rexmhall09/TUFF/releases/tag/v6.1.0) ·
+[Download latest](https://github.com/rexmhall09/TUFF/releases/latest) ·
 [Website](https://rexmhall09.github.io/TUFF/) · [Contribute](CONTRIBUTING.md)
 
 ![TUFF chat with Qwen3.8 Flash Next](docs/assets/tuff-chat.png)
@@ -104,8 +104,10 @@ embedded EdDSA public key. Update preferences are in Settings.
   notation, and image and file attachments.
 - **Models** installs the nine supported text checkpoints. Optional image
   companions are separate downloads on the model card.
-- **Server** starts a loopback endpoint. Chat and Server share the app's decode
-  service and serialize access to its loaded model.
+- **Server** provides a loopback endpoint. The optional Background API starts
+  automatically and works while TUFF is closed, loading one installed model
+  on demand and unloading it after a configurable idle delay. The hosted server
+  shares Chat's decode service and is disabled while background mode is enabled.
 - **Settings** controls context, sampling, expert cache, prefill, and updates.
   Settings are saved per model.
 
@@ -242,6 +244,10 @@ The default retains the existing adaptive policy. Use `--lookahead on` and
 `--comparison-lookahead off` with the same binary in the comparison runner to
 measure that choice. Restart the runner after changing the setting.
 
+Help > Report a Bug previews an optional summary of system details, settings
+and generation timing. Check for Recovery Update looks for a newer signed
+recovery and protects local data formats. See [recovery help](docs/RELEASE_RECOVERY.md).
+
 ## Images
 
 Each image companion is tied to its exact text checkpoint. TUFF rejects missing,
@@ -249,6 +255,26 @@ corrupt or incompatible packs and never silently discards an image. Images
 remain available to follow-up turns until context trimming removes them.
 
 ## Local server
+
+In a packaged app, enable **Background API** on the Server screen and allow its
+login item in macOS when requested. Choose the default model, port and unload
+delay, including immediately after the last response. Use the endpoint shown
+on the card with an OpenAI-compatible client. A `default` request selects the
+configured model; a catalog model ID selects another installed model. Active
+and queued requests keep the model loaded. The app can reclaim an idle API
+model's memory before loading a Chat model and reports when the API is busy.
+Chat and the Background API share one memory budget. A model with image
+support counts as the whole budget until its combined text and image peak is
+measured, so while Chat holds such a model the API answers requests with HTTP
+503 instead of loading a second one.
+
+![TUFF Server with the Background API listening and no model loaded](docs/assets/tuff-server.png)
+
+Clone builds can run the same router in the foreground:
+
+```sh
+tuff serve --all-models --default-model gemma4-e2b --unload-after 300 --port 8080
+```
 
 Start the server from the app's Server screen or the packaged `tuff` command.
 It provides `GET /health`, `GET /v1/models`, and `POST /v1/chat/completions`.
@@ -276,7 +302,7 @@ swift build -c release
 Build the complete arm64 app, ZIP and checksum with:
 
 ```sh
-Scripts/package_app.sh 6.1.0 dist/v6.1.0
+Scripts/package_app.sh 7.0.0 dist/v7.0.0
 ```
 
 The packaged app stores models in
