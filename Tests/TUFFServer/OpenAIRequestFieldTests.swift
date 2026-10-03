@@ -40,10 +40,6 @@ struct OpenAIRequestFieldTests {
     }
 
     @Test func otherLocalServersFieldsPointAtTheTUFFEquivalent() throws {
-        let kwargs = try Self.rejection(#""chat_template_kwargs":{"enable_thinking":true}"#)
-        #expect(kwargs.code == "unknown_parameter")
-        #expect(kwargs.message.hasSuffix("; use enable_thinking"))
-
         let predict = try Self.rejection(#""num_predict":32"#)
         #expect(predict.message.hasSuffix("; use max_tokens"))
     }
@@ -97,6 +93,35 @@ struct OpenAIRequestFieldTests {
         #expect(refused.param == "logit_bias")
         let unknown = try Self.rejection(#""temperature":"hot","max_token":3"#)
         #expect(unknown.param == "max_token")
+    }
+
+    /// What oh-my-pi sends with every request to a Qwen model.
+    @Test func qwenClientThinkingSwitchesAreAccepted() throws {
+        let omp = try Self.decode(
+            #""enable_thinking":true,"preserve_thinking":true,"chat_template_kwargs":{"preserve_thinking":true}"#)
+        #expect(omp.enableThinking == true)
+        #expect(omp.preserveThinking == true)
+        let validated = try OpenAIRequestValidator.validate(omp, modelID: "m", dialect: .chatml)
+        #expect(validated.reasoning == .on)
+
+        // The template argument alone drives TUFF's own control.
+        let nested = try Self.decode(#""chat_template_kwargs":{"enable_thinking":false}"#)
+        #expect(nested.enableThinking == false)
+        #expect(try Self.decode(#""chat_template_kwargs":{}"#).enableThinking == nil)
+    }
+
+    @Test func chatTemplateKwargsAcceptOnlyTheThinkingSwitches() throws {
+        let unknown = try Self.rejection(#""chat_template_kwargs":{"add_vision_id":true}"#)
+        #expect(unknown.code == "unknown_parameter")
+        #expect(unknown.param == "chat_template_kwargs")
+        #expect(unknown.message.contains("enable_thinking and preserve_thinking"))
+
+        let conflict = try Self.rejection(
+            #""enable_thinking":true,"chat_template_kwargs":{"enable_thinking":false}"#)
+        #expect(conflict.code == "invalid_value")
+
+        let notBool = try Self.rejection(#""chat_template_kwargs":{"preserve_thinking":"yes"}"#)
+        #expect(notBool.code == "invalid_value")
     }
 
     @Test func tuffsOwnReasoningControlsStillDecode() throws {

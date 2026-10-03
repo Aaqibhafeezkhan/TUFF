@@ -44,7 +44,7 @@ struct TUFFMacApp: App {
     @NSApplicationDelegateAdaptor private var appDelegate: ForegroundAppDelegate
     @State private var isReportingBug = false
     @State private var model: AppModel
-    @State private var serverController: AppServerController
+    @State private var backgroundAPI = AppBackgroundAPIController()
     @State private var updateController: AppUpdateController
     private let inferenceBroker: SharedInferenceBroker
     private let loadModelRequested: Bool
@@ -62,13 +62,10 @@ struct TUFFMacApp: App {
             conversationStore: .persistentDefault(),
             visionRuntimeSupported: AppModel.currentDeviceSupportsVisionRuntime,
             settingsPersistenceEnabled: true)
-        let serverController = AppServerController(
-            broker: inferenceBroker, store: model.serverStore)
         let updateController = AppUpdateController()
         self.inferenceBroker = inferenceBroker
         self.loadModelRequested = CommandLine.arguments.contains("--load-model")
         _model = State(initialValue: model)
-        _serverController = State(initialValue: serverController)
         _updateController = State(initialValue: updateController)
         MainActor.assumeIsolated { ForegroundAppDelegate.model = model }
     }
@@ -77,7 +74,7 @@ struct TUFFMacApp: App {
         Window("TUFF", id: "main") {
             RootView(
                 model: model,
-                serverController: serverController,
+                backgroundAPI: backgroundAPI,
                 updateController: updateController)
                 .sheet(isPresented: $isReportingBug) { BugReportSheet(model: model) }
                 .alert("Recovery Update", isPresented: Binding(

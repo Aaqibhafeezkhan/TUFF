@@ -118,9 +118,8 @@ let package = Package(
         .target(
             name: "TUFFAppServer",
             dependencies: [
-                "TUFFAppCore",
+                "TUFFModelCatalog",
                 "TUFFServerCore",
-                .product(name: "NIOCore", package: "swift-nio"),
             ],
             path: "Sources/TUFFApp/Server"
         ),
@@ -237,9 +236,8 @@ let package = Package(
         .testTarget(
             name: "TUFFAppServerTests",
             dependencies: [
-                "TUFFAppCore",
                 "TUFFAppServer",
-                "TUFFServerCore",
+                "TUFFModelCatalog",
             ],
             path: "Tests/TUFFAppServer"
         ),

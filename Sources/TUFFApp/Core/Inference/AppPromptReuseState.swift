@@ -43,10 +43,9 @@ struct AppPromptReuseState {
     }
 
     private static func canBridge(_ request: AppGenerationRequest) -> Bool {
-        request.structuredMessages == nil && request.multimodalMessages == nil
-            && request.tools.isEmpty && request.assistantPrefix.isEmpty
+        request.assistantPrefix.isEmpty
             && request.imageAttachments.isEmpty && request.reasoning == .off
-            && !request.preserveThinking && request.stopStrings.isEmpty
+            && !request.preserveThinking
             && request.history.allSatisfy { $0.images.isEmpty }
     }
 

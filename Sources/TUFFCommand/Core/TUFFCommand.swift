@@ -21,6 +21,7 @@ public enum TUFFCommandError: Error, Equatable, CustomStringConvertible {
     case unknownModel(String)
     case modelNotInstalled(String)
     case missingBundledExecutable(String)
+    case serveModelRemoved
 
     public var description: String {
         switch self {
@@ -40,6 +41,9 @@ public enum TUFFCommandError: Error, Equatable, CustomStringConvertible {
             "model is not installed at \(path)"
         case .missingBundledExecutable(let name):
             "bundled executable is missing: \(name)"
+        case .serveModelRemoved:
+            "tuff serve serves every installed model, so --model was removed in "
+                + "TUFF 7.1; name the model in each request or pass --default-model <name>"
         }
     }
 }
@@ -51,15 +55,15 @@ public enum TUFFCommand {
     usage:
       tuff prompt <text> [--model <name|path>] [generation options]
       tuff load [model]
-      tuff serve [--model <name|path>] [server options]
-      tuff serve --all-models [--default-model <name>] [--unload-after <seconds>]
+      tuff serve [--default-model <name>] [--unload-after <seconds>] [--port <port>]
       tuff --version
 
     commands:
       prompt   Run a one-shot chat prompt. Uses the selected app model by default.
       load     Select an installed model, open TUFF, and load it into the app.
-      serve    Start the local OpenAI-compatible server in the foreground. With
-               --all-models, every installed model is served and loads on demand.
+      serve    Start the local OpenAI-compatible server in the foreground. Every
+               installed model is served and loads when a request names it;
+               `default` means the selected app model.
 
     model names include gemma4-e2b, gemma4-e4b, gemma4-12b-qat, gemma4,
     qwen36, qwen38-flash-next, gpt-oss-20b, gpt-oss-120b, and minimax-m2.7.
@@ -109,11 +113,9 @@ public enum TUFFCommand {
         case "serve":
             return try servePlan(
                 remaining,
-                device: device,
                 executableURL: executableURL,
                 currentDirectoryURL: currentDirectoryURL,
                 applicationSupportURL: applicationSupportURL,
-                environment: environment,
                 selectedModel: selectedModel,
                 fileExists: fileExists)
         default:
@@ -188,60 +190,36 @@ public enum TUFFCommand {
 
     private static func servePlan(
         _ arguments: [String],
-        device: TUFFDeviceCapabilities,
         executableURL: URL,
         currentDirectoryURL: URL,
         applicationSupportURL: URL,
-        environment: [String: String],
         selectedModel: String?,
         fileExists: (String) -> Bool
     ) throws -> TUFFCommandPlan {
-        if arguments.contains("--all-models") {
-            // The router picks each model's settings itself; it only needs to
-            // know where installed models live, which differs for clone builds.
-            guard !arguments.contains("--model") else {
-                throw TUFFCommandError.unexpectedArgument("--model")
-            }
-            var forwarded = arguments
-            if !forwarded.contains("--models-root") {
-                let root = installURL(
-                    descriptor: TUFFModelCatalog.default,
-                    executableURL: executableURL,
-                    currentDirectoryURL: currentDirectoryURL,
-                    applicationSupportURL: applicationSupportURL,
-                    fileExists: fileExists).deletingLastPathComponent()
-                forwarded += ["--models-root", root.path]
-            }
-            let child = try bundledExecutable(
-                named: "TUFFServer", beside: executableURL, fileExists: fileExists)
-            return .run(executableURL: child, arguments: forwarded)
+        guard !arguments.contains("--model") else {
+            throw TUFFCommandError.serveModelRemoved
         }
-        let extracted = try extractModel(arguments)
-        let model = try resolveModel(
-            selection: extracted.selection,
-            currentDirectoryURL: currentDirectoryURL,
-            applicationSupportURL: applicationSupportURL,
-            executableURL: executableURL,
-            environment: environment,
-            selectedModel: selectedModel,
-            fileExists: fileExists)
-        var forwarded = extracted.remaining
-        if let descriptor = model.descriptor {
-            addDefault("--max-context", value: descriptor.runtimeDefaults.contextTokens, to: &forwarded)
-            addDefault(
-                "--expert-cache-slots",
-                value: descriptor.runtimeDefaults.expertCacheSlots,
-                to: &forwarded)
-            addDefault(
-                "--prefill-chunk-tokens",
-                value: descriptor.recommendedPrefillChunkTokens(on: device),
-                to: &forwarded)
+        // The router picks each model's settings itself; it only needs to know
+        // where installed models live, which differs for clone builds.
+        var forwarded = arguments
+        if !forwarded.contains("--models-root") {
+            let root = installURL(
+                descriptor: TUFFModelCatalog.default,
+                executableURL: executableURL,
+                currentDirectoryURL: currentDirectoryURL,
+                applicationSupportURL: applicationSupportURL,
+                fileExists: fileExists).deletingLastPathComponent()
+            forwarded += ["--models-root", root.path]
+        }
+        // `default` follows the app, as `tuff prompt` does.
+        if !forwarded.contains("--default-model"),
+           let selectedModel,
+           let descriptor = descriptor(selection: selectedModel) {
+            forwarded += ["--default-model", descriptor.selector]
         }
         let child = try bundledExecutable(
             named: "TUFFServer", beside: executableURL, fileExists: fileExists)
-        return .run(
-            executableURL: child,
-            arguments: ["--model", model.url.path] + forwarded)
+        return .run(executableURL: child, arguments: forwarded)
     }
 
     private static func loadPlan(

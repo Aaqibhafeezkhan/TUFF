@@ -1,8 +1,9 @@
 import AppKit
+import ServiceManagement
 import Testing
 import TUFFModelCatalog
 import TUFFAppCore
-import TUFFAppServer
+@testable import TUFFAppServer
 import TUFFAppUpdater
 @testable import TUFFMac
 import TUFFMacPresentation
@@ -23,14 +24,16 @@ import SwiftUI
                 unifiedMemoryBytes: 16 * 1_024 * 1_024 * 1_024,
                 macOSMajorVersion: 15,
                 appleSiliconGeneration: 2))
-        let serverController = AppServerController(
-            broker: broker, store: model.serverStore)
+        let backgroundAPI = AppBackgroundAPIController(
+            service: nil,
+            settingsURL: FileManager.default.temporaryDirectory
+                .appendingPathComponent("TUFFWorkspaceSmoke-\(UUID().uuidString).json"))
         let updateController = AppUpdateController(infoDictionary: nil)
         for destination in AppDestination.allCases {
             let content = AppWorkspaceView(
                 destination: destination,
                 model: model,
-                serverController: serverController,
+                backgroundAPI: backgroundAPI,
                 updateController: updateController)
                 .frame(
                     width: AppWindowLayout.detailMinimumWidth,
@@ -46,6 +49,45 @@ import SwiftUI
                 height: AppWindowLayout.minimumHeight))
             #expect(!data.isEmpty)
         }
+    }
+}
+
+@MainActor private final class WorkspaceSmokeAgent: BackgroundAgentService {
+    var status: SMAppService.Status = .enabled
+    func register() throws {}
+    func unregister() async throws {}
+}
+
+extension AppWorkspaceSmokeTests {
+    /// The packaged app's Server screen, which a clone build never shows.
+    @Test func packagedServerScreenRendersAtTheMinimumWindowSize() throws {
+        let model = AppModel(
+            modelDirectory: FileManager.default.temporaryDirectory
+                .appendingPathComponent(
+                    "TUFFWorkspaceSmoke-\(UUID().uuidString).gturbo",
+                    isDirectory: true),
+            client: SharedInferenceBroker(client: WorkspaceSmokeLifecycleClient()),
+            otherInstalls: [])
+        let backgroundAPI = AppBackgroundAPIController(
+            service: WorkspaceSmokeAgent(),
+            settingsURL: FileManager.default.temporaryDirectory
+                .appendingPathComponent("TUFFWorkspaceSmoke-\(UUID().uuidString).json"))
+        #expect(backgroundAPI.isAvailable)
+        let content = AppWorkspaceView(
+            destination: .server,
+            model: model,
+            backgroundAPI: backgroundAPI,
+            updateController: AppUpdateController(infoDictionary: nil))
+            .frame(
+                width: AppWindowLayout.detailMinimumWidth,
+                height: AppWindowLayout.minimumHeight)
+            .transaction { $0.disablesAnimations = true }
+        let renderer = ImageRenderer(content: content)
+        renderer.scale = 1
+        let image = try #require(renderer.nsImage)
+        #expect(image.size == NSSize(
+            width: AppWindowLayout.detailMinimumWidth,
+            height: AppWindowLayout.minimumHeight))
     }
 }
 

@@ -4,47 +4,6 @@ import Testing
 
 @Suite struct AppModelTests {
     @MainActor
-    @Test func runningServerPinsTheSelectedModel() throws {
-        let model = makeAppModel()
-        let originalID = model.selectedModelID
-        let other = try #require(model.installs.first { $0.id != originalID })
-        let record = AppConversationRecord(
-            title: "Other model",
-            modelID: other.descriptor.settingsProfileKey)
-
-        model.serverStore.status = .running
-        #expect(!model.canSelectModel(other))
-        model.selectModel(other)
-        model.selectConversation(record)
-        #expect(model.selectedModelID == originalID)
-    }
-
-    @MainActor
-    @Test func runningServerPreventsDeletingTheSelectedChat() throws {
-        let store = AppConversationStore()
-        let defaultKey = AppModelInstallDescriptor.default.settingsProfileKey
-        let otherKey = AppModelInstallDescriptor.qwen36.settingsProfileKey
-        store.recordCompletedTurn(
-            AppChatTurn(prompt: "other", response: "answer"),
-            attachments: [], modelID: otherKey)
-        store.startNewConversation(modelID: defaultKey)
-        store.recordCompletedTurn(
-            AppChatTurn(prompt: "selected", response: "answer"),
-            attachments: [], modelID: defaultKey)
-        let model = makeAppModel(conversationStore: store)
-        let selected = try #require(store.selectedConversation)
-        let originalID = model.selectedModelID
-
-        model.serverStore.status = .running
-        #expect(!model.canDeleteConversation(selected))
-        model.deleteConversation(selected)
-
-        #expect(store.selectedConversationID == selected.id)
-        #expect(store.conversations.contains { $0.id == selected.id })
-        #expect(model.selectedModelID == originalID)
-    }
-
-    @MainActor
     @Test func defaultsUseSampledRequest() throws {
         let model = makeAppModel()
         model.modelPathText = FileManager.default.temporaryDirectory.path

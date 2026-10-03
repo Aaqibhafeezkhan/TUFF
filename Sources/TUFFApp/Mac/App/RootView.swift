@@ -30,7 +30,7 @@ private struct AccentSettingsKey: Equatable {
 
 struct RootView: View {
     let model: AppModel
-    let serverController: AppServerController
+    let backgroundAPI: AppBackgroundAPIController
     let updateController: AppUpdateController
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var navigation = AppNavigationState()
@@ -130,7 +130,7 @@ struct RootView: View {
         AppWorkspaceView(
             destination: navigation.destination,
             model: model,
-            serverController: serverController,
+            backgroundAPI: backgroundAPI,
             updateController: updateController)
     }
 
@@ -444,7 +444,7 @@ private struct WindowFullScreenReader: NSViewRepresentable {
 struct AppWorkspaceView: View {
     let destination: AppDestination
     let model: AppModel
-    let serverController: AppServerController
+    let backgroundAPI: AppBackgroundAPIController
     let updateController: AppUpdateController
 
     var body: some View {
@@ -456,7 +456,7 @@ struct AppWorkspaceView: View {
                 ModelsWorkspaceView(model: model)
             case .server:
                 ServerWorkspaceView(
-                    model: model, controller: serverController)
+                    model: model, controller: backgroundAPI)
             case .settings:
                 SettingsWorkspaceView(
                     model: model, updateController: updateController)
@@ -558,298 +558,6 @@ private struct ModelsWorkspaceView: View {
     }
 }
 
-private struct ServerWorkspaceView: View {
-    let model: AppModel
-    let controller: AppServerController
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                WorkspaceTitle(
-                    title: "Server",
-                    subtitle: "Use TUFF through an OpenAI-compatible loopback endpoint.")
-                BackgroundAPICard(model: model, controller: controller.background)
-                statusCard
-                    .disabled(controller.background.settings.enabled)
-                configurationCard
-                activityCard
-                if !model.serverStore.recentErrors.isEmpty { errorsCard }
-            }
-            .frame(maxWidth: 920, alignment: .leading)
-            .padding(28)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color(nsColor: .windowBackgroundColor))
-    }
-
-    private var statusCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 12) {
-                ZStack {
-                    Circle()
-                        .fill(TUFFMacTheme.accentColor.opacity(0.12))
-                    Image(systemName: "network")
-                        .appFont(.title2)
-                        .foregroundStyle(TUFFMacTheme.accentColor)
-                }
-                .frame(width: 44, height: 44)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Local server").appFont(.headline)
-                    Text(serverStatus)
-                        .appFont(.callout)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                statusControl
-            }
-            Divider()
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Endpoint")
-                        .appFont(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                    Text(endpointText)
-                        .appFont(.body.monospaced())
-                        .textSelection(.enabled)
-                }
-                Spacer()
-                Button {
-                    guard let url = controller.url else { return }
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(
-                        url.absoluteString, forType: .string)
-                } label: {
-                    Label("Copy URL", systemImage: "doc.on.doc")
-                }
-                .disabled(controller.url == nil)
-                .accessibilityHint("Copies the loopback server URL")
-            }
-        }
-        .padding(18)
-        .background(cardBackground, in: RoundedRectangle(cornerRadius: 16))
-    }
-
-    @ViewBuilder
-    private var statusControl: some View {
-        switch model.serverStore.status {
-        case .starting, .stopping:
-            ProgressView()
-                .controlSize(.small)
-                .accessibilityLabel(serverStatus)
-        case .running:
-            Button("Stop", role: .destructive) { controller.stop() }
-                .keyboardShortcut("s", modifiers: [.command, .option])
-        case .stopped, .failed:
-            if model.loadState.isReady, !model.hasStaleLoadedRuntime {
-                Button("Start") {
-                    if let configuration { controller.start(configuration) }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(configuration == nil || controller.background.settings.enabled)
-                .keyboardShortcut("s", modifiers: [.command, .option])
-            } else if model.hasStaleLoadedRuntime {
-                Button("Reload Model", action: model.reloadModel)
-                    .disabled(!model.canReloadModel)
-            } else {
-                Button("Load Model", action: model.loadModel)
-                    .disabled(!model.canLoadModel)
-            }
-        }
-    }
-
-    private var configurationCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Configuration")
-                .appFont(.headline)
-            Picker("Model", selection: selectedModelBinding) {
-                ForEach(model.installs) { install in
-                    Text(install.descriptor.displayName).tag(install.id)
-                }
-            }
-            .disabled(model.serverStore.isBusy || model.isRunning)
-            .accessibilityHint("Selects the model Chat and Server share")
-
-            LabeledContent("API model ID") {
-                Text(model.selectedDescriptor.apiModelID)
-                    .appFont(.callout.monospaced())
-                    .textSelection(.enabled)
-            }
-            HStack(spacing: 18) {
-                TextField("Port",
-                          value: Bindable(model.serverStore).desiredPort,
-                          format: .number)
-                    .frame(maxWidth: 150)
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(model.serverStore.isBusy)
-                Stepper(
-                    "Queue: \(model.serverStore.queueLimit)",
-                    value: Bindable(model.serverStore).queueLimit,
-                    in: 1...16)
-                    .disabled(model.serverStore.isBusy)
-                Spacer()
-            }
-            Text("The server binds only to 127.0.0.1. Chat and API requests share one model process and run one at a time.")
-                .appFont(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .padding(18)
-        .background(cardBackground, in: RoundedRectangle(cornerRadius: 16))
-    }
-
-    private var activityCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text("Health and activity").appFont(.headline)
-                Spacer()
-                Button {
-                    controller.refreshHealth()
-                } label: {
-                    Label("Check", systemImage: "arrow.clockwise")
-                }
-                .disabled(model.serverStore.status != .running
-                          || model.serverStore.health == .checking)
-            }
-            HStack(spacing: 12) {
-                ServerMetric(
-                    title: "Health",
-                    value: healthLabel,
-                    systemImage: healthSystemImage,
-                    accent: model.serverStore.health == .healthy)
-                ServerMetric(
-                    title: "Active",
-                    value: "\(model.serverStore.activeRequests)",
-                    systemImage: "bolt.horizontal.circle",
-                    accent: model.serverStore.activeRequests > 0)
-                ServerMetric(
-                    title: "Queued",
-                    value: "\(model.serverStore.queuedRequests)",
-                    systemImage: "list.number",
-                    accent: model.serverStore.queuedRequests > 0)
-            }
-        }
-        .padding(18)
-        .background(cardBackground, in: RoundedRectangle(cornerRadius: 16))
-    }
-
-    private var errorsCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Recent errors").appFont(.headline)
-            ForEach(Array(model.serverStore.recentErrors.enumerated()), id: \.offset) {
-                _, message in
-                Label(message, systemImage: "exclamationmark.triangle")
-                    .appFont(.caption)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-        }
-        .padding(18)
-        .background(cardBackground, in: RoundedRectangle(cornerRadius: 16))
-    }
-
-    private var cardBackground: AnyShapeStyle {
-        TUFFMacTheme.surfaceStyle(
-            reduceTransparency: reduceTransparency)
-    }
-
-    /// Route picker changes through model-switch validation.
-    private var selectedModelBinding: Binding<String> {
-        Binding {
-            model.selectedModelID
-        } set: { id in
-            guard let install = model.installs.first(where: { $0.id == id }) else { return }
-            model.selectModel(install)
-        }
-    }
-
-    private var configuration: AppHostedServerConfiguration? {
-        guard model.loadState.isReady,
-              !model.hasStaleLoadedRuntime,
-              let loaded = model.loadedRuntimeKey,
-              (1...65_535).contains(model.serverStore.desiredPort) else { return nil }
-        let visionCapability = if !model.visionRuntimeEnabled {
-            "disabled"
-        } else if model.isImageInputAvailable {
-            "ready"
-        } else {
-            "missing"
-        }
-        return AppHostedServerConfiguration(
-            modelID: model.selectedDescriptor.apiModelID,
-            chatDialect: model.selectedDescriptor.chatDialect,
-            visionCapability: visionCapability,
-            port: model.serverStore.desiredPort,
-            queueLimit: model.serverStore.queueLimit,
-            runtime: AppServerRuntimeConfiguration(
-                modelDirectory: loaded.modelDirectory,
-                maxContextTokens: loaded.maxContextTokens,
-                runtimeOptions: loaded.options(
-                    prefillEnabled: model.runtimeOptions.prefillEnabled,
-                    prefillChunkTokens: model.runtimeOptions.prefillChunkTokens),
-                preserveThinking: model.selectedDescriptor.family == .qwen36
-                    && model.preserveThinking))
-    }
-
-    private var endpointText: String {
-        controller.url?.absoluteString
-            ?? "http://127.0.0.1:\(model.serverStore.desiredPort)"
-    }
-
-    private var serverStatus: String {
-        switch model.serverStore.status {
-        case .stopped: "Stopped"
-        case .starting: "Starting on this Mac…"
-        case .running: "Running on 127.0.0.1"
-        case .stopping: "Stopping…"
-        case .failed(let detail): "Could not start: \(detail)"
-        }
-    }
-
-    private var healthLabel: String {
-        switch model.serverStore.health {
-        case .unknown: "Not checked"
-        case .checking: "Checking"
-        case .healthy: "Healthy"
-        case .unreachable: "Unavailable"
-        }
-    }
-
-    private var healthSystemImage: String {
-        switch model.serverStore.health {
-        case .unknown: "minus.circle"
-        case .checking: "arrow.clockwise.circle"
-        case .healthy: "checkmark.circle.fill"
-        case .unreachable: "xmark.circle.fill"
-        }
-    }
-}
-
-private struct ServerMetric: View {
-    let title: String
-    let value: String
-    let systemImage: String
-    let accent: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Image(systemName: systemImage)
-                .foregroundStyle(accent
-                    ? TUFFMacTheme.accentColor : .secondary)
-            Text(value)
-                .appFont(.title3.weight(.semibold))
-            Text(title)
-                .appFont(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(title)
-        .accessibilityValue(value)
-    }
-}
-
 private struct SettingsWorkspaceView: View {
     let model: AppModel
     let updateController: AppUpdateController
@@ -869,7 +577,7 @@ private struct SettingsWorkspaceView: View {
     }
 }
 
-private struct WorkspaceTitle: View {
+struct WorkspaceTitle: View {
     let title: String
     let subtitle: String
 

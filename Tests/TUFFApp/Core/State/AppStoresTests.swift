@@ -41,31 +41,5 @@ import Testing
         first.promptText = "only the first store"
 
         #expect(second.promptText.isEmpty)
-        #expect(AppServerStore().status == .stopped)
-    }
-
-    @MainActor
-    @Test(arguments: [(0, 1), (-4, 1), (70_000, 65_535), (8_080, 8_080), (1, 1)])
-    func serverStoreClampsDesiredPortToTheBindableRange(
-        typed: Int, expected: Int
-    ) {
-        let store = AppServerStore()
-
-        store.desiredPort = typed
-
-        #expect(store.desiredPort == expected)
-        #expect(AppServerStore.portRange.contains(store.desiredPort))
-    }
-
-    @MainActor
-    @Test func serverStoreBoundsRecentErrorsNewestFirst() {
-        let store = AppServerStore()
-        for index in 0...AppServerStore.maximumRecentErrors {
-            store.recordError("error \(index)")
-        }
-
-        #expect(store.recentErrors.count == AppServerStore.maximumRecentErrors)
-        #expect(store.recentErrors.first == "error \(AppServerStore.maximumRecentErrors)")
-        #expect(store.recentErrors.last == "error 1")
     }
 }

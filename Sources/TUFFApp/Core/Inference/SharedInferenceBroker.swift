@@ -3,25 +3,21 @@ import Synchronization
 
 public enum SharedInferenceConsumer: String, Sendable, Equatable {
     case chat
-    case server
     case lifecycle
 }
 
 public struct SharedInferenceActivity: Sendable, Equatable {
     public var activeConsumer: SharedInferenceConsumer?
     public var queuedChatRequests: Int
-    public var queuedServerRequests: Int
     public var queuedLifecycleOperations: Int
 
     public init(
         activeConsumer: SharedInferenceConsumer? = nil,
         queuedChatRequests: Int = 0,
-        queuedServerRequests: Int = 0,
         queuedLifecycleOperations: Int = 0
     ) {
         self.activeConsumer = activeConsumer
         self.queuedChatRequests = queuedChatRequests
-        self.queuedServerRequests = queuedServerRequests
         self.queuedLifecycleOperations = queuedLifecycleOperations
     }
 }
@@ -98,7 +94,8 @@ private actor SharedInferenceAdmission {
 
     /// Cancels one broker job without ever targeting a different active job.
     /// An active job keeps its lease until the underlying stream acknowledges
-    /// cancellation, so the next Chat or Server request cannot start early.
+    /// cancellation, so the next request or lifecycle operation cannot start
+    /// early.
     func cancel(id: UUID, cancelActive: @Sendable () -> Void) {
         if active?.id == id {
             guard cancellationRequested.insert(id).inserted else { return }
@@ -133,7 +130,6 @@ private actor SharedInferenceAdmission {
         onActivity(SharedInferenceActivity(
             activeConsumer: active?.consumer,
             queuedChatRequests: waiters.count { $0.lease.consumer == .chat },
-            queuedServerRequests: waiters.count { $0.lease.consumer == .server },
             queuedLifecycleOperations: waiters.count {
                 $0.lease.consumer == .lifecycle
             }))
@@ -141,9 +137,8 @@ private actor SharedInferenceAdmission {
 }
 
 /// The app's single admission point for model lifecycle and generation work.
-/// Chat and the loopback server share the same decode-service client; every
-/// operation is FIFO and one active lease is held until its service response
-/// reaches a terminal event.
+/// Every operation on the decode-service client is FIFO, and one active lease is
+/// held until its service response reaches a terminal event.
 public final class SharedInferenceBroker: AppModelLifecycleClient,
     AppInferenceMemoryReporting, AppInferenceTranscriptReporting, @unchecked Sendable {
     private let client: any AppModelLifecycleClient
@@ -228,44 +223,15 @@ public final class SharedInferenceBroker: AppModelLifecycleClient,
 
     public func generate(_ request: AppGenerationRequest)
         -> AsyncThrowingStream<AppInferenceEvent, Error> {
-        generationStream(request, consumer: .chat)
-    }
-
-    public func generateForServer(_ request: AppGenerationRequest)
-        -> AsyncThrowingStream<AppInferenceEvent, Error> {
-        generationStream(request, consumer: .server)
-    }
-
-    /// AppModel's Cancel action is scoped to Chat. Server work is cancelled by
-    /// the server request or shutdown path, never by this method.
-    public func cancel() {
-        let ids = chatJobs.ids.withLock { $0 }
-        for id in ids {
-            Task { [client, admission] in
-                await admission.cancel(id: id) { client.cancel() }
-            }
-        }
-    }
-
-    private func generationStream(
-        _ request: AppGenerationRequest,
-        consumer: SharedInferenceConsumer
-    ) -> AsyncThrowingStream<AppInferenceEvent, Error> {
         let id = UUID()
-        if consumer == .chat {
-            _ = chatJobs.ids.withLock { $0.insert(id) }
-        }
+        _ = chatJobs.ids.withLock { $0.insert(id) }
 
         return AsyncThrowingStream { [client, admission, chatJobs] continuation in
             Task {
-                defer {
-                    if consumer == .chat {
-                        _ = chatJobs.ids.withLock { $0.remove(id) }
-                    }
-                }
+                defer { _ = chatJobs.ids.withLock { $0.remove(id) } }
                 do {
                     let lease = try await admission.acquire(
-                        id: id, consumer: consumer)
+                        id: id, consumer: .chat)
                     do {
                         for try await event in client.generate(request) {
                             continuation.yield(event)
@@ -286,6 +252,16 @@ public final class SharedInferenceBroker: AppModelLifecycleClient,
                 Task {
                     await admission.cancel(id: id) { client.cancel() }
                 }
+            }
+        }
+    }
+
+    /// AppModel's Cancel action cancels Chat generations, never lifecycle work.
+    public func cancel() {
+        let ids = chatJobs.ids.withLock { $0 }
+        for id in ids {
+            Task { [client, admission] in
+                await admission.cancel(id: id) { client.cancel() }
             }
         }
     }

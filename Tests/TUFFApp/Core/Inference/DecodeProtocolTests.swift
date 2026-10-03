@@ -274,83 +274,30 @@ import TUFFDecodeProtocol
         #expect(!legacy.preserveThinking)
     }
 
-    @Test func structuredServerRequestRoundTripPreservesPromptContract() throws {
-        let imageID = UUID()
-        let messages = [
-            GFTokenizer.Message(role: .developer, content: "Be precise."),
-            GFTokenizer.Message(role: .user, content: "Inspect the image."),
-        ]
-        let multimodal = [MultimodalMessage(
-            role: .user,
-            content: [.image(id: imageID), .text("Inspect the image.")])]
-        let tools = [GFTokenizer.FunctionDefinition(
-            name: "lookup",
-            description: "Look up a value.",
-            parameters: .object([
-                "type": .string("object"),
-                "properties": .object([:]),
-            ]))]
+    @Test func seedRoundTripsAndRetiredServerKeysAreIgnored() throws {
         let request = DecodeGenerationRequest(
-            prompt: "",
-            structuredMessages: messages,
-            multimodalMessages: multimodal,
-            tools: tools,
+            prompt: "hello",
             maxNewTokens: 32,
             maxContextTokens: 8_192,
-            reasoning: .on,
             temperature: 0.3,
-            repetitionPenalty: 0.8,
-            seed: 42,
-            stopStrings: ["END"],
-            harmonyCurrentDate: "2026-08-25")
-
+            seed: 42)
         let encoded = try JSONEncoder().encode(request)
-        let decoded = try JSONDecoder().decode(
-            DecodeGenerationRequest.self, from: encoded)
+        #expect(try JSONDecoder().decode(
+            DecodeGenerationRequest.self, from: encoded).seed == 42)
 
-        #expect(decoded.structuredMessages == messages)
-        #expect(decoded.multimodalMessages == multimodal)
-        #expect(decoded.tools == tools)
-        #expect(decoded.seed == 42)
-        #expect(decoded.stopStrings == ["END"])
-        #expect(decoded.harmonyCurrentDate == "2026-08-25")
-
-        var legacyObject = try #require(
+        // 7.0.0 clients and the release interface harness still send the keys
+        // the app-hosted server used; the service ignores them.
+        var older = try #require(
             JSONSerialization.jsonObject(with: encoded) as? [String: Any])
-        for key in [
-            "structuredMessages", "multimodalMessages", "tools", "seed",
-            "stopStrings", "harmonyCurrentDate",
-        ] {
-            legacyObject.removeValue(forKey: key)
-        }
-        let legacy = try JSONDecoder().decode(
-            DecodeGenerationRequest.self,
-            from: JSONSerialization.data(withJSONObject: legacyObject))
-        #expect(legacy.structuredMessages == nil)
-        #expect(legacy.multimodalMessages == nil)
-        #expect(legacy.tools.isEmpty)
-        #expect(legacy.seed == nil)
-        #expect(legacy.stopStrings.isEmpty)
-        #expect(legacy.harmonyCurrentDate == nil)
-    }
-
-    @Test func toolCallEventRoundTrips() throws {
-        let call = ParsedToolCall(
-            id: "call_7",
-            name: "lookup",
-            arguments: .object(["city": .string("Paris")]),
-            argumentsJSON: #"{"city":"Paris"}"#)
-        let event = DecodeServiceEvent(
-            kind: .snapshot,
-            generationID: UUID(),
-            sequence: 1,
-            toolCalls: [call])
-
+        older["structuredMessages"] = [["role": "user", "content": "x"]]
+        older["tools"] = []
+        older["stopStrings"] = ["END"]
+        older["harmonyCurrentDate"] = "2026-08-25"
         let decoded = try JSONDecoder().decode(
-            DecodeServiceEvent.self,
-            from: JSONEncoder().encode(event))
-
-        #expect(decoded.toolCalls == [call])
+            DecodeGenerationRequest.self,
+            from: JSONSerialization.data(withJSONObject: older))
+        #expect(decoded.prompt == "hello")
+        #expect(decoded.seed == 42)
     }
 
 }

@@ -4,64 +4,37 @@ import Testing
 @testable import TUFFAppCore
 
 @Suite struct SharedInferenceBrokerTests {
-    @Test func chatAndServerRequestsRunFIFOWithOneActiveGeneration() async throws {
+    @Test func chatRequestsRunFIFOWithOneActiveGeneration() async throws {
         let client = BrokerProbeClient()
         let broker = SharedInferenceBroker(client: client)
-        let chat = Task { try await collect(broker.generate(request("chat"))) }
-        #expect(await client.waitForStart("chat"))
+        let first = Task { try await collect(broker.generate(request("first"))) }
+        #expect(await client.waitForStart("first"))
 
-        let server = Task {
-            try await collect(broker.generateForServer(request("server")))
-        }
-        #expect(await waitUntil { broker.activity.queuedServerRequests == 1 })
-        #expect(client.starts == ["chat"])
+        let second = Task { try await collect(broker.generate(request("second"))) }
+        #expect(await waitUntil { broker.activity.queuedChatRequests == 1 })
+        #expect(client.starts == ["first"])
         #expect(client.maximumConcurrentGenerations == 1)
 
-        client.finish("chat")
-        #expect(await client.waitForStart("server"))
-        client.finish("server")
-        _ = try await chat.value
-        _ = try await server.value
+        client.finish("first")
+        #expect(await client.waitForStart("second"))
+        client.finish("second")
+        _ = try await first.value
+        _ = try await second.value
 
-        #expect(client.starts == ["chat", "server"])
+        #expect(client.starts == ["first", "second"])
         #expect(client.maximumConcurrentGenerations == 1)
         #expect(broker.activity == SharedInferenceActivity())
     }
 
-    @Test func cancellingQueuedChatDoesNotCancelActiveServer() async throws {
-        let client = BrokerProbeClient()
-        let broker = SharedInferenceBroker(client: client)
-        let server = Task {
-            try await collect(broker.generateForServer(request("server")))
-        }
-        #expect(await client.waitForStart("server"))
-        let chat = Task { try await collect(broker.generate(request("chat"))) }
-        #expect(await waitUntil { broker.activity.queuedChatRequests == 1 })
-
-        broker.cancel()
-        do {
-            _ = try await chat.value
-            Issue.record("queued Chat generation should have been cancelled")
-        } catch {
-            #expect(error is CancellationError)
-        }
-        #expect(client.cancelCount == 0)
-        #expect(client.starts == ["server"])
-        #expect(broker.activity.activeConsumer == .server)
-
-        client.finish("server")
-        _ = try await server.value
-    }
-
-    @Test func activeChatCancellationWaitsForItsTerminalBeforeServerStarts() async throws {
+    @Test func activeChatCancellationWaitsForItsTerminalBeforeLifecycleStarts() async throws {
         let client = BrokerProbeClient()
         let broker = SharedInferenceBroker(client: client)
         let chat = Task { try await collect(broker.generate(request("chat"))) }
         #expect(await client.waitForStart("chat"))
-        let server = Task {
-            try await collect(broker.generateForServer(request("server")))
-        }
-        #expect(await waitUntil { broker.activity.queuedServerRequests == 1 })
+        let unload = Task { await broker.unload() }
+        #expect(await waitUntil {
+            broker.activity.queuedLifecycleOperations == 1
+        })
 
         broker.cancel()
         #expect(await waitUntil { client.cancelCount == 1 })
@@ -70,21 +43,17 @@ import Testing
             if case .cancelled = event { return true }
             return false
         })
-        #expect(await client.waitForStart("server"))
-        client.finish("server")
-        _ = try await server.value
+        await unload.value
 
-        #expect(client.starts == ["chat", "server"])
-        #expect(client.maximumConcurrentGenerations == 1)
+        #expect(client.operationOrder == ["generate:chat", "unload"])
+        #expect(broker.activity == SharedInferenceActivity())
     }
 
     @Test func lifecycleWorkWaitsBehindGenerationLease() async throws {
         let client = BrokerProbeClient()
         let broker = SharedInferenceBroker(client: client)
-        let server = Task {
-            try await collect(broker.generateForServer(request("server")))
-        }
-        #expect(await client.waitForStart("server"))
+        let chat = Task { try await collect(broker.generate(request("chat"))) }
+        #expect(await client.waitForStart("chat"))
         let load = Task {
             try await broker.ensureLoaded(
                 modelDirectory: URL(fileURLWithPath: "/tmp/model.gturbo"),
@@ -97,12 +66,12 @@ import Testing
             broker.activity.queuedLifecycleOperations == 1
         })
         #expect(client.loadCount == 0)
-        client.finish("server")
-        _ = try await server.value
+        client.finish("chat")
+        _ = try await chat.value
         try await load.value
 
         #expect(client.loadCount == 1)
-        #expect(client.operationOrder == ["generate:server", "load"])
+        #expect(client.operationOrder == ["generate:chat", "load"])
     }
 
     @Test func brokerForwardsServiceMemoryAndTranscriptReporting() {

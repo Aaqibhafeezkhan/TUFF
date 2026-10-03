@@ -8,7 +8,7 @@ import TUFFModelCatalog
         let report = AppBugReport(system: .init(macOS: "26.6.2", macModel: "Mac14,2", chip: "Apple M2", memoryBytes: 16 << 30),
             model: TUFFModelCatalog.default, contextTokens: 4096, temperature: 0.2,
             topK: 64, topP: 0.95, runtime: .init(), diagnostics: nil)
-        #expect(report.summary.contains("TUFF 7.0.0"))
+        #expect(report.summary.contains("TUFF \(TUFFVersion.current)"))
         #expect(report.summary.contains("Mac14,2"))
         #expect(!report.summary.contains("/Users/"))
         #expect(!report.summary.contains("file://"))

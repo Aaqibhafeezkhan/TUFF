@@ -154,8 +154,18 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
     public let logprobs: Bool?
     public let presencePenalty: Float?
     public let frequencyPenalty: Float?
-    /// TUFF's model-aware on/off reasoning control for Gemma 4 and Qwen.
+    /// TUFF's model-aware on/off reasoning control for Gemma 4 and Qwen,
+    /// from `enable_thinking` or `chat_template_kwargs.enable_thinking`.
     public let enableThinking: Bool?
+    /// Qwen's request to render earlier assistant reasoning back into the
+    /// prompt. TUFF never returns reasoning and drops any a client sends back,
+    /// so no history carries reasoning and this cannot change the prompt. It
+    /// is type-checked and accepted because Qwen clients such as oh-my-pi send
+    /// it on every request.
+    public let preserveThinking: Bool?
+    /// As sent. Only `enable_thinking` and `preserve_thinking` are accepted,
+    /// and both are folded into the fields above.
+    public let chatTemplateKwargs: [String: JSONValue]?
     /// GPT-OSS graded reasoning control. Harmony defaults to Medium when this
     /// field is absent; other model families reject it.
     public let reasoningEffort: GPTOSSReasoningEffort?
@@ -176,9 +186,16 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
         case presencePenalty = "presence_penalty"
         case frequencyPenalty = "frequency_penalty"
         case enableThinking = "enable_thinking"
+        case preserveThinking = "preserve_thinking"
+        case chatTemplateKwargs = "chat_template_kwargs"
         case reasoningEffort = "reasoning_effort"
         case responseFormat = "response_format"
     }
+
+    /// The `chat_template_kwargs` TUFF understands: the same switches it
+    /// accepts at the top level. Any other template argument would change a
+    /// template TUFF renders itself, so it is refused.
+    static let chatTemplateKwargs: Set<String> = ["enable_thinking", "preserve_thinking"]
 
     /// Top-level keys accepted and ignored: caller-side bookkeeping that
     /// cannot change what the model generates. Every other undeclared key is
@@ -212,7 +229,6 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
     /// Keys other local servers accept that have a TUFF equivalent. Refused
     /// like any unknown key, with the field to use instead.
     static let equivalentKeys: [String: String] = [
-        "chat_template_kwargs": "enable_thinking",
         "max_new_tokens": "max_tokens",
         "num_predict": "max_tokens",
         "reasoning": "enable_thinking or, for GPT-OSS, reasoning_effort",
@@ -285,7 +301,38 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
             Float.self, forKey: .presencePenalty)
         frequencyPenalty = try container.decodeIfPresent(
             Float.self, forKey: .frequencyPenalty)
-        enableThinking = try container.decodeIfPresent(Bool.self, forKey: .enableThinking)
+        chatTemplateKwargs = try container.decodeIfPresent(
+            [String: JSONValue].self, forKey: .chatTemplateKwargs)
+        let kwargs = chatTemplateKwargs ?? [:]
+        let kwargKeys = kwargs.filter { $0.value != .null }.keys
+        if let unknown = kwargKeys.filter({ !Self.chatTemplateKwargs.contains($0) }).sorted().first {
+            let shown = boundedForDisplay(unknown, maxLength: Self.maximumNamedKeyLength)
+            throw ServerRequestError.invalid(
+                message: "unsupported chat_template_kwargs field \(String(reflecting: shown)); "
+                    + "TUFF accepts enable_thinking and preserve_thinking there",
+                param: "chat_template_kwargs",
+                code: "unknown_parameter")
+        }
+        func flag(_ key: CodingKeys) throws -> Bool? {
+            let top = try container.decodeIfPresent(Bool.self, forKey: key)
+            let nested: Bool?
+            switch kwargs[key.stringValue] {
+            case nil, .null?: nested = nil
+            case .bool(let value)?: nested = value
+            default:
+                throw ServerRequestError.invalid(
+                    message: "chat_template_kwargs.\(key.stringValue) must be a boolean",
+                    param: "chat_template_kwargs", code: "invalid_value")
+            }
+            if let top, let nested, top != nested {
+                throw ServerRequestError.invalid(
+                    message: "\(key.stringValue) and chat_template_kwargs.\(key.stringValue) disagree",
+                    param: "chat_template_kwargs", code: "invalid_value")
+            }
+            return top ?? nested
+        }
+        enableThinking = try flag(.enableThinking)
+        preserveThinking = try flag(.preserveThinking)
         reasoningEffort = try container.decodeIfPresent(
             GPTOSSReasoningEffort.self, forKey: .reasoningEffort)
         responseFormat = try container.decodeIfPresent(

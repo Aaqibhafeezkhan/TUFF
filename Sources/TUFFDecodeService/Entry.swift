@@ -156,9 +156,6 @@ enum DecodeServiceError: Error, CustomStringConvertible {
                                         sha256: $0.sha256)
                                 })
                         },
-                        structuredMessages: request.structuredMessages,
-                        multimodalMessages: request.multimodalMessages,
-                        tools: request.tools,
                         imageAttachments: (request.imageAttachments ?? []).map {
                             AppImageAttachment(
                                 id: $0.id,
@@ -180,8 +177,6 @@ enum DecodeServiceError: Error, CustomStringConvertible {
                         topP: request.topP,
                         repetitionPenalty: request.repetitionPenalty,
                         seed: request.seed,
-                        stopStrings: request.stopStrings,
-                        harmonyCurrentDate: request.harmonyCurrentDate,
                         runtimeOptions: options)
                     for try await event in client.generate(generation) {
                         outbox.publish(event)

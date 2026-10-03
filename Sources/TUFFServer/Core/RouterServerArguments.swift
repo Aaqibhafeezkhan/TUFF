@@ -1,9 +1,8 @@
 import Foundation
 import TUFFModelCatalog
 
-/// Arguments for the model-routing server: `TUFFServer --all-models` in the
-/// foreground, or `TUFFServer --background` as the login item the app
-/// registers. Fixed-model serving keeps `ServerArguments`.
+/// Arguments for the model-routing server: `TUFFServer` in the foreground, or
+/// `TUFFServer --background` as the login item the app registers.
 public struct RouterServerArguments: Equatable, Sendable {
     public var background: Bool
     public var modelsRoot: String?
@@ -13,14 +12,14 @@ public struct RouterServerArguments: Equatable, Sendable {
     public var queueLimit: Int?
 
     public static let usage = """
-    usage: TUFFServer --all-models [options]
+    usage: TUFFServer [options]
            TUFFServer --background
 
     Serves every installed model on one loopback endpoint. A model loads when a
     request names it and unloads after it has been idle. Requests that name
-    `default` use the default model.
+    `default` use the default model. Each model runs with its catalog context,
+    expert-cache and prefill settings for this Mac.
 
-      --all-models               Route requests by their "model" field.
       --background               Run as TUFF's background API: read settings from
                                  Application Support/TUFF/Server and log to
                                  ~/Library/Logs/TUFF. The app starts this mode.
@@ -34,13 +33,23 @@ public struct RouterServerArguments: Equatable, Sendable {
       --help                     Show this help.
     """
 
-    public static func isRouterInvocation(_ input: [String]) -> Bool {
-        input.contains("--all-models") || input.contains("--background")
-    }
+    /// Fixed-model flags that 7.1.0 removed, with what to use instead.
+    static let removedFlags: [String: String] = [
+        "--model": "the server routes each request by its \"model\" field; use --default-model <name>",
+        "--model-id": "each model is served under its catalog ID",
+        "--max-context": "each model uses its catalog context length",
+        "--vision-pack": "image packs are found beside each installed model",
+        "--vision-residency": "image packs load on demand",
+        "--prompt-cache-mode": "prompt reuse is always on",
+        "--expert-cache-slots": "each model uses its catalog expert-cache size",
+        "--expert-cache-policy": "each model uses its catalog expert-cache size",
+        "--prefill": "each model uses its catalog prefill setting",
+        "--prefill-chunk-tokens": "each model uses the prefill chunk chosen for this Mac",
+        "--rdadvise": "read advice is not configurable",
+    ]
 
     public static func parse(_ input: [String]) throws -> RouterServerArguments {
         var arguments = RouterServerArguments(background: false)
-        var sawMode = false
         var index = 0
         while index < input.count {
             let flag = input[index]
@@ -49,14 +58,15 @@ public struct RouterServerArguments: Equatable, Sendable {
             case "--help", "-h":
                 throw ServerArgumentError.help
             case "--all-models":
-                sawMode = true
+                // 7.0.0 needed this to choose routing; it is now the only mode.
                 continue
             case "--background":
-                sawMode = true
                 arguments.background = true
                 continue
             default:
-                break
+                if let replacement = removedFlags[flag] {
+                    throw ServerArgumentError.invalid("\(flag) was removed in TUFF 7.1: \(replacement)")
+                }
             }
             guard index < input.count else {
                 throw ServerArgumentError.invalid("\(flag) requires a value")
@@ -94,9 +104,6 @@ public struct RouterServerArguments: Equatable, Sendable {
                 throw ServerArgumentError.invalid("unknown flag: \(flag)")
             }
         }
-        guard sawMode else {
-            throw ServerArgumentError.invalid("--all-models or --background is required")
-        }
         return arguments
     }
 
@@ -109,5 +116,17 @@ public struct RouterServerArguments: Equatable, Sendable {
         if let unloadDelay { settings.unloadDelay = unloadDelay }
         if let queueLimit { settings.queueLimit = queueLimit }
         return settings
+    }
+}
+
+public enum ServerArgumentError: Error, Equatable, CustomStringConvertible {
+    case help
+    case invalid(String)
+
+    public var description: String {
+        switch self {
+        case .help: "help"
+        case .invalid(let message): message
+        }
     }
 }

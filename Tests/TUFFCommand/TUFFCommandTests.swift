@@ -50,30 +50,11 @@ struct TUFFCommandTests {
                                appleSiliconGeneration: 2)
     }
 
-    @Test func serveAndPromptSizePrefillChunksForTheModelAndMac() throws {
+    @Test func promptSizesPrefillChunksForTheModelAndMac() throws {
         let executable = repository.appendingPathComponent(".build/debug/TUFFCommand")
         let existing: Set<String> = [
-            "/repo/Package.swift", "/repo/Sources/TUFFApp/Mac",
-            "/repo/.build/debug/TUFFServer", "/repo/.build/debug/TUFFCLI",
+            "/repo/Package.swift", "/repo/Sources/TUFFApp/Mac", "/repo/.build/debug/TUFFCLI",
         ]
-        func served(_ model: String, memoryGiB: UInt64, extra: [String] = []) throws -> String? {
-            guard case .run(_, let arguments) = try TUFFCommand.plan(
-                arguments: ["serve", "--model", model] + extra,
-                executableURL: executable,
-                currentDirectoryURL: repository,
-                applicationSupportURL: appSupport,
-                device: Self.mac(memoryGiB: memoryGiB),
-                fileExists: existing.contains) else { return nil }
-            return option("--prefill-chunk-tokens", in: arguments)
-        }
-        #expect(try served("qwen36", memoryGiB: 16) == "2048")
-        #expect(try served("gemma4", memoryGiB: 16) == "512")
-        #expect(try served("gemma4-e4b", memoryGiB: 16) == "256")
-        #expect(try served("qwen36", memoryGiB: 64) == "512")
-        // An explicit size always wins.
-        #expect(try served("qwen36", memoryGiB: 16,
-                           extra: ["--prefill-chunk-tokens", "128"]) == "128")
-
         guard case .run(_, let promptArguments) = try TUFFCommand.plan(
             arguments: ["prompt", "--model", "gemma4-e4b", "hi"],
             executableURL: executable,
@@ -107,30 +88,6 @@ struct TUFFCommandTests {
             "--model", "/models/custom.gturbo", "--prompt", "raw",
         ])
         #expect(option("--temperature", in: arguments) == "0")
-    }
-
-    @Test func serveUsesSafePerModelContextDefaults() throws {
-        let executable = repository.appendingPathComponent(".build/debug/TUFFCommand")
-        let existing: Set<String> = [
-            "/repo/Package.swift",
-            "/repo/Sources/TUFFApp/Mac",
-            "/repo/.build/debug/TUFFServer",
-        ]
-        let plan = try TUFFCommand.plan(
-            arguments: ["serve", "--model", "minimax"],
-            executableURL: executable,
-            currentDirectoryURL: repository,
-            applicationSupportURL: appSupport,
-            fileExists: existing.contains)
-        guard case .run(let child, let arguments) = plan else {
-            Issue.record("expected a child process")
-            return
-        }
-        #expect(child.lastPathComponent == "TUFFServer")
-        #expect(option("--model", in: arguments)
-            == "/repo/scratch/minimax-m2.7.gturbo")
-        #expect(option("--max-context", in: arguments) == "4096")
-        #expect(option("--expert-cache-slots", in: arguments) == "16")
     }
 
     @Test func loadSelectsInstalledModelAndLaunchesTheContainingApp() throws {
@@ -200,33 +157,36 @@ struct TUFFCommandTests {
         #expect(parts.count == 3 && parts.allSatisfy { Int($0) != nil })
     }
 
-    @Test func serveAllModelsRoutesWithoutChoosingAModel() throws {
-        // A packaged app serves the models Application Support holds.
+    @Test func serveRoutesEveryInstalledModel() throws {
+        // A packaged app serves the models Application Support holds, and
+        // `default` follows the model selected in the app.
         let packaged = URL(fileURLWithPath: "/Applications/TUFF.app/Contents/Resources/bin/tuff")
         let packagedPlan = try TUFFCommand.plan(
-            arguments: ["serve", "--all-models", "--unload-after", "60"],
+            arguments: ["serve", "--unload-after", "60"],
             executableURL: packaged,
             currentDirectoryURL: URL(fileURLWithPath: "/tmp", isDirectory: true),
             applicationSupportURL: appSupport,
-            selectedModel: "gemma4-e2b",
+            selectedModel: "gemma-4-e2b-it",
             fileExists: { $0 == "/Applications/TUFF.app/Contents/Resources/bin/TUFFServer" })
         guard case .run(let child, let arguments) = packagedPlan else {
             Issue.record("expected the server")
             return
         }
         #expect(child.lastPathComponent == "TUFFServer")
-        #expect(arguments.contains("--all-models"))
         #expect(!arguments.contains("--model"))
         #expect(option("--unload-after", in: arguments) == "60")
+        #expect(option("--default-model", in: arguments) == "gemma4-e2b")
         #expect(option("--models-root", in: arguments)
             == "/Users/test/Library/Application Support/TUFF/Models")
 
-        // A clone build serves the repository's scratch installs, as `prompt` does.
+        // A clone build serves the repository's scratch installs, as `prompt`
+        // does, and an explicit default wins over the app's selection.
         let clonePlan = try TUFFCommand.plan(
-            arguments: ["serve", "--all-models"],
+            arguments: ["serve", "--default-model", "qwen36"],
             executableURL: repository.appendingPathComponent(".build/debug/TUFFCommand"),
             currentDirectoryURL: repository,
             applicationSupportURL: appSupport,
+            selectedModel: "gemma4-e2b",
             fileExists: [
                 "/repo/Package.swift", "/repo/Sources/TUFFApp/Mac",
                 "/repo/.build/debug/TUFFServer",
@@ -236,15 +196,35 @@ struct TUFFCommandTests {
             return
         }
         #expect(option("--models-root", in: cloneArguments) == "/repo/scratch")
+        #expect(cloneArguments.filter { $0 == "--default-model" }.count == 1)
+        #expect(option("--default-model", in: cloneArguments) == "qwen36")
 
-        #expect(throws: TUFFCommandError.unexpectedArgument("--model")) {
-            _ = try TUFFCommand.plan(
-                arguments: ["serve", "--all-models", "--model", "gemma4"],
-                executableURL: packaged,
-                currentDirectoryURL: repository,
-                applicationSupportURL: appSupport,
-                fileExists: { _ in true })
+        // 7.0.0's spelling still works; the server ignores it.
+        guard case .run(_, let legacy) = try TUFFCommand.plan(
+            arguments: ["serve", "--all-models"],
+            executableURL: packaged,
+            currentDirectoryURL: repository,
+            applicationSupportURL: appSupport,
+            fileExists: { _ in true }) else {
+            Issue.record("expected the server")
+            return
         }
+        #expect(legacy.first == "--all-models")
+        #expect(option("--default-model", in: legacy) == nil)
+    }
+
+    @Test func serveExplainsThatFixedModelServingWasRemoved() {
+        for arguments in [["serve", "--model", "gemma4"], ["serve", "--all-models", "--model", "gemma4"]] {
+            #expect(throws: TUFFCommandError.serveModelRemoved) {
+                _ = try TUFFCommand.plan(
+                    arguments: arguments,
+                    executableURL: URL(fileURLWithPath: "/Applications/TUFF.app/Contents/Resources/bin/tuff"),
+                    currentDirectoryURL: repository,
+                    applicationSupportURL: appSupport,
+                    fileExists: { _ in true })
+            }
+        }
+        #expect(TUFFCommandError.serveModelRemoved.description.contains("--default-model"))
     }
 
     private func option(_ flag: String, in arguments: [String]) -> String? {

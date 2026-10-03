@@ -448,8 +448,8 @@ public final class AppSettingsStore {
     public init() {}
 }
 
-/// State shared by Chat and, in Part 5, the app-hosted local server. The
-/// inference client and task ownership stay in AppModel until the broker lands.
+/// Chat's inference state. The inference client and task ownership stay in
+/// AppModel.
 @MainActor
 @Observable
 public final class AppSharedInferenceStore {
@@ -469,63 +469,4 @@ public final class AppSharedInferenceStore {
     public var isCancellationPending = false
 
     public init() {}
-}
-
-public enum AppServerStatus: Equatable, Sendable {
-    case stopped
-    case starting
-    case running
-    case stopping
-    case failed(String)
-}
-
-public enum AppServerHealth: Equatable, Sendable {
-    case unknown
-    case checking
-    case healthy
-    case unreachable
-}
-
-/// Local-server presentation state. The HTTP adapter arrives in Part 5, but
-/// the navigation and app-state boundary are established with the v2 shell.
-@MainActor
-@Observable
-public final class AppServerStore {
-    public static let maximumRecentErrors = 8
-    public static let portRange = 1...65_535
-    public var status: AppServerStatus = .stopped
-    public var health: AppServerHealth = .unknown
-    /// Clamped at the state boundary so every writer produces a valid port.
-    public var desiredPort: Int {
-        get { storedDesiredPort }
-        set {
-            storedDesiredPort = min(
-                max(newValue, Self.portRange.lowerBound),
-                Self.portRange.upperBound)
-        }
-    }
-    private var storedDesiredPort = 8_080
-    public var queueLimit = 4
-    public var boundPort: Int?
-    public var modelID: String?
-    public var queuedRequests = 0
-    public var activeRequests = 0
-    public var recentErrors: [String] = []
-
-    public init() {}
-
-    public var isBusy: Bool {
-        switch status {
-        case .starting, .running, .stopping: true
-        case .stopped, .failed: false
-        }
-    }
-
-    public func recordError(_ message: String) {
-        guard !message.isEmpty else { return }
-        recentErrors.insert(message, at: 0)
-        if recentErrors.count > Self.maximumRecentErrors {
-            recentErrors.removeLast(recentErrors.count - Self.maximumRecentErrors)
-        }
-    }
 }

@@ -99,12 +99,12 @@ def service_run(args, model, config):
                 sampling = config['sampling']
                 for shape in args.shapes.split(','):
                     for attempt in range(args.repeat):
-                        request = dict(prompt=getattr(args,'prompt',None) or ('Plan A: ' if attempt%2==0 else 'Plan B: ')+prompt(shape),history=[],tools=[],
+                        request = dict(prompt=getattr(args,'prompt',None) or ('Plan A: ' if attempt%2==0 else 'Plan B: ')+prompt(shape),history=[],
                             maxNewTokens=args.max_new,maxContextTokens=4096,reasoning='off',preserveThinking=False,
                             temperature=0 if mode=='greedy' else float(sampling[sampling.index('--temperature')+1]),
                             topK=int(sampling[sampling.index('--top-k')+1]) or None,
                             topP=float(sampling[sampling.index('--top-p')+1]),repetitionPenalty=1,seed=20260721,
-                            stopStrings=[],runtimeOptions=options,generationID=str(uuid.uuid4()))
+                            runtimeOptions=options,generationID=str(uuid.uuid4()))
                         if model.startswith('gpt-oss'):
                             request['reasoningEffort']='low'
                         if model=='minimax-m2.7':
@@ -149,8 +149,11 @@ def server_run(args, model, config):
     binary = args.app/'Contents/Resources/bin/TUFFServer'
     with socket.socket() as sock:
         sock.bind(('127.0.0.1',0)); port=sock.getsockname()[1]
-    command = [str(binary),'--model',str(args.model_root/Path(config['path']).name),'--port',str(port),
-               '--max-context','4096',*config['runtime']]
+    # The server routes by request and runs each model with its catalog
+    # context, cache and prefill settings, so runtime overrides do not apply.
+    # --all-models selects routing on a 7.0.0 reference and is a no-op later.
+    command = [str(binary),'--all-models','--models-root',str(args.model_root),'--port',str(port),
+               '--default-model',model]
     rows=[]
     with (args.output/f'server-{model}.stdout.txt').open('w') as stdout, (args.output/f'server-{model}.stderr.txt').open('w') as stderr:
         proc = subprocess.Popen(command,stdout=stdout,stderr=stderr,start_new_session=True,
@@ -165,7 +168,7 @@ def server_run(args, model, config):
                     if proc.poll() is not None or time.monotonic()>deadline:
                         raise RuntimeError('server failed to start')
                     time.sleep(0.25)
-            models=get_json(base+'/v1/models'); model_id=models['data'][0]['id']
+            models=get_json(base+'/v1/models'); model_id=model
             sampling=config['sampling']
             for mode in args.modes.split(','):
                 request=dict(model=model_id,messages=[dict(role='user',content=getattr(args,'prompt',None) or 'What is the capital of France? Answer in one short sentence.')],
@@ -202,8 +205,8 @@ def main():
     p.add_argument('--comparison-repeat',type=int,default=3)
     p.add_argument('--lookahead',choices=['on','off'])
     p.add_argument('--comparison-lookahead',choices=['on','off'])
-    p.add_argument('--slots',type=int);p.add_argument('--comparison-slots',type=int)
-    p.add_argument('--chunk',type=int);p.add_argument('--comparison-chunk',type=int)
+    p.add_argument('--slots',type=int,help='App-service expert-cache slots; the server uses catalog settings');p.add_argument('--comparison-slots',type=int)
+    p.add_argument('--chunk',type=int,help='App-service prefill chunk; the server uses catalog settings');p.add_argument('--comparison-chunk',type=int)
     p.add_argument('--output',type=Path,required=True);p.add_argument('--models',default='qwen38-flash-next,gemma4')
     p.add_argument('--interfaces',default='app,server');p.add_argument('--modes',default='greedy,sampled')
     p.add_argument('--shapes',default='short');p.add_argument('--repeat',type=int,default=3)
@@ -221,6 +224,8 @@ def main():
         p.error('comparison overrides require --comparison-app')
     if any(value is not None and value < 1 for value in (args.slots,args.comparison_slots,args.chunk,args.comparison_chunk)):
         p.error('slot and chunk overrides must be positive')
+    if 'app' not in args.interfaces.split(',') and any(value is not None for value in (args.slots,args.comparison_slots,args.chunk,args.comparison_chunk)):
+        p.error('slot and chunk overrides apply only to the app interface; the server uses catalog settings')
     args.app=args.app.resolve();args.model_root=args.model_root.resolve()
     args.output.mkdir(parents=True,exist_ok=True)
     metadata=json.loads(subprocess.check_output(['ruby','-rjson','-e','require File.expand_path("Scripts/benchmark_models",Dir.pwd); puts JSON.generate(BENCHMARK_MODELS)'],cwd=ROOT))

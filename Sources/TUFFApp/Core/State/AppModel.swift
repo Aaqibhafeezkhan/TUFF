@@ -13,7 +13,6 @@ public final class AppModel {
     public let conversationStore: AppConversationStore
     public let modelLibraryStore = AppModelLibraryStore()
     public let settingsStore = AppSettingsStore()
-    public let serverStore = AppServerStore()
     public let inferenceStore = AppSharedInferenceStore()
     public let deviceCapabilities: TUFFDeviceCapabilities
     private var runsAfterCurrentLoad = false
@@ -531,7 +530,6 @@ public final class AppModel {
 
     public func canSelectModel(_ coordinator: ModelInstallCoordinator) -> Bool {
         guard !isRunning, !loadState.isLoading,
-              !serverStore.isBusy,
               coordinator.id != selectedModelID,
               hardwareRequirementsSatisfied(for: coordinator) else { return false }
         // A transfer keeps writing beside its original text model. Wait for it
@@ -671,16 +669,10 @@ public final class AppModel {
     ///
     /// The rule used to live only inside `selectConversation`, which returned
     /// silently when it did not hold, while the sidebar row stayed fully
-    /// enabled — so during a load, or with the server running on another model,
-    /// clicking a chat did nothing and said nothing. The view reads this, so
-    /// the row it offers is a row that works.
+    /// enabled — so during a load, clicking a chat did nothing and said
+    /// nothing. The view reads this, so the row it offers is a row that works.
     public func canSelectConversation(_ record: AppConversationRecord) -> Bool {
-        guard !isRunning, !loadState.isLoading else { return false }
-        if serverStore.isBusy,
-           record.modelID != selectedDescriptor.settingsProfileKey {
-            return false
-        }
-        return true
+        !isRunning && !loadState.isLoading
     }
 
     public func selectConversation(_ record: AppConversationRecord) {
@@ -706,14 +698,13 @@ public final class AppModel {
     }
 
     /// Whether deleting this chat can leave the active runtime untouched.
-    /// Deleting a background chat is harmless while the server is running,
-    /// but deleting the selected one implicitly selects another chat and may
-    /// switch models underneath that server.
+    /// Deleting a background chat is always harmless, but deleting the
+    /// selected one implicitly selects another chat and may switch models.
     public func canDeleteConversation(_ record: AppConversationRecord) -> Bool {
         guard conversationStore.conversations.contains(where: { $0.id == record.id }),
               !isRunning else { return false }
         guard conversationStore.selectedConversationID == record.id else { return true }
-        return !loadState.isLoading && !serverStore.isBusy
+        return !loadState.isLoading
     }
 
     public func deleteConversation(_ record: AppConversationRecord) {
@@ -757,7 +748,7 @@ public final class AppModel {
     public var canLoadModel: Bool {
         isModelInstalled && hardwareRequirementsSatisfied(for: selectedInstall)
             && memoryRequirementsSatisfied
-            && !isRunning && !serverStore.isBusy
+            && !isRunning
             && !isVisionCompanionOperationInProgress
             && (loadState == .notLoaded || loadState.isFailed)
     }
@@ -770,13 +761,13 @@ public final class AppModel {
     public var canReloadModel: Bool {
         isModelInstalled && hardwareRequirementsSatisfied(for: selectedInstall)
             && memoryRequirementsSatisfied
-            && !isRunning && !serverStore.isBusy
+            && !isRunning
             && !isVisionCompanionOperationInProgress
             && loadState.isReady && hasStaleLoadedRuntime
     }
 
     public var canUnloadModel: Bool {
-        isModelInstalled && !isRunning && !serverStore.isBusy
+        isModelInstalled && !isRunning
             && !isVisionCompanionOperationInProgress
             && loadState.isReady
     }
@@ -2774,7 +2765,7 @@ public final class AppModel {
     /// Whether a recorded message can be put back in the composer or sent
     /// again. Both rewind the chat, so both need it to be idle.
     public func canRewind(to turn: AppChatTurn) -> Bool {
-        !isRunning && !loadState.isLoading && !serverStore.isBusy
+        !isRunning && !loadState.isLoading
             && conversation.contains { $0.id == turn.id }
     }
 
@@ -3034,10 +3025,6 @@ public final class AppModel {
             if !token.textDelta.isEmpty {
                 outputThinkingText += token.textDelta
             }
-        case .toolCall:
-            // Chat does not advertise tools. The app-hosted server consumes
-            // this event through the shared broker instead.
-            break
         case .finished(let diagnostics):
             visionTowerMappedBytes = diagnostics.visionTowerMappedBytes
             finishSuccessfully(diagnostics)

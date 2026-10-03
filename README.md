@@ -104,10 +104,9 @@ embedded EdDSA public key. Update preferences are in Settings.
   notation, and image and file attachments.
 - **Models** installs the nine supported text checkpoints. Optional image
   companions are separate downloads on the model card.
-- **Server** provides a loopback endpoint. The optional Background API starts
-  automatically and works while TUFF is closed, loading one installed model
-  on demand and unloading it after a configurable idle delay. The hosted server
-  shares Chat's decode service and is disabled while background mode is enabled.
+- **Server** runs the Background API, a loopback endpoint that starts at login
+  and works whether TUFF is open or closed. It loads the installed model each
+  request names and unloads it after a configurable idle delay.
 - **Settings** controls context, sampling, expert cache, prefill, and updates.
   Settings are saved per model.
 
@@ -148,8 +147,8 @@ weights and expert reads are file-backed.
 Prefill groups prompt tokens into chunks and uses batched projections where
 supported. The recommended chunk is 256 for dense models, 512 for MoE models
 whose install fits installed memory, and 2,048 for larger MoE models (1,024
-below 16 GB). Larger chunks consume more scratch and ring memory. CLI and
-server callers can choose an explicit chunk size.
+below 16 GB). Larger chunks consume more scratch and ring memory. CLI callers
+can choose an explicit chunk size; the server uses the recommended one.
 
 **Bypass model restrictions** permits loading beyond the eligibility and
 estimated-memory gates. Such settings may swap or fail to allocate.
@@ -270,14 +269,21 @@ measured, so while Chat holds such a model the API answers requests with HTTP
 
 ![TUFF Server with the Background API listening and no model loaded](docs/assets/tuff-server.png)
 
-Clone builds can run the same router in the foreground:
+`tuff serve` runs the same server in the foreground, for clone builds or
+scripts. `default` means the model selected in the app unless you pass
+`--default-model`:
 
 ```sh
-tuff serve --all-models --default-model gemma4-e2b --unload-after 300 --port 8080
+tuff serve --default-model gemma4-e2b --unload-after 300 --port 8080
 ```
 
-Start the server from the app's Server screen or the packaged `tuff` command.
-It provides `GET /health`, `GET /v1/models`, and `POST /v1/chat/completions`.
+From a clone, run `swift run -c release TUFFServer --models-root scratch`.
+TUFF 7.1 removed fixed-model serving (`tuff serve --model`) and the app's
+Start/Stop server. Each model runs with its catalog context, expert-cache and
+prefill settings for the Mac.
+
+The server provides `GET /health`, `GET /v1/models`, and
+`POST /v1/chat/completions`.
 Chat Completions supports JSON, streaming SSE, model-aware reasoning,
 function-tool declarations, prompt reuse, and installed image companions.
 Clients approve and execute tool calls themselves.
@@ -285,7 +291,8 @@ Clients approve and execute tool calls themselves.
 The server binds to `127.0.0.1` and has no authentication or TLS. Keep it local.
 Point your client at `http://127.0.0.1:<port>/v1`; `/v1/models` supplies the model
 identifier. Unknown request fields return `unknown_parameter`; recognized but
-unsupported values return `unsupported_value`. Accepted metadata fields are
+unsupported values return `unsupported_value`. `chat_template_kwargs` may
+carry only `enable_thinking` and `preserve_thinking`. Accepted metadata fields are
 ignored, and `null` fields count as absent.
 
 ## Build it yourself
@@ -302,7 +309,7 @@ swift build -c release
 Build the complete arm64 app, ZIP and checksum with:
 
 ```sh
-Scripts/package_app.sh 7.0.0 dist/v7.0.0
+Scripts/package_app.sh 7.1.0 dist/v7.1.0
 ```
 
 The packaged app stores models in
@@ -321,8 +328,9 @@ tuff prompt "Explain bounded expert streaming."
 tuff serve --port 8080
 ```
 
-`tuff load` opens the containing app and loads an installed model. `prompt` and
-`serve` accept another catalog selector or model path through `--model`.
+`tuff load` opens the containing app and loads an installed model. `prompt`
+accepts another catalog selector or model path through `--model`; `serve`
+serves every installed model.
 For direct inference or installation:
 
 ```sh

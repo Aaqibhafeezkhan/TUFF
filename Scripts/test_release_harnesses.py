@@ -77,6 +77,9 @@ class HarnessTests(unittest.TestCase):
                 rows=interfaces.server_run(args,'gemma4',config)
             self.assertEqual(rows[0]['wall_seconds'],7)
             self.assertEqual(rows[0]['status'],'passed')
+            # Routing on both 7.0.0 and later servers; catalog settings, not the app runtime flags.
+            self.assertIn('--all-models',rows[0]['command'])
+            self.assertNotIn('--expert-cache-slots',rows[0]['command'])
 
     def test_competing_process_guard_omits_arguments_and_preserves_other_processes(self):
         output = ' 11 /tmp/TUFF.app/Contents/Resources/bin/TUFFCLI\n 12 /usr/bin/python3\n 13 /tmp/TUFFEnginePackageTests.xctest\n'

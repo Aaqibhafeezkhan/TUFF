@@ -235,4 +235,34 @@ private actor RoutedHTTPBackend: ServerInferenceBackend {
             #expect(throws: ServerArgumentError.self) { try RouterServerArguments.parse(input) }
         }
     }
+
+    @Test func installedModelsUseCatalogRuntimeDefaultsForThisMac() {
+        let sixteen = TUFFDeviceCapabilities(unifiedMemoryBytes: 16 * TUFFModelCatalog.oneGiB,
+                                             macOSMajorVersion: 26, appleSiliconGeneration: 2)
+        let installed = ServerInstalledModels(modelsRoot: URL(fileURLWithPath: "/models"), device: sixteen)
+        for descriptor in [TUFFModelCatalog.minimaxM27, TUFFModelCatalog.default] {
+            let runtime = installed.runtimeConfiguration(for: descriptor)
+            #expect(runtime.expertCacheSlots == descriptor.runtimeDefaults.expertCacheSlots)
+            #expect(runtime.prefillChunkTokens == descriptor.recommendedPrefillChunkTokens(on: sixteen))
+        }
+    }
+
+    @Test func routingNeedsNoModeFlag() throws {
+        let plain = try RouterServerArguments.parse([])
+        #expect(!plain.background)
+        #expect(plain.resolvedSettings(saved: nil) == TUFFBackgroundServerSettings())
+        // 7.0.0 scripts passed --all-models; it still parses and changes nothing.
+        #expect(try RouterServerArguments.parse(["--all-models"]) == plain)
+        #expect(!RouterServerArguments.usage.contains("--all-models"))
+    }
+
+    @Test(arguments: ["--model", "--max-context", "--expert-cache-slots", "--prefill-chunk-tokens", "--vision-pack"])
+    func removedFixedModelFlagsExplainTheReplacement(flag: String) {
+        #expect {
+            try RouterServerArguments.parse([flag, "x"])
+        } throws: { error in
+            guard case ServerArgumentError.invalid(let message) = error else { return false }
+            return message.hasPrefix("\(flag) was removed in TUFF 7.1")
+        }
+    }
 }

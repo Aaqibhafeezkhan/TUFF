@@ -116,9 +116,6 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                                         sha256: $0.sha256)
                                 })
                         },
-                        structuredMessages: request.structuredMessages,
-                        multimodalMessages: request.multimodalMessages,
-                        tools: request.tools,
                         imageAttachments: request.imageAttachments.map {
                             DecodeImageAttachment(
                                 id: $0.id,
@@ -140,8 +137,6 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                         topP: request.topP,
                         repetitionPenalty: request.repetitionPenalty,
                         seed: request.seed,
-                        stopStrings: request.stopStrings,
-                        harmonyCurrentDate: request.harmonyCurrentDate,
                         runtimeOptions: Self.decodeRuntimeOptions(request.runtimeOptions),
                         generationID: generationID)
                     try handles.input.write(contentsOf: DecodeFrameCodec.encode(
@@ -190,9 +185,6 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                                     index: max(0, event.tokenCount - 1),
                                     textDelta: thinking,
                                     elapsedDecodeSeconds: event.decodeSeconds)))
-                            }
-                            for call in event.toolCalls ?? [] {
-                                continuation.yield(.toolCall(call))
                             }
                             generationTranscriptMailbox.append(event.textDelta)
                             if event.textDelta.isEmpty { continue }

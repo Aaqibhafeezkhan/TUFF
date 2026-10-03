@@ -26,30 +26,6 @@ public actor TUFFHTTPServer {
     private var channel: Channel?
     private var shutdownTask: Task<Void, any Error>?
 
-    public init(modelID: String,
-                queueLimit: Int,
-                backend: any ServerInferenceBackend,
-                chatDialect: ChatDialect = .gemma,
-                heartbeatInterval: TimeAmount = .seconds(5),
-                visionCapability: String = "missing",
-                onRequestActivity: @escaping @Sendable
-                    (ServerCoordinatorActivity) -> Void = { _ in },
-                onRequestError: @escaping @Sendable (String) -> Void = { _ in },
-                attachmentRoot: URL = ServerAttachmentDirectory.root,
-                idleTimeout: TimeAmount = TUFFHTTPServer.idleTimeout,
-                group: MultiThreadedEventLoopGroup = .init(numberOfThreads: 1)) {
-        self.init(
-            provider: FixedServerModelProvider(
-                modelID: modelID, backend: backend, dialect: chatDialect,
-                visionCapability: visionCapability, queueLimit: queueLimit,
-                onActivity: onRequestActivity),
-            heartbeatInterval: heartbeatInterval,
-            onRequestError: onRequestError,
-            attachmentRoot: attachmentRoot,
-            idleTimeout: idleTimeout,
-            group: group)
-    }
-
     /// A server over any model provider. `control` adds the loopback
     /// `/tuff/v1/status` and `/tuff/v1/unload` routes.
     public init(provider: any ServerModelProvider,

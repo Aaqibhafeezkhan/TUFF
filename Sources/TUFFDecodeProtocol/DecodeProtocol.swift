@@ -106,9 +106,6 @@ public struct DecodeGenerationRequest: Codable, Sendable {
     /// Text the model continues rather than a fresh reply. Absent on a request
     /// from a client that predates the field.
     public var assistantPrefix: String?
-    public var structuredMessages: [GFTokenizer.Message]?
-    public var multimodalMessages: [MultimodalMessage]?
-    public var tools: [GFTokenizer.FunctionDefinition]
     public var imageAttachments: [DecodeImageAttachment]?
     public var maxNewTokens: Int
     public var maxContextTokens: Int
@@ -126,8 +123,6 @@ public struct DecodeGenerationRequest: Codable, Sendable {
     public var topP: Float?
     public var repetitionPenalty: Float
     public var seed: UInt64?
-    public var stopStrings: [String]
-    public var harmonyCurrentDate: String?
     public var runtimeOptions: DecodeRuntimeOptions
     public var generationID: UUID
 
@@ -140,12 +135,6 @@ public struct DecodeGenerationRequest: Codable, Sendable {
             String.self, forKey: .assistantPrefix)
         history = try container.decodeIfPresent(
             [DecodeChatTurn].self, forKey: .history) ?? []
-        structuredMessages = try container.decodeIfPresent(
-            [GFTokenizer.Message].self, forKey: .structuredMessages)
-        multimodalMessages = try container.decodeIfPresent(
-            [MultimodalMessage].self, forKey: .multimodalMessages)
-        tools = try container.decodeIfPresent(
-            [GFTokenizer.FunctionDefinition].self, forKey: .tools) ?? []
         imageAttachments = try container.decodeIfPresent(
             [DecodeImageAttachment].self, forKey: .imageAttachments)
         maxNewTokens = try container.decode(Int.self, forKey: .maxNewTokens)
@@ -161,10 +150,6 @@ public struct DecodeGenerationRequest: Codable, Sendable {
         topP = try container.decodeIfPresent(Float.self, forKey: .topP)
         repetitionPenalty = try container.decode(Float.self, forKey: .repetitionPenalty)
         seed = try container.decodeIfPresent(UInt64.self, forKey: .seed)
-        stopStrings = try container.decodeIfPresent(
-            [String].self, forKey: .stopStrings) ?? []
-        harmonyCurrentDate = try container.decodeIfPresent(
-            String.self, forKey: .harmonyCurrentDate)
         runtimeOptions = try container.decode(
             DecodeRuntimeOptions.self, forKey: .runtimeOptions)
         generationID = try container.decode(UUID.self, forKey: .generationID)
@@ -173,9 +158,6 @@ public struct DecodeGenerationRequest: Codable, Sendable {
     public init(prompt: String, systemPrompt: String? = nil,
                 assistantPrefix: String? = nil,
                 history: [DecodeChatTurn] = [],
-                structuredMessages: [GFTokenizer.Message]? = nil,
-                multimodalMessages: [MultimodalMessage]? = nil,
-                tools: [GFTokenizer.FunctionDefinition] = [],
                 imageAttachments: [DecodeImageAttachment]? = nil,
                 maxNewTokens: Int, maxContextTokens: Int,
                 reasoning: DecodeChatReasoning = .off,
@@ -184,17 +166,12 @@ public struct DecodeGenerationRequest: Codable, Sendable {
                 temperature: Float, topK: Int? = nil, topP: Float? = nil,
                 repetitionPenalty: Float = 1,
                 seed: UInt64? = nil,
-                stopStrings: [String] = [],
-                harmonyCurrentDate: String? = nil,
                 runtimeOptions: DecodeRuntimeOptions = DecodeRuntimeOptions(),
                 generationID: UUID = UUID()) {
         self.prompt = prompt
         self.systemPrompt = systemPrompt
         self.assistantPrefix = assistantPrefix
         self.history = history
-        self.structuredMessages = structuredMessages
-        self.multimodalMessages = multimodalMessages
-        self.tools = tools
         self.imageAttachments = imageAttachments
         self.maxNewTokens = maxNewTokens
         self.maxContextTokens = maxContextTokens
@@ -206,8 +183,6 @@ public struct DecodeGenerationRequest: Codable, Sendable {
         self.topP = topP
         self.repetitionPenalty = repetitionPenalty
         self.seed = seed
-        self.stopStrings = stopStrings
-        self.harmonyCurrentDate = harmonyCurrentDate
         self.runtimeOptions = runtimeOptions
         self.generationID = generationID
     }
@@ -298,7 +273,6 @@ public struct DecodeServiceEvent: Codable, Sendable {
     public var sequence: UInt64
     public var textDelta: String
     public var thinkingDelta: String?
-    public var toolCalls: [ParsedToolCall]?
     public var tokenCount: Int
     public var promptTokenCount: Int?
     public var prefillDone: Int?
@@ -323,7 +297,6 @@ public struct DecodeServiceEvent: Codable, Sendable {
     public init(kind: DecodeServiceEventKind, generationID: UUID,
                 sequence: UInt64 = 0, textDelta: String = "",
                 thinkingDelta: String? = nil,
-                toolCalls: [ParsedToolCall]? = nil,
                 tokenCount: Int = 0, promptTokenCount: Int? = nil,
                 prefillDone: Int? = nil, prefillTotal: Int? = nil,
                 prefillSeconds: Double? = nil,
@@ -340,7 +313,6 @@ public struct DecodeServiceEvent: Codable, Sendable {
         self.sequence = sequence
         self.textDelta = textDelta
         self.thinkingDelta = thinkingDelta
-        self.toolCalls = toolCalls
         self.tokenCount = tokenCount
         self.promptTokenCount = promptTokenCount
         self.prefillDone = prefillDone

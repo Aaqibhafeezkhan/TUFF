@@ -101,6 +101,11 @@ public final class AppBackgroundAPIController {
 
     public func openLoginItems() { SMAppService.openSystemSettingsLoginItems() }
 
+    /// Where the login item writes requests, loads and errors.
+    public var logURL: URL { RouterServerRuntime.logURL() }
+    public var hasLog: Bool { FileManager.default.fileExists(atPath: logURL.path) }
+    public func openLog() { NSWorkspace.shared.open(logURL) }
+
     public func refreshStatus() async {
         guard isAvailable, settings.enabled else { status = nil; return }
         var request = URLRequest(url: URL(string: "http://127.0.0.1:\(settings.port)/tuff/v1/status")!)
