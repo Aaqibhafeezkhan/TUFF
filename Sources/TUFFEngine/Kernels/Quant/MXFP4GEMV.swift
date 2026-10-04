@@ -3,14 +3,18 @@ import Metal
 /// GPT-OSS MXFP4 E2M1 matrix-vector multiplication.
 ///
 /// `weights` are row-major packed nibbles and `scales` contain one UE8M0 byte
-/// per 32 input columns. Inputs and outputs are FP16; accumulation is FP32.
+/// per 32 input columns. Inputs are FP16; outputs may be FP16 or FP32; accumulation is FP32.
 final class MXFP4GEMV {
     private static let rowsPerThreadgroup = 8
     private let pipeline: MTLComputePipelineState
+    private let floatPipeline: MTLComputePipelineState
 
     init(context: MetalContext) throws {
         pipeline = try context.pipeline(
             "mxfp4_gemv_simd", constants: [],
+            maxTotalThreadsPerThreadgroup: 32 * Self.rowsPerThreadgroup)
+        floatPipeline = try context.pipeline(
+            "mxfp4_gemv_float_simd", constants: [],
             maxTotalThreadsPerThreadgroup: 32 * Self.rowsPerThreadgroup)
     }
 
@@ -27,15 +31,16 @@ final class MXFP4GEMV {
         bias: MTLBuffer? = nil,
         biasOffset: Int = 0,
         rows: UInt32,
-        columns: UInt32
+        columns: UInt32,
+        outputFloat: Bool = false
     ) {
         precondition(rows > 0 && columns > 0)
         precondition(columns % UInt32(Quantization.mxfp4GroupSize) == 0,
                      "MXFP4 columns must be a multiple of \(Quantization.mxfp4GroupSize)")
         precondition(inputOffset % MemoryLayout<Float16>.alignment == 0)
-        precondition(outputOffset % MemoryLayout<Float16>.alignment == 0)
+        precondition(outputOffset % (outputFloat ? MemoryLayout<Float>.alignment : MemoryLayout<Float16>.alignment) == 0)
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return }
-        encoder.setComputePipelineState(pipeline)
+        encoder.setComputePipelineState(outputFloat ? floatPipeline : pipeline)
         encoder.setBuffer(weights, offset: weightsOffset, index: 0)
         encoder.setBuffer(scales, offset: scalesOffset, index: 1)
         encoder.setBuffer(input, offset: inputOffset, index: 2)

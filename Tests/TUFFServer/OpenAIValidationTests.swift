@@ -5,6 +5,48 @@ import Testing
 
 @Suite("OpenAI request validation")
 struct OpenAIValidationTests {
+    @Test func ompFullToolInventoryRendersWithoutNarrowingUnion() async throws {
+        let request = try fixture("omp-18.4.12-initial.json")
+        let validated = try OpenAIRequestValidator.validate(
+            request, modelID: "gemma-4-e4b-it")
+        #expect(validated.tools.count == request.tools?.count)
+        let task = try #require(validated.tools.first { $0.name == "task" })
+        let original = try #require(request.tools?.first { $0.function.name == "task" })
+        let path = ["properties", "tasks", "items", "properties", "outputSchema"]
+        func node(_ schema: JSONValue) -> JSONValue? {
+            path.reduce(Optional(schema)) { $0?.objectValue?[$1] }
+        }
+        #expect(node(task.parameters) == node(original.function.parameters))
+        let tokenizer = try await GFTokenizer.load()
+        let text = tokenizer.decode(try tokenizer.encodeToolChat(
+            messages: validated.messages, tools: validated.tools), skipSpecialTokens: false)
+        #expect(text.replacingOccurrences(of: #"<|"|>"#, with: "").contains("outputSchema:{ anyOf:[")
+            || text.replacingOccurrences(of: #"<|"|>"#, with: "").contains("outputSchema:{anyOf:["))
+        #expect(text.contains("boolean"))
+        #expect(text.contains("declaration:read"))
+        #expect(text.contains("path:{"))
+        #expect(text.contains("declaration:task"))
+    }
+
+    @Test func mixedTypeUnionsPreserveBranchesAndSiblingConstraints() async throws {
+        let schema = try JSONDecoder().decode(JSONValue.self, from: Data(#"""
+        {"type":"object","properties":{"value":{"description":"value","anyOf":[
+          {"type":"string","minLength":2},{"type":"object","additionalProperties":false},
+          {"type":"boolean"},{"type":"null"}],"default":null}}}
+        """#.utf8))
+        let adapted = try GemmaToolSchema.adapted(schema, toolName: "probe")
+        #expect(adapted == schema)
+        let tokenizer = try await GFTokenizer.load()
+        let text = tokenizer.decode(try tokenizer.encodeToolChat(
+            messages: [.init(role: .user, content: "probe")],
+            tools: [.init(name: "probe", description: "probe", parameters: adapted)]),
+            skipSpecialTokens: false)
+        let schemaText = text.replacingOccurrences(of: #"<|"|>"#, with: "")
+        #expect(schemaText.contains("minLength:2"))
+        #expect(schemaText.contains("additionalProperties:false"))
+        #expect(schemaText.contains("default:null"))
+    }
+
     @Test func capturedOpenCodeInitialRequestValidates() throws {
         let request = try fixture("opencode-1.15.11-initial.json")
         let validated = try OpenAIRequestValidator.validate(
@@ -534,9 +576,6 @@ struct OpenAIValidationTests {
 
     @Test func unsupportedToolSchemaUnionsFailClosed() throws {
         let schemas = [
-            #"{"type":"object","properties":{"v":{"anyOf":[{"type":"string"},{"type":"object"}]}}}"#,
-            #"{"type":"object","properties":{"args":{"anyOf":[{"type":"string"},{"type":"object","properties":{},"additionalProperties":true}]}}}"#,
-            #"{"type":"object","properties":{"v":{"oneOf":[{"type":"integer"},{"type":"number"}]}}}"#,
             #"{"type":"object","properties":{"v":{"allOf":[{"type":"string"}]}}}"#,
             #"{"type":"object","properties":{"v":{"description":"missing"}}}"#,
             #"{"type":"object","properties":{"v":{"type":["string","number"]}}}"#,

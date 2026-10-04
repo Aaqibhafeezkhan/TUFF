@@ -36,7 +36,9 @@ enum GPTOSSExpertRuntimeError: Error, Equatable {
 
 /// Persistent scratch for both one-token decode and bounded chunked prefill.
 /// Projection intermediates are reused route-by-route; only the final partial
-/// vectors scale with `queryCapacity * topK`.
+/// vectors scale with `queryCapacity * topK`. Down-projection partials stay
+/// FP32: a valid expert output can exceed FP16 before route weighting, and
+/// cancellation across experts must happen before any narrowing conversion.
 struct GPTOSSExpertScratchLayout: Sendable, Equatable {
     static let maximumPrefillQueries = PrefillRuntimeConfig.maxChunkTokens
 
@@ -61,8 +63,8 @@ struct GPTOSSExpertScratchLayout: Sendable, Equatable {
     var activationElements: Int { intermediateSize }
     var routePartialElements: Int { routeCapacity * hiddenSize }
     var privateBytes: Int {
-        (mlp1Elements + activationElements + routePartialElements)
-            * MemoryLayout<Float16>.stride
+        (mlp1Elements + activationElements) * MemoryLayout<Float16>.stride
+            + routePartialElements * MemoryLayout<Float>.stride
     }
     var sharedBytes: Int {
         routeCapacity * MemoryLayout<Float16>.stride
@@ -81,9 +83,9 @@ struct GPTOSSExpertScratchBuffers {
                          layout: GPTOSSExpertScratchLayout) throws
         -> GPTOSSExpertScratchBuffers {
         func buffer(elements: Int, mode: MTLResourceOptions,
-                    label: String) throws -> MTLBuffer {
+                    stride: Int = MemoryLayout<Float16>.stride, label: String) throws -> MTLBuffer {
             guard let result = device.makeBuffer(
-                length: max(1, elements) * MemoryLayout<Float16>.stride,
+                length: max(1, elements) * stride,
                 options: mode) else {
                 throw ModelError.residentBufferWrapFailed
             }
@@ -100,6 +102,7 @@ struct GPTOSSExpertScratchBuffers {
                                    label: "gptoss.expert.activation"),
             routePartials: try buffer(elements: layout.routePartialElements,
                                       mode: .storageModePrivate,
+                                      stride: MemoryLayout<Float>.stride,
                                       label: "gptoss.expert.routePartials"),
             routeWeights: try buffer(elements: layout.routeCapacity,
                                      mode: .storageModeShared,
@@ -161,10 +164,10 @@ final class GPTOSSExpertRuntime {
             scales: blob.buffer, scalesOffset: blobBase + offsets.mlp2Scales,
             input: scratch.activation,
             output: scratch.routePartials,
-            outputOffset: routeIndex * layout.hiddenSize * halfBytes,
+            outputOffset: routeIndex * layout.hiddenSize * MemoryLayout<Float>.stride,
             bias: blob.buffer, biasOffset: blobBase + offsets.mlp2Bias,
             rows: UInt32(layout.hiddenSize),
-            columns: UInt32(layout.intermediateSize))
+            columns: UInt32(layout.intermediateSize), outputFloat: true)
     }
 
     func encodeReduce(commandBuffer: MTLCommandBuffer,
@@ -183,7 +186,7 @@ final class GPTOSSExpertRuntime {
             commandBuffer: commandBuffer,
             routePartials: scratch.routePartials,
             routePartialsOffset: queryStart * layout.topK
-                * layout.hiddenSize * halfBytes,
+                * layout.hiddenSize * MemoryLayout<Float>.stride,
             routeWeights: scratch.routeWeights,
             routeWeightsOffset: queryStart * layout.topK * halfBytes,
             residual: residual,
@@ -192,7 +195,7 @@ final class GPTOSSExpertRuntime {
             outputOffset: queryStart * layout.hiddenSize * halfBytes,
             queryCount: UInt32(queryCount),
             hiddenSize: UInt32(layout.hiddenSize),
-            topK: UInt32(layout.topK))
+            topK: UInt32(layout.topK), floatPartials: true)
     }
 
     func encodeFloatResidualReduce(commandBuffer: MTLCommandBuffer,
@@ -212,7 +215,7 @@ final class GPTOSSExpertRuntime {
             commandBuffer: commandBuffer,
             routePartials: scratch.routePartials,
             routePartialsOffset: queryStart * layout.topK
-                * layout.hiddenSize * halfBytes,
+                * layout.hiddenSize * MemoryLayout<Float>.stride,
             routeWeights: scratch.routeWeights,
             routeWeightsOffset: queryStart * layout.topK * halfBytes,
             residual: residual,
@@ -221,6 +224,6 @@ final class GPTOSSExpertRuntime {
             outputOffset: queryStart * layout.hiddenSize * floatBytes,
             queryCount: UInt32(queryCount),
             hiddenSize: UInt32(layout.hiddenSize),
-            topK: UInt32(layout.topK))
+            topK: UInt32(layout.topK), floatPartials: true)
     }
 }

@@ -118,7 +118,7 @@ struct HarmonyPromptRendererTests {
         #expect(!rendered.contains("Need current data."),
                 "analysis preceding a later final answer must not be preserved")
         #expect(rendered.contains(
-            "<|start|>assistant to=functions.get_weather<|channel|>commentary json"
+            "<|start|>assistant to=functions.get_weather<|channel|>commentary<|constrain|>json"
             + "<|message|>{\"city\":\"Paris\"}<|call|>"))
         #expect(rendered.contains(
             "<|start|>functions.get_weather to=assistant<|channel|>commentary"
@@ -144,6 +144,21 @@ struct HarmonyPromptRendererTests {
         #expect(rendered.contains(
             "<|start|>assistant<|channel|>analysis<|message|>"
             + "Need the lookup tool.<|end|>"))
+    }
+
+    @Test("Tool history preserves analysis and visible preambles in separate channels")
+    func toolHistoryWithBothChannels() throws {
+        let rendered = try HarmonyPromptRenderer().render(
+            messages: [
+                Message(role: .user, content: "Read the file"),
+                Message(role: .assistant, content: "Reading now.", thinking: "Need the read tool.",
+                    toolCalls: [.init(id: "call_1", name: "read", arguments: .object([:]))]),
+                Message(role: .tool, content: "cobalt-47", toolCallID: "call_1", name: "read"),
+            ], currentDate: "2026-10-03")
+        #expect(rendered.contains(
+            "<|start|>assistant<|channel|>analysis<|message|>Need the read tool.<|end|>"
+            + "<|start|>assistant<|channel|>commentary<|message|>Reading now.<|end|>"
+            + "<|start|>assistant to=functions.read<|channel|>commentary<|constrain|>json<|message|>"))
     }
 
     @Test("Training render terminates the final assistant message with return")
@@ -176,19 +191,6 @@ struct HarmonyPromptRendererTests {
         #expect(throws: GFTokenizerError.self) {
             _ = try HarmonyPromptRenderer().render(
                 messages: [Message(role: .tool, content: "orphan")],
-                currentDate: "2026-08-25")
-        }
-        #expect(throws: GFTokenizerError.self) {
-            _ = try HarmonyPromptRenderer().render(
-                messages: [
-                    Message(role: .user, content: "Hi"),
-                    Message(
-                        role: .assistant,
-                        content: "analysis",
-                        thinking: "more analysis",
-                        toolCalls: [.init(
-                            id: "call_1", name: "lookup", arguments: .object([:]))]),
-                ],
                 currentDate: "2026-08-25")
         }
         #expect(throws: GFTokenizerError.self) {

@@ -455,19 +455,26 @@ public struct OpenAIModelList: Codable, Equatable, Sendable {
         public let created: Int
         public let ownedBy: String
         public let capabilities: [String]?
+        public let contextLength: Int?
+        public let maxOutputTokens: Int?
 
         enum CodingKeys: String, CodingKey {
             case id, object, created, capabilities
             case ownedBy = "owned_by"
+            case contextLength = "context_length"
+            case maxOutputTokens = "max_output_tokens"
         }
 
         public init(id: String, object: String, created: Int,
-                    ownedBy: String, capabilities: [String]? = nil) {
+                    ownedBy: String, capabilities: [String]? = nil,
+                    contextLength: Int? = nil, maxOutputTokens: Int? = nil) {
             self.id = id
             self.object = object
             self.created = created
             self.ownedBy = ownedBy
             self.capabilities = capabilities
+            self.contextLength = contextLength
+            self.maxOutputTokens = maxOutputTokens
         }
     }
 

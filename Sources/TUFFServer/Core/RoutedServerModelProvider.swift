@@ -62,22 +62,49 @@ public struct ServerInstalledModels: Sendable {
     }
 
     public func estimatedBytes(for descriptor: TUFFModelDescriptor) -> UInt64 {
+        let plan = inferencePlan(for: descriptor)
         let estimate = descriptor.estimatedInferenceWorkingSetBytes(
-            contextTokens: descriptor.runtimeDefaults.contextTokens,
-            expertCacheSlots: descriptor.runtimeDefaults.expertCacheSlots,
+            contextTokens: plan.contextTokens,
+            expertCacheSlots: plan.expertCacheSlots,
             prefillChunkTokens: descriptor.recommendedPrefillChunkTokens(on: device))
         return visionCapability(for: descriptor) == "ready"
             ? max(device.safeAppMemoryBudgetBytes, estimate) : estimate
     }
 
+    /// Tool inventories need more than the short qualification prompts. Grow
+    /// to 16K (or 8K), and enable batched prefill where affordable, using the same
+    /// allocation estimate and 75% budget as the app's automatic planner.
+    /// Machines that cannot afford the growth retain the qualified settings.
+    public func inferencePlan(for descriptor: TUFFModelDescriptor)
+        -> (contextTokens: Int, expertCacheSlots: Int) {
+        let defaults = descriptor.runtimeDefaults
+        let chunk = descriptor.recommendedPrefillChunkTokens(on: device)
+        func fits(context: Int, slots: Int) -> Bool {
+            descriptor.estimatedInferenceWorkingSetBytes(contextTokens: context,
+                expertCacheSlots: slots, prefillChunkTokens: chunk)
+                <= device.safeAppMemoryBudgetBytes
+        }
+        let context = [16_384, 8_192].first {
+            $0 >= defaults.contextTokens && fits(context: $0, slots: defaults.expertCacheSlots)
+        } ?? defaults.contextTokens
+        let floor = RuntimeConfiguration.minimumExpertCacheSlotsForChunkedPrefill
+        let slots = descriptor.architecture.feedForwardKind == .mixtureOfExperts
+            && defaults.expertCacheSlots < floor && fits(context: context, slots: floor)
+            ? floor : defaults.expertCacheSlots
+        return (context, slots)
+    }
+
     /// The same settings `tuff serve` chooses for a model on this Mac.
     public func runtimeConfiguration(for descriptor: TUFFModelDescriptor) -> RuntimeConfiguration {
-        let slots = descriptor.runtimeDefaults.expertCacheSlots
+        let slots = inferencePlan(for: descriptor).expertCacheSlots
         return RuntimeConfiguration(
             expertCacheSlots: slots,
             expertCachePolicy: .lfu,
             rdadvisePolicy: .off,
-            prefillEnabled: slots >= RuntimeConfiguration.minimumExpertCacheSlotsForChunkedPrefill,
+            // GPT-OSS waits for each cache-sized expert group before reuse;
+            // it does not require the affine runner's two top-8 tile banks.
+            prefillEnabled: descriptor.family == .gptOss
+                || slots >= RuntimeConfiguration.minimumExpertCacheSlotsForChunkedPrefill,
             prefillChunkTokens: descriptor.recommendedPrefillChunkTokens(on: device),
             forceLogitsHead: true)
     }
@@ -198,9 +225,11 @@ public final class RoutedServerModelProvider: ServerModelProvider {
 
     public func modelList() -> OpenAIModelList {
         OpenAIModelList(object: "list", data: installed.available().map { descriptor in
-            .init(id: descriptor.apiModelID, object: "model", created: 0, ownedBy: "tuff",
+            let context = installed.inferencePlan(for: descriptor).contextTokens
+            return .init(id: descriptor.apiModelID, object: "model", created: 0, ownedBy: "tuff",
                   capabilities: installed.visionCapability(for: descriptor) == "ready"
-                    ? ["text", "image"] : ["text"])
+                    ? ["text", "image"] : ["text"],
+                  contextLength: context, maxOutputTokens: min(4_096, context / 4))
         })
     }
 

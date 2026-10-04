@@ -540,6 +540,9 @@ public actor ServerModelSession: ServerInferenceBackend {
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> String {
         let configuration = [
+            GFTokenizer.toolChatTemplateIdentity,
+            GFTokenizer.harmonyChatTemplateIdentity,
+            GFTokenizer.minimaxChatTemplateIdentity,
             String(runtime.expertCacheSlots),
             runtime.expertCachePolicy.rawValue,
             runtime.rdadvisePolicy.rawValue,
@@ -572,7 +575,9 @@ public actor ServerModelSession: ServerInferenceBackend {
             tokenizer: tokenizer,
             allowedTools: Set(tools.map(\.name)),
             promptOpensThinking: StructuredAssistantDecoder.promptOpensThinking(
-                tokenizer: tokenizer, reasoning: reasoning))
+                tokenizer: tokenizer, reasoning: reasoning),
+            parameterSchemas: Dictionary(tools.map { ($0.name, $0.parameters) },
+                uniquingKeysWith: { first, _ in first }))
     }
 
     public static func load(modelDirectory: URL,

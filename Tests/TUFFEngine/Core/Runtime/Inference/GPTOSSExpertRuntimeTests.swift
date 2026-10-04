@@ -123,7 +123,6 @@ import TUFFValidationSupport
             columns: intermediate)
         for index in output.indices {
             output[index] += Quantization.bf16ToFloat(fixture.mlp2Bias[index])
-            output[index] = Float(Float16(output[index]))
         }
         return output
     }
@@ -358,20 +357,91 @@ import TUFFValidationSupport
         func read(_ buffer: MTLBuffer) throws -> [Float] {
             let count = queries * topK * hidden
             let staging = try #require(context.device.makeBuffer(
-                length: count * 2, options: .storageModeShared))
+                length: count * MemoryLayout<Float>.stride, options: .storageModeShared))
             let cb = try #require(context.queue.makeCommandBuffer())
             let blit = try #require(cb.makeBlitCommandEncoder())
             blit.copy(from: buffer, sourceOffset: 0, to: staging, destinationOffset: 0,
-                      size: count * 2)
+                      size: count * MemoryLayout<Float>.stride)
             blit.endEncoding()
             cb.commit()
             cb.waitUntilCompleted()
-            return Fp16Buffer.read(staging, count: count)
+            let pointer = staging.contents().assumingMemoryBound(to: Float.self)
+            return (0..<count).map { pointer[$0] }
         }
         let expected = try read(perPair.routePartials)
         let actual = try read(batchedScratch.routePartials)
         let rel = RelError.compute(actual: actual, reference: expected)
         #expect(rel < 1e-2, "batched vs per-pair rel=\(rel)")
+    }
+
+    @Test func overflowingExpertPartialsRemainFiniteAfterRouteWeighting() throws {
+        let context = try MetalContext()
+        let hidden = 64, intermediate = 64, queries = 40, topK = 4
+        let runtime = try GPTOSSExpertRuntime(context: context)
+        let layout = GPTOSSExpertScratchLayout(hiddenSize: hidden,
+            intermediateSize: intermediate, topK: topK, queryCapacity: queries)
+        let scalar = try GPTOSSExpertScratchBuffers.allocate(device: context.device, layout: layout)
+        let batchedScratch = try GPTOSSExpertScratchBuffers.allocate(device: context.device, layout: layout)
+        let fixtures = try (0..<topK).map { slot -> ExpertFixture in
+            let fixture = try Self.fixture(context: context, hidden: hidden,
+                intermediate: intermediate, seed: slot)
+            let bytes = fixture.view.buffer.contents().assumingMemoryBound(to: UInt8.self)
+            for offset in 0..<(hidden * intermediate / 2) {
+                bytes[fixture.offsets.mlp2Weights + offset] = 0
+            }
+            let bias = fixture.view.buffer.contents().advanced(by: fixture.offsets.mlp2Bias)
+                .assumingMemoryBound(to: UInt16.self)
+            for column in 0..<hidden {
+                bias[column] = Quantization.bf16Bits(slot.isMultiple(of: 2) ? 131_072 : -131_072)
+            }
+            return fixture
+        }
+        let input = try #require(Fp16Buffer.make(context.device,
+            halves: [Float16](repeating: 0.01, count: queries * hidden)))
+        let weights: [Float16] = [0.4, 0.3, 0.2, 0.1]
+        let pairs = (0..<topK).flatMap { slot in (0..<queries).map {
+            PrefillTokenExpertPair(token: UInt32($0), expert: UInt32(slot), rank: UInt32(slot), weight: 0)
+        } }
+        let pairBuffer = try #require(pairs.withUnsafeBytes {
+            context.device.makeBuffer(bytes: $0.baseAddress!, length: $0.count, options: .storageModeShared)
+        })
+        func reduced(_ scratch: GPTOSSExpertScratchBuffers, batched: GPTOSSBatchedExperts?) throws -> [Float] {
+            let weightPointer = scratch.routeWeights.contents().assumingMemoryBound(to: Float16.self)
+            for route in 0..<(queries * topK) { weightPointer[route] = weights[route % topK] }
+            let residual = try #require(context.device.makeBuffer(
+                bytes: [Float](repeating: 0, count: queries * hidden),
+                length: queries * hidden * MemoryLayout<Float>.stride, options: .storageModeShared))
+            let output = try #require(context.device.makeBuffer(
+                length: residual.length, options: .storageModeShared))
+            let cb = try #require(context.queue.makeCommandBuffer())
+            if let batched {
+                let groups = fixtures.enumerated().map { slot, fixture in
+                    GPTOSSBatchedExperts.Group(blob: fixture.view, pairStart: slot * queries, pairCount: queries)
+                }
+                try batched.encode(commandBuffer: cb, input: input, sortedPairs: pairBuffer,
+                    groups: groups, offsets: fixtures[0].offsets, routePartials: scratch.routePartials,
+                    topK: topK, swigluLimit: 7)
+            } else {
+                for query in 0..<queries { for slot in 0..<topK {
+                    try runtime.encodeExpert(commandBuffer: cb, blob: fixtures[slot].view,
+                        offsets: fixtures[slot].offsets, input: input,
+                        queryIndex: query, routeSlot: slot, scratch: scratch)
+                } }
+            }
+            try runtime.encodeFloatResidualReduce(commandBuffer: cb, scratch: scratch,
+                residual: residual, output: output, queryCount: queries)
+            cb.commit(); cb.waitUntilCompleted(); try checkCommandBufferError(cb)
+            let pointer = output.contents().assumingMemoryBound(to: Float.self)
+            return (0..<(queries * hidden)).map { pointer[$0] }
+        }
+        let expected = zip(weights, [Float](arrayLiteral: 131_072, -131_072, 131_072, -131_072))
+            .reduce(Float(0)) { $0 + Float($1.0) * $1.1 }
+        let scalarValues = try reduced(scalar, batched: nil)
+        #expect(scalarValues.allSatisfy { $0.isFinite && abs($0 - expected) < 0.1 })
+        if let batched = GPTOSSBatchedExperts(context: context, hiddenSize: hidden, intermediateSize: intermediate) {
+            let batchedValues = try reduced(batchedScratch, batched: batched)
+            #expect(batchedValues.allSatisfy { $0.isFinite && abs($0 - expected) < 0.1 })
+        }
     }
 
     @Test func productionScratchStaysBoundedAcrossDecodeAndPrefill() {
@@ -384,10 +454,10 @@ import TUFFValidationSupport
             queryCapacity: PrefillRuntimeConfig.maxChunkTokens)
         let clamped = GPTOSSExpertScratchLayout(
             hiddenSize: 2_880, intermediateSize: 2_880, queryCapacity: 10_000)
-        #expect(decode.totalBytes == 40_328)
-        #expect(prefill.totalBytes == 5_917_568)
-        #expect(prefill.totalBytes < 6 * 1_048_576)
-        #expect(largest.totalBytes < 48 * 1_048_576)
+        #expect(decode.totalBytes == 63_368)
+        #expect(prefill.totalBytes == 11_815_808)
+        #expect(prefill.totalBytes < 12 * 1_048_576)
+        #expect(largest.totalBytes < 96 * 1_048_576)
         #expect(clamped == largest)
     }
 

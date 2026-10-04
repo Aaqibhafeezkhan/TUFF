@@ -279,8 +279,19 @@ tuff serve --default-model gemma4-e2b --unload-after 300 --port 8080
 
 From a clone, run `swift run -c release TUFFServer --models-root scratch`.
 TUFF 7.1 removed fixed-model serving (`tuff serve --model`) and the app's
-Start/Stop server. Each model runs with its catalog context, expert-cache and
-prefill settings for the Mac.
+Start/Stop server. The server grows each model's context to 16K (or 8K) and
+enables batched expert prefill when the allocation estimate fits within 75% of
+the Mac's memory. Otherwise it retains the qualified catalog settings.
+`/v1/models` reports the actual context and output limits for client discovery.
+
+OMP can use every installed model through an `openai-completions` provider
+with `openai-models-list` discovery. Gemma tool declarations retain mixed-type
+schema unions, including OMP's task output schema. OMP approves and executes
+tools; TUFF returns native MiniMax and GPT-OSS calls as structured tool calls.
+Larger models still depend on the
+Mac's available memory and can process prompts slowly.
+See [OMP setup](docs/OMP.md) for discovery, output limits and native thinking
+settings.
 
 The server provides `GET /health`, `GET /v1/models`, and
 `POST /v1/chat/completions`.
@@ -309,7 +320,7 @@ swift build -c release
 Build the complete arm64 app, ZIP and checksum with:
 
 ```sh
-Scripts/package_app.sh 7.1.0 dist/v7.1.0
+Scripts/package_app.sh 7.2.0 dist/v7.2.0
 ```
 
 The packaged app stores models in

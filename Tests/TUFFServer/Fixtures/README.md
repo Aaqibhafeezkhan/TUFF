@@ -1,5 +1,13 @@
 # Client request fixtures
 
+## Oh My Pi
+
+`omp-18.4.12-initial.json` retains all 12 tool declarations from an OMP
+18.4.12 request captured October 3, 2026. Messages are replaced with a minimal
+file-read probe and user paths are sanitized. The `task` tool's `outputSchema`
+has an object/boolean/string/null union that the original Gemma declaration
+macro could not render. No headers, credentials, or original prompts remain.
+
 ## OpenCode
 
 Sanitized request bodies captured on 2026-07-23 from `opencode-ai@1.15.11`.

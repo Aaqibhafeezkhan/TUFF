@@ -25,6 +25,46 @@ private actor RoutedHTTPBackend: ServerInferenceBackend {
 }
 
 @Suite(.serialized) struct RoutedServerModelProviderTests {
+    @Test func servingPlansGrowOnlyWithinTheMemoryBudget() throws {
+        let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
+        let installed = provider(root).installed
+        for model in TUFFModelCatalog.all {
+            let plan = installed.inferencePlan(for: model)
+            #expect(plan.contextTokens >= model.runtimeDefaults.contextTokens)
+            if plan.contextTokens != model.runtimeDefaults.contextTokens
+                || plan.expertCacheSlots != model.runtimeDefaults.expertCacheSlots {
+                #expect(model.estimatedInferenceWorkingSetBytes(
+                    contextTokens: plan.contextTokens, expertCacheSlots: plan.expertCacheSlots,
+                    prefillChunkTokens: model.recommendedPrefillChunkTokens(on: installed.device))
+                    <= installed.device.safeAppMemoryBudgetBytes)
+            }
+            #expect(installed.runtimeConfiguration(for: model).expertCacheSlots == plan.expertCacheSlots)
+            if model.family == .gptOss {
+                #expect(installed.runtimeConfiguration(for: model).prefillPolicy == .chunked)
+            }
+        }
+        let small = provider(root, memory: 1 << 30).installed
+        for model in TUFFModelCatalog.all {
+            #expect(small.inferencePlan(for: model).contextTokens == model.runtimeDefaults.contextTokens)
+            #expect(small.inferencePlan(for: model).expertCacheSlots == model.runtimeDefaults.expertCacheSlots)
+            if model.family == .gptOss {
+                #expect(small.runtimeConfiguration(for: model).prefillPolicy == .chunked)
+            }
+        }
+    }
+
+    @Test func modelDiscoveryAdvertisesTheServingPlan() throws {
+        let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
+        for model in TUFFModelCatalog.all { try install(model, root: root) }
+        let p = provider(root)
+        let encoded = try JSONEncoder().encode(p.modelList())
+        let list = try JSONDecoder().decode(OpenAIModelList.self, from: encoded)
+        for row in list.data {
+            let model = try #require(ServerInstalledModels.descriptor(named: row.id))
+            #expect(row.contextLength == p.installed.inferencePlan(for: model).contextTokens)
+            #expect(row.maxOutputTokens == min(4_096, (row.contextLength ?? 0) / 4))
+        }
+    }
     private func root() throws -> URL {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("TUFFRouterTests-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

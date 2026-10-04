@@ -1,0 +1,8 @@
+{
+ "tokenizer_class": "TokenizersBackend",
+ "bos_token": "]~!b[",
+ "eos_token": "[e~[",
+ "pad_token": "[e~[",
+ "model_max_length": 196608,
+ "clean_up_tokenization_spaces": false
+}

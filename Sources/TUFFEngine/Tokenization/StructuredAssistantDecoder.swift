@@ -15,6 +15,7 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
 
     private let tokenizer: GFTokenizer
     private let allowedTools: Set<String>
+    private let parameterSchemas: [String: JSONValue]
     private let idGenerator: @Sendable () -> String
     private let harmonyDecoder: HarmonyAssistantDecoder?
     private var channel: Channel = .visible
@@ -40,11 +41,13 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
     public init(tokenizer: GFTokenizer,
                 allowedTools: Set<String>,
                 promptOpensThinking: Bool = false,
+                parameterSchemas: [String: JSONValue] = [:],
                 idGenerator: @escaping @Sendable () -> String = {
                     "call_" + (0..<24).map { _ in String(format: "%x", UInt8.random(in: 0...15)) }.joined()
                 }) {
         self.tokenizer = tokenizer
         self.allowedTools = allowedTools
+        self.parameterSchemas = parameterSchemas
         self.idGenerator = idGenerator
         self.harmonyDecoder = tokenizer.harmonyTokenIDs.map {
             HarmonyAssistantDecoder(
@@ -88,20 +91,8 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
         guard !failed else { throw ToolCallParserError.malformed }
         if let harmonyDecoder {
             return try harmonyDecoder.consume(tokenID: tokenID, delta: delta)
-        } else if tokenizer.dialect == .chatml {
-            return try consumeChatML(tokenID: tokenID, delta: delta)
-        } else if tokenizer.dialect == .minimax {
-            if tokenID == tokenizer.thinkStartID {
-                let events = routeText(delta)
-                channel = .thought
-                return events
-            }
-            if tokenID == tokenizer.thinkEndID {
-                let events = routeText(delta)
-                channel = .visible
-                return events
-            }
-            return routeText(delta)
+        } else if tokenizer.dialect == .chatml || tokenizer.dialect == .minimax {
+            return try consumeTaggedDialect(tokenID: tokenID, delta: delta)
         }
 
         // A non-empty delta on a control token is text the detokenizer held
@@ -205,17 +196,16 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
         }
     }
 
-    /// ChatML transitions: `<think>`…`</think>` separates thought text, and
-    /// `<tool_call>`…`</tool_call>` buffer tokens for the Qwen parser. Everything
-    /// else streams as visible content.
-    private func consumeChatML(tokenID: Int32, delta: String) throws -> [StructuredAssistantEvent] {
+    /// Qwen and MiniMax use thought and tool wrapper tokens, with different
+    /// native grammars inside their tool wrappers.
+    private func consumeTaggedDialect(tokenID: Int32, delta: String) throws -> [StructuredAssistantEvent] {
         if tokenID == tokenizer.toolCallStartID {
             guard toolTokens == nil else {
                 failed = true
                 throw ToolCallParserError.malformed
             }
             toolTokens = []
-            return []
+            return routeText(delta)
         }
         if tokenID == tokenizer.toolCallEndID {
             guard let tokens = toolTokens else {
@@ -225,10 +215,16 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
             toolTokens = nil
             let text = tokenizer.decode(tokens, skipSpecialTokens: false)
             do {
-                let call = try QwenToolCallParser().parse(
-                    text, allowedTools: allowedTools, id: idGenerator())
-                emittedCalls += 1
-                return [.toolCall(call)]
+                let calls: [ParsedToolCall]
+                if tokenizer.dialect == .minimax {
+                    calls = try MiniMaxToolCallParser().parse(text, allowedTools: allowedTools,
+                        parameterSchemas: parameterSchemas, idGenerator: idGenerator)
+                } else {
+                    calls = [try QwenToolCallParser().parse(
+                        text, allowedTools: allowedTools, id: idGenerator())]
+                }
+                emittedCalls += calls.count
+                return calls.map(StructuredAssistantEvent.toolCall)
             } catch {
                 failed = true
                 throw error

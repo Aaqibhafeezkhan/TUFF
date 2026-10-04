@@ -231,7 +231,7 @@ private enum GPTOSSToyCPUReference {
 }
 
 @Suite(.serialized) struct GPTOSSRunnerTests {
-    private func makeRunner() throws
+    private func makeRunner(cacheSlots: Int = 8, maxContext: Int = 64, chunkTokens: Int = 32) throws
         -> (URL, MetalContext, Model, ModelForwardRunner) {
         let directory = try GPTOSSToySynthetic.write()
         let context = try MetalContext()
@@ -239,16 +239,16 @@ private enum GPTOSSToyCPUReference {
             directoryURL: directory,
             device: context.device,
             expecting: .gptOssToy(),
-            streamingMode: .pread(slotCount: 8))
+            streamingMode: .pread(slotCount: cacheSlots))
         let runtime = RuntimeConfiguration(
-            expertCacheSlots: 8,
+            expertCacheSlots: cacheSlots,
             prefillEnabled: true,
-            prefillChunkTokens: 32,
+            prefillChunkTokens: chunkTokens,
             forceLogitsHead: true)
         let runner = try ModelForwardRunner(
             model: model,
             context: context,
-            maxContext: 64,
+            maxContext: maxContext,
             runtimeConfiguration: runtime)
         return (directory, context, model, runner)
     }
@@ -311,6 +311,52 @@ private enum GPTOSSToyCPUReference {
         try runner.prepareForContinuation(expectedPosition: 2)
         try await runner.produce(token: 19, position: 2, into: output)
         #expect(runner.continuationPosition == 3)
+    }
+
+    @Test func fourSlotBatchedPrefillMatchesDecodeAndContinuation() async throws {
+        let (directory, context, _, runner) = try makeRunner(cacheSlots: 4)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let output = try logits(context)
+        let prompt = (0..<32).map { Int32($0 + 1) }
+        for (position, token) in prompt.enumerated() {
+            try await runner.produce(token: token, position: position, into: output)
+        }
+        let expected = values(output).map(Float.init)
+        try await runner.produce(token: 17, position: 32, into: output)
+        let expectedContinuation = values(output).map(Float.init)
+        runner.reset()
+        _ = try await runner.prefillChunked(tokens: prompt[...], startPosition: 0,
+            outputMode: .greedyIfAvailable, config: .production(chunkTokens: 32),
+            into: output, onProgress: { _ in })
+        #expect(RelError.compute(actual: values(output).map(Float.init), reference: expected) < 0.02)
+        #expect(values(output).allSatisfy { Float($0).isFinite })
+        try runner.prepareForContinuation(expectedPosition: 32)
+        try await runner.produce(token: 17, position: 32, into: output)
+        #expect(RelError.compute(actual: values(output).map(Float.init),
+            reference: expectedContinuation) < 0.02)
+    }
+
+    @Test func longFourSlotPrefillResetMatchesFreshDecode() async throws {
+        let (directory, context, _, runner) = try makeRunner(
+            cacheSlots: 4, maxContext: 2_700, chunkTokens: 2_048)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let output = try logits(context)
+        let prompt = (0..<2_632).map { Int32(($0 * 7) % 96 + 1) }
+        for (position, token) in prompt.enumerated() {
+            try await runner.produce(token: token, position: position, into: output)
+        }
+        let expected = values(output).map(Float.init)
+        runner.reset()
+        _ = try await runner.prefillChunked(tokens: prompt.prefix(2_576), startPosition: 0,
+            outputMode: .greedyIfAvailable, config: .production(chunkTokens: 2_048),
+            into: output, onProgress: { _ in })
+        try await runner.produce(token: 17, position: 2_576, into: output)
+        runner.reset()
+        _ = try await runner.prefillChunked(tokens: prompt[...], startPosition: 0,
+            outputMode: .greedyIfAvailable, config: .production(chunkTokens: 2_048),
+            into: output, onProgress: { _ in })
+        #expect(values(output).allSatisfy { Float($0).isFinite })
+        #expect(RelError.compute(actual: values(output).map(Float.init), reference: expected) < 0.02)
     }
 
     @Test func resetRestoresDeterministicKVState() async throws {

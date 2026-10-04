@@ -102,7 +102,7 @@ public enum RouterServerRuntime {
             loader: { descriptor, directory in
                 let session = try await ServerModelSession.load(
                     modelDirectory: directory,
-                    maxContext: descriptor.runtimeDefaults.contextTokens,
+                    maxContext: installed.inferencePlan(for: descriptor).contextTokens,
                     promptCacheMode: .singlePrefix,
                     runtimeConfiguration: installed.runtimeConfiguration(for: descriptor),
                     context: try sharedContext.get(),

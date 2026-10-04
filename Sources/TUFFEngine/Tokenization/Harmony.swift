@@ -145,20 +145,20 @@ public struct HarmonyPromptRenderer: Sendable {
                     throw GFTokenizerError.invalidChatTemplate(
                         "Harmony supports one tool call per assistant message")
                 }
-                guard message.content == nil || message.thinking == nil else {
-                    throw GFTokenizerError.invalidChatTemplate(
-                        "Harmony tool call cannot contain both content and thinking")
-                }
                 try validateToolName(call.name)
                 let laterFinal = conversation[conversation.index(after: index)...]
                     .contains { $0.role == .assistant && $0.toolCalls.isEmpty }
-                if !laterFinal, let thinking = message.thinking ?? message.content,
+                if !laterFinal, let thinking = message.thinking,
                    !thinking.isEmpty {
                     output += Self.startMark + "assistant" + Self.channelMark
                         + "analysis" + Self.messageMark + thinking + Self.endMark
                 }
+                if let content = message.content, !content.isEmpty {
+                    output += Self.startMark + "assistant" + Self.channelMark
+                        + "commentary" + Self.messageMark + content + Self.endMark
+                }
                 output += Self.startMark + "assistant to=functions.\(call.name)"
-                    + Self.channelMark + "commentary json" + Self.messageMark
+                    + Self.channelMark + "commentary" + "<|constrain|>json" + Self.messageMark
                     + (try call.arguments.encoded()) + Self.callMark
                 lastTool = (call.id, call.name)
 
@@ -352,6 +352,7 @@ final class HarmonyAssistantDecoder: @unchecked Sendable {
     private enum State: Equatable {
         case header(expectsRole: Bool)
         case channel(recipient: String?)
+        case format(channel: String, recipient: String?)
         case content(channel: String, recipient: String?)
         case awaitingStart
         case completed
@@ -400,15 +401,28 @@ final class HarmonyAssistantDecoder: @unchecked Sendable {
                 return events
             }
             if tokenID == tokens.constrain {
-                guard case .channel = state else { throw ToolCallParserError.malformed }
-                return events
-            }
-            if tokenID == tokens.message {
                 guard case .channel(let recipient) = state else {
                     throw ToolCallParserError.malformed
                 }
-                let channel = try parseChannel(buffer, recipient: recipient)
-                state = .content(channel: channel, recipient: recipient)
+                let header = try parseChannel(buffer, recipient: recipient)
+                state = .format(channel: header.channel, recipient: header.recipient)
+                buffer = ""
+                return events
+            }
+            if tokenID == tokens.message {
+                switch state {
+                case .channel(let recipient):
+                    let header = try parseChannel(buffer, recipient: recipient)
+                    state = .content(channel: header.channel, recipient: header.recipient)
+                case .format(let channel, let recipient):
+                    guard buffer.trimmingCharacters(in: .whitespacesAndNewlines) == "json",
+                          recipient != nil, channel == "commentary" else {
+                        throw ToolCallParserError.malformed
+                    }
+                    state = .content(channel: channel, recipient: recipient)
+                default:
+                    throw ToolCallParserError.malformed
+                }
                 buffer = ""
                 return events
             }
@@ -467,12 +481,13 @@ final class HarmonyAssistantDecoder: @unchecked Sendable {
         guard !failed else { throw ToolCallParserError.malformed }
         switch state {
         case .content(let channel, let recipient):
-            guard recipient == nil, channel == "analysis" || channel == "final" else {
+            guard recipient == nil,
+                  ["analysis", "commentary", "final"].contains(channel) else {
                 throw ToolCallParserError.malformed
             }
         case .awaitingStart, .completed:
             break
-        case .header, .channel:
+        case .header, .channel, .format:
             throw ToolCallParserError.malformed
         }
     }
@@ -482,7 +497,7 @@ final class HarmonyAssistantDecoder: @unchecked Sendable {
     private func append(_ text: String) throws -> [StructuredAssistantEvent] {
         guard !text.isEmpty else { return [] }
         switch state {
-        case .header, .channel:
+        case .header, .channel, .format:
             buffer += text
             guard buffer.utf8.count <= 4_096 else {
                 throw ToolCallParserError.oversized
@@ -496,7 +511,7 @@ final class HarmonyAssistantDecoder: @unchecked Sendable {
                 }
                 return []
             }
-            return channel == "final" ? [.content(text)] : [.thinking(text)]
+            return channel == "analysis" ? [.thinking(text)] : [.content(text)]
         case .awaitingStart, .completed:
             guard text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw ToolCallParserError.malformed
@@ -524,19 +539,27 @@ final class HarmonyAssistantDecoder: @unchecked Sendable {
         return recipient
     }
 
-    private func parseChannel(_ text: String, recipient: String?) throws -> String {
+    private func parseChannel(_ text: String, recipient: String?) throws
+        -> (channel: String, recipient: String?) {
         let components = text.split(whereSeparator: \.isWhitespace).map(String.init)
-        guard let channel = components.first else { throw ToolCallParserError.malformed }
-        if recipient == nil {
-            guard components.count == 1, channel == "analysis" || channel == "final" else {
-                throw ToolCallParserError.malformed
-            }
-        } else {
-            guard channel == "commentary",
-                  components.count == 1 || components == ["commentary", "json"] else {
+        guard let channel = components.first,
+              ["analysis", "commentary", "final"].contains(channel) else {
+            throw ToolCallParserError.malformed
+        }
+        var recipient = recipient
+        var formatSeen = false
+        for field in components.dropFirst() {
+            if field.hasPrefix("to="), recipient == nil, field.count > 3 {
+                recipient = String(field.dropFirst(3))
+            } else if field == "json", !formatSeen {
+                // Keep accepting the renderer's legacy plain format hint.
+                formatSeen = true
+            } else {
                 throw ToolCallParserError.malformed
             }
         }
-        return channel
+        guard (recipient == nil && !formatSeen) || (recipient != nil && channel == "commentary")
+        else { throw ToolCallParserError.malformed }
+        return (channel, recipient)
     }
 }

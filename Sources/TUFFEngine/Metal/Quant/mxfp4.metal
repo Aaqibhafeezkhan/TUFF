@@ -67,6 +67,55 @@ kernel void mxfp4_gemv_simd(
     }
 }
 
+// Expert down projections can exceed FP16 before route weighting.
+kernel void mxfp4_gemv_float_simd(
+    device const uint8_t* weights [[buffer(0)]],
+    device const uint8_t* scales  [[buffer(1)]],
+    device const half* input      [[buffer(2)]],
+    device float* output           [[buffer(3)]],
+    constant uint& rows           [[buffer(4)]],
+    constant uint& columns        [[buffer(5)]],
+    device const bfloat* bias     [[buffer(6)]],
+    constant uint& has_bias       [[buffer(7)]],
+    uint threadgroupIndex         [[threadgroup_position_in_grid]],
+    uint simdgroupIndex           [[simdgroup_index_in_threadgroup]],
+    uint lane                     [[thread_index_in_simdgroup]])
+{
+    constexpr uint rowsPerThreadgroup = 8;
+    const uint row = threadgroupIndex * rowsPerThreadgroup + simdgroupIndex;
+    if (row >= rows) return;
+
+    const uint groupsPerRow = columns / kMXFP4GroupSize;
+    device const uint8_t* rowWeights = weights + row * (columns / 2u);
+    device const uint8_t* rowScales = scales + row * groupsPerRow;
+    // Each lane takes 8 consecutive values (4 bytes), so a SIMD group reads
+    // 128 contiguous weight bytes per step. Loading one nibble per lane per
+    // 32-value block left the kernel at about a fifth of the M2's memory
+    // bandwidth, which made GPT-OSS decode compute-bound in its experts.
+    // Eight values never straddle a 32-value block, so one scale serves them.
+    float sum = 0.0f;
+    for (uint base = lane * 8u; base < columns; base += 256u) {
+        const packed_uchar4 bytes =
+            *reinterpret_cast<device const packed_uchar4*>(rowWeights + (base >> 1u));
+        device const half* x = input + base;
+        float partial = 0.0f;
+        for (uint j = 0; j < 4u; ++j) {
+            const uint packed = uint(bytes[j]);
+            partial = fma(mxfp4_e2m1(packed & 0x0Fu), float(x[2u * j]), partial);
+            partial = fma(mxfp4_e2m1(packed >> 4u), float(x[2u * j + 1u]), partial);
+        }
+        // Production GPT-OSS exponent bytes are finite nonzero UE8M0 values.
+        // Reinterpreting them as the FP32 exponent is exactly 2^(e - 127),
+        // matching the official Metal reference without an approximation.
+        const float scale = as_type<float>(uint(rowScales[base / kMXFP4GroupSize]) << 23u);
+        sum = fma(partial, scale, sum);
+    }
+    sum = simd_sum(sum);
+    if (lane == 0u) {
+        output[row] = sum + (has_bias != 0u ? float(bias[row]) : 0.0f);
+    }
+}
+
 // GPT-OSS leaves embeddings, attention projections, routers, and the output
 // head in BF16. One SIMD group reduces one output row while eight groups share
 // a threadgroup. Activations remain FP16, matching the rest of the runtime.

@@ -80,9 +80,9 @@ public enum TokenDecoding: String, Sendable {
 public struct GFTokenizer: @unchecked Sendable {
     public static let modelID = "google/gemma-4-26B-A4B-it"
     public static let chatTemplateIdentity = "gemma4-it-text-no-tools-v1"
-    public static let toolChatTemplateIdentity = "gemma4-it-tools-jinja-v1"
-    public static let harmonyChatTemplateIdentity = "gpt-oss-harmony-v1"
-    public static let minimaxChatTemplateIdentity = "minimax-m2.7-v1"
+    public static let toolChatTemplateIdentity = "gemma4-it-tools-jinja-v2-schema-unions"
+    public static let harmonyChatTemplateIdentity = "gpt-oss-harmony-v2-native-headers"
+    public static let minimaxChatTemplateIdentity = "minimax-m2.7-v2-native-tool-xml"
 
     public let dialect: ChatDialect
     /// Decoder pipeline declared by the installed `tokenizer.json`.
@@ -129,6 +129,7 @@ public struct GFTokenizer: @unchecked Sendable {
     /// BOS actually prepended by `encode(_:addBOS:)`; nil for dialects that
     /// never use a BOS prefix (ChatML).
     private let bosPrefixID: Int32?
+    private let gemmaSchemaTemplate: String?
 
     @usableFromInline
     let tokenizer: any Tokenizer
@@ -184,7 +185,8 @@ public struct GFTokenizer: @unchecked Sendable {
         let tokenizerData = try await hub.tokenizerData
         let underlying = try AutoTokenizer.from(
             tokenizerConfig: tokenizerConfig, tokenizerData: tokenizerData)
-        return try GFTokenizer(tokenizer: underlying, tokenizerData: tokenizerData)
+        return try GFTokenizer(tokenizer: underlying, tokenizerData: tokenizerData,
+                               chatTemplate: tokenizerConfig.chatTemplate.string())
     }
 
     private static func hasTokenizerJSON(in folder: URL, fileManager: FileManager) -> Bool {
@@ -252,8 +254,10 @@ public struct GFTokenizer: @unchecked Sendable {
         return value
     }
 
-    public init(tokenizer: any Tokenizer, tokenizerData: Config) throws {
+    public init(tokenizer: any Tokenizer, tokenizerData: Config,
+                chatTemplate: String? = nil) throws {
         self.tokenizer = tokenizer
+        gemmaSchemaTemplate = chatTemplate.flatMap(GemmaSchemaTemplate.extending)
         self.decoding = try Self.verifyDecoderConfiguration(tokenizerData)
 
         // The same `added_tokens[special == true]` ID set the library's
@@ -855,6 +859,13 @@ public struct GFTokenizer: @unchecked Sendable {
         guard tokenizer.hasChatTemplate else {
             throw GFTokenizerError.missingToolTemplate
         }
+        let extendsSchema = dialect == .gemma && tools.contains(where: {
+            GemmaSchemaTemplate.needsExtension($0.parameters)
+        })
+        if extendsSchema, gemmaSchemaTemplate == nil {
+            throw GFTokenizerError.invalidChatTemplate(
+                "the installed Gemma template cannot render schema unions")
+        }
         let upstreamMessages: [Tokenizers.Message] = try messages.map { message in
             var value: Tokenizers.Message = [
                 "role": message.role.rawValue,
@@ -891,7 +902,7 @@ public struct GFTokenizer: @unchecked Sendable {
         }
         return try tokenizer.applyChatTemplate(
             messages: upstreamMessages,
-            chatTemplate: nil,
+            chatTemplate: extendsSchema ? gemmaSchemaTemplate.map(ChatTemplateArgument.literal) : nil,
             addGenerationPrompt: true,
             truncation: false,
             maxLength: nil,

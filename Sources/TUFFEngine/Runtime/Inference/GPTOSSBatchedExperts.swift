@@ -9,6 +9,8 @@ import Metal
 /// overhead and repeated weight reads. Here the pairs routed to one expert are
 /// gathered into contiguous rows, mlp1 and mlp2 each run once per expert with
 /// their bias applied in the store, and one SwiGLU pass covers every row. The
+/// Down-projection output and route partials remain FP32 until reduction, so
+/// large expert values can be weighted and cancel without FP16 overflow. The
 /// scatter fills the same route partials `encodeFloatResidualReduce` weights
 /// and sums, so the residual update is unchanged.
 final class GPTOSSBatchedExperts {
@@ -17,7 +19,7 @@ final class GPTOSSBatchedExperts {
 
     /// MXFP4 pipelines by tile shape, smallest M first: an expert sees about
     /// a chunk's tokens times 4 / 32 rows, often fewer than a 64-row tile.
-    private let mxfp4Tiles: [(rows: Int, columns: Int, pso: MTLComputePipelineState)]
+    private let mxfp4Tiles: [(rows: Int, columns: Int, pso: MTLComputePipelineState, floatPSO: MTLComputePipelineState)]
     private let gatherPSO: MTLComputePipelineState
     private let scatterPSO: MTLComputePipelineState
     private let swigluPSO: MTLComputePipelineState
@@ -43,27 +45,29 @@ final class GPTOSSBatchedExperts {
               let library = try? MetalContext.privateLibrary(device: context.device,
                                                              module: "tensorops"),
               let gather = try? context.pipeline("prefill_moe_gather_pair_rows"),
-              let scatter = try? context.pipeline("prefill_moe_scatter_pair_rows"),
+              let scatter = try? context.pipeline("gptoss_prefill_scatter_float_pair_rows"),
               let swiglu = try? context.pipeline("gptoss_capped_swiglu_interleaved")
         else { return nil }
-        var mxfp4Tiles: [(rows: Int, columns: Int, pso: MTLComputePipelineState)] = []
+        var mxfp4Tiles: [(rows: Int, columns: Int, pso: MTLComputePipelineState, floatPSO: MTLComputePipelineState)] = []
         for (suffix, rows, columns) in [("_m8", 8, 64), ("_m16", 16, 64),
                                         ("_m32", 32, 32), ("", 64, 32)] {
             guard let function = library.makeFunction(name: "mpp_prefill_mxfp4_qmm_f16\(suffix)"),
-                  let pso = try? context.device.makeComputePipelineState(function: function)
+                  let pso = try? context.device.makeComputePipelineState(function: function),
+                  let floatFunction = library.makeFunction(name: "mpp_prefill_mxfp4_qmm_f32\(suffix)"),
+                  let floatPSO = try? context.device.makeComputePipelineState(function: floatFunction)
             else { return nil }
-            mxfp4Tiles.append((rows, columns, pso))
+            mxfp4Tiles.append((rows, columns, pso, floatPSO))
         }
-        func buffer(_ elements: Int, _ label: String) -> MTLBuffer? {
+        func buffer(_ elements: Int, _ label: String, stride: Int = MemoryLayout<Float16>.stride) -> MTLBuffer? {
             let buffer = context.device.makeBuffer(
-                length: elements * MemoryLayout<Float16>.stride, options: .storageModePrivate)
+                length: elements * stride, options: .storageModePrivate)
             buffer?.label = label
             return buffer
         }
         guard let rows = buffer(Self.maxRows * hiddenSize, "gptoss.batched.rows"),
               let mlp1 = buffer(Self.maxRows * 2 * intermediateSize, "gptoss.batched.mlp1"),
               let activation = buffer(Self.maxRows * intermediateSize, "gptoss.batched.act"),
-              let down = buffer(Self.maxRows * hiddenSize, "gptoss.batched.down")
+              let down = buffer(Self.maxRows * hiddenSize, "gptoss.batched.down", stride: MemoryLayout<Float>.stride)
         else { return nil }
         self.mxfp4Tiles = mxfp4Tiles
         self.gatherPSO = gather
@@ -148,12 +152,12 @@ final class GPTOSSBatchedExperts {
 
         func project(_ blob: TensorView, weights: Int, scales: Int, bias: Int,
                      x: MTLBuffer, xOffset: Int, y: MTLBuffer, yOffset: Int,
-                     m: Int, n: Int, k: Int) throws {
+                     m: Int, n: Int, k: Int, outputFloat: Bool = false) throws {
             guard let base = Int(exactly: blob.offset) else {
                 throw GPTOSSExpertRuntimeError.invalidBlobRange("blob")
             }
             let tile = mxfp4Tiles.first { m <= $0.rows } ?? mxfp4Tiles[mxfp4Tiles.count - 1]
-            encoder.setComputePipelineState(tile.pso)
+            encoder.setComputePipelineState(outputFloat ? tile.floatPSO : tile.pso)
             encoder.setBuffer(blob.buffer, offset: base + weights, index: 0)
             encoder.setBuffer(blob.buffer, offset: base + scales, index: 1)
             encoder.setBuffer(blob.buffer, offset: base + bias, index: 2)
@@ -199,8 +203,8 @@ final class GPTOSSBatchedExperts {
             try project(group.blob, weights: offsets.mlp2Weights, scales: offsets.mlp2Scales,
                         bias: offsets.mlp2Bias,
                         x: activation, xOffset: rowStart * i * half,
-                        y: down, yOffset: rowStart * d * half,
-                        m: rows, n: d, k: i)
+                        y: down, yOffset: rowStart * d * MemoryLayout<Float>.stride,
+                        m: rows, n: d, k: i, outputFloat: true)
         }
         encoder.memoryBarrier(scope: .buffers)
 

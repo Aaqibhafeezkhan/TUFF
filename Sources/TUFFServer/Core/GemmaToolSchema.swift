@@ -12,7 +12,9 @@ enum GemmaToolSchema {
     static func adapted(_ schema: JSONValue, toolName: String) throws -> JSONValue {
         let value = try adapt(schema, toolName: toolName, path: "parameters")
         guard value.objectValue?["type"] == .string("object"),
-              value.objectValue?["nullable"] != .bool(true) else {
+              value.objectValue?["nullable"] != .bool(true),
+              value.objectValue?["anyOf"] == nil,
+              value.objectValue?["oneOf"] == nil else {
             throw invalid(toolName, "parameters", "top-level type must be a non-null object")
         }
         return value
@@ -29,6 +31,9 @@ enum GemmaToolSchema {
         }
         if object["anyOf"] != nil || object["oneOf"] != nil {
             object = try adaptUnion(object, toolName: toolName, path: path)
+            if object["anyOf"] != nil || object["oneOf"] != nil {
+                return .object(object)
+            }
         }
 
         let type: String
@@ -116,7 +121,22 @@ enum GemmaToolSchema {
             source, toolName: toolName, path: path) {
             return result
         }
-        return try adaptNullableUnion(source, toolName: toolName, path: path)
+        let keyword = source["anyOf"] != nil ? "anyOf" : "oneOf"
+        guard !(source["anyOf"] != nil && source["oneOf"] != nil),
+              case .array(let branches)? = source[keyword], branches.count >= 2 else {
+            throw invalid(toolName, path, "union must have at least two object-schema branches")
+        }
+        if branches.count == 2,
+           branches.contains(.object(["type": .string("null")])) {
+            return try adaptNullableUnion(source, toolName: toolName, path: path)
+        }
+        // The extended declaration macro renders this node verbatim rather
+        // than choosing a branch or inventing a single type. Validate each
+        // branch before preserving the original union and all its siblings.
+        for (index, branch) in branches.enumerated() {
+            _ = try adapt(branch, toolName: toolName, path: "\(path).\(keyword)[\(index)]")
+        }
+        return source
     }
 
     private static func adaptStringConstantUnion(

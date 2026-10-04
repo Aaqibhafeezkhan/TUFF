@@ -29,7 +29,8 @@ import Tokenizers
 /// answer). A barrier commits the run and returns its text as the marker's own
 /// delta, which `StructuredAssistantDecoder.consume` routes under the channel
 /// in effect before the marker switches it. Plain `decode` passes no barriers,
-/// keeping full library parity.
+/// keeping full library parity. Explicit barriers are stripped even when the
+/// upstream tokenizer marks them non-special (MiniMax's thought/tool tags).
 ///
 /// Cost is O(1) per token and independent of how much has already been
 /// generated. The previous implementation re-decoded the entire accumulated
@@ -68,13 +69,13 @@ struct GFDetokenizer {
         guard let token = tokenizer.convertIdToToken(Int(id)) else { return "" }
         switch decoding {
         case .gemmaByteFallback:
-            if skipSpecialTokens, specialTokenIDs.contains(id) {
+            if skipSpecialTokens, specialTokenIDs.contains(id) || barrierTokenIDs.contains(id) {
                 return barrierTokenIDs.contains(id) ? run.commit() : ""
             }
             if let byte = GemmaDecoding.byteValue(token) { return run.push(byte) }
             return run.commit() + GemmaDecoding.fragment(token)
         case .byteLevel:
-            if skipSpecialTokens, specialTokenIDs.contains(id) {
+            if skipSpecialTokens, specialTokenIDs.contains(id) || barrierTokenIDs.contains(id) {
                 return barrierTokenIDs.contains(id) ? byteLevelRun.commit() : ""
             }
             var text = ""

@@ -44,6 +44,15 @@ struct ServerVisionCapabilityTests {
             supportsVisionRuntime: true) == nil)
     }
 
+    @Test func duplicateToolDefinitionsDoNotCrashDecoderConstruction() async throws {
+        let tokenizer = try await GFTokenizer.load()
+        let tool = GFTokenizer.FunctionDefinition(name: "read", description: "Read a file",
+            parameters: .object(["type": .string("object")]))
+        let decoder = ServerModelSession.assistantDecoder(tokenizer: tokenizer, tools: [tool, tool])
+        #expect(!decoder.hasToolCalls)
+        try decoder.finish()
+    }
+
     @Test func unsupportedHardwareDoesNotInvalidateThePack() {
         #expect(ServerModelSession.unavailableVisionCapability(
             for: VisionRuntimeError.unsupportedKernel("requires M2")) == "unsupported")

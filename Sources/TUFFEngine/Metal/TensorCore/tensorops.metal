@@ -261,13 +261,14 @@ static inline float mpp_mxfp4_e2m1(uint code) {
 
 // GPT-OSS experts: 8 codes per thread from one 4-byte run and one UE8M0
 // scale, accumulated in place, at the same M tiles as the affine kernels.
-template <int TileM, int TileN>
+// FP32 stores keep large down-projection partials finite before route weighting.
+template <int TileM, int TileN, typename Output>
 static inline void mpp_prefill_mxfp4_qmm_f16_impl(
     device const uint8_t* packedWeights,
     device const uint8_t* scales,
     device const bfloat* bias,
     device half* activations,
-    device half* output,
+    device Output* output,
     uint M, uint N, uint K, uint hasBias,
     uint3 tgid, uint lid, uint threads,
     threadgroup half* weightTile) {
@@ -343,18 +344,18 @@ static inline void mpp_prefill_mxfp4_qmm_f16_impl(
         if (globalM < M && globalN < N) {
             const float withBias = accumulator[element]
                 + (hasBias != 0u ? float(bias[globalN]) : 0.0f);
-            output[globalM * N + globalN] = half(withBias);
+            output[globalM * N + globalN] = Output(withBias);
         }
     }
 }
 
-#define TUFF_MPP_MXFP4_QMM_KERNEL(NAME, TM, TN)                                \
+#define TUFF_MPP_MXFP4_QMM_KERNEL(NAME, TM, TN, Output)                         \
 kernel void NAME(                                                              \
     device const uint8_t* packedWeights [[buffer(0)]],                         \
     device const uint8_t* scales        [[buffer(1)]],                         \
     device const bfloat* bias           [[buffer(2)]],                         \
     device half* activations            [[buffer(3)]],                         \
-    device half* output                 [[buffer(4)]],                         \
+    device Output* output               [[buffer(4)]],                         \
     constant uint& M                    [[buffer(5)]],                         \
     constant uint& N                    [[buffer(6)]],                         \
     constant uint& K                    [[buffer(7)]],                         \
@@ -363,15 +364,20 @@ kernel void NAME(                                                              \
     uint3 lid3                          [[thread_position_in_threadgroup]],    \
     uint3 threads3                      [[threads_per_threadgroup]]) {         \
     threadgroup half weightTile[(TN) * kMPPAffineTileK];                        \
-    mpp_prefill_mxfp4_qmm_f16_impl<TM, TN>(                                    \
+    mpp_prefill_mxfp4_qmm_f16_impl<TM, TN, Output>(                              \
         packedWeights, scales, bias, activations, output, M, N, K, hasBias,    \
         tgid, lid3.x, threads3.x, weightTile);                                 \
 }
 
-TUFF_MPP_MXFP4_QMM_KERNEL(mpp_prefill_mxfp4_qmm_f16, 64, 32)
-TUFF_MPP_MXFP4_QMM_KERNEL(mpp_prefill_mxfp4_qmm_f16_m32, 32, 32)
-TUFF_MPP_MXFP4_QMM_KERNEL(mpp_prefill_mxfp4_qmm_f16_m16, 16, 64)
-TUFF_MPP_MXFP4_QMM_KERNEL(mpp_prefill_mxfp4_qmm_f16_m8, 8, 64)
+TUFF_MPP_MXFP4_QMM_KERNEL(mpp_prefill_mxfp4_qmm_f16, 64, 32, half)
+TUFF_MPP_MXFP4_QMM_KERNEL(mpp_prefill_mxfp4_qmm_f16_m32, 32, 32, half)
+TUFF_MPP_MXFP4_QMM_KERNEL(mpp_prefill_mxfp4_qmm_f16_m16, 16, 64, half)
+TUFF_MPP_MXFP4_QMM_KERNEL(mpp_prefill_mxfp4_qmm_f16_m8, 8, 64, half)
+
+TUFF_MPP_MXFP4_QMM_KERNEL(mpp_prefill_mxfp4_qmm_f32, 64, 32, float)
+TUFF_MPP_MXFP4_QMM_KERNEL(mpp_prefill_mxfp4_qmm_f32_m32, 32, 32, float)
+TUFF_MPP_MXFP4_QMM_KERNEL(mpp_prefill_mxfp4_qmm_f32_m16, 16, 64, float)
+TUFF_MPP_MXFP4_QMM_KERNEL(mpp_prefill_mxfp4_qmm_f32_m8, 8, 64, float)
 
 #undef TUFF_MPP_MXFP4_QMM_KERNEL
 

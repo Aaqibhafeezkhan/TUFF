@@ -37,7 +37,7 @@ public struct InferenceMemoryPlan: Sendable, Equatable {
                 + config.numKVHeads * config.headDim * 4
                 + config.numExperts * 4 + config.topKExperts * 4
             let batched = GPTOSSBatchedExperts.maxRows
-                * (2 * config.hiddenSize + 3 * config.moeIntermediateSize) * 2
+                * (3 * config.hiddenSize + 3 * config.moeIntermediateSize) * 2
             prefillScratchBytes = UInt64(chunk * rowBytes + expert.totalBytes + batched)
         } else {
             let scratch = PrefillChunkScratchLayout(config: config, chunkTokens: chunk)

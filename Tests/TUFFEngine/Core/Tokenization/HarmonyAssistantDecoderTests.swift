@@ -89,6 +89,67 @@ struct HarmonyAssistantDecoderTests {
             argumentsJSON: #"{"city":"Paris"}"#))])
     }
 
+    @Test("Channel-first recipients and JSON constraints parse across token splits")
+    func channelFirstToolCall() throws {
+        for constrained in [false, true] {
+            let decoder = decoder()
+            var events: [StructuredAssistantEvent] = []
+            events += try decoder.consume(tokenID: tokens.channel, delta: "")
+            for part in ["comment", "ary to=", "functions.", "get_weather"] {
+                events += try decoder.consume(tokenID: textToken, delta: part)
+            }
+            if constrained {
+                events += try decoder.consume(tokenID: tokens.constrain, delta: " ")
+                events += try decoder.consume(tokenID: textToken, delta: "json")
+            }
+            events += try decoder.consume(tokenID: tokens.message, delta: "")
+            events += try decoder.consume(tokenID: textToken, delta: #"{"city":"Paris"}"#)
+            events += try decoder.consume(tokenID: tokens.call, delta: "")
+            #expect(events.count == 1)
+            #expect(decoder.hasToolCalls)
+            if case .toolCall(let call) = events.first {
+                #expect(call.name == "get_weather")
+                #expect(call.arguments == .object(["city": .string("Paris")]))
+            } else { Issue.record("tool call was not emitted") }
+            try decoder.finish()
+        }
+    }
+
+    @Test("Unaddressed commentary is visible and can precede a final message")
+    func commentaryThenFinal() throws {
+        let decoder = decoder()
+        var events: [StructuredAssistantEvent] = []
+        _ = try decoder.consume(tokenID: tokens.channel, delta: "")
+        _ = try decoder.consume(tokenID: textToken, delta: "commentary")
+        _ = try decoder.consume(tokenID: tokens.message, delta: "")
+        events += try decoder.consume(tokenID: textToken, delta: "Reading the file.\n")
+        _ = try decoder.consume(tokenID: tokens.end, delta: "")
+        _ = try decoder.consume(tokenID: tokens.start, delta: "")
+        _ = try decoder.consume(tokenID: textToken, delta: "assistant")
+        _ = try decoder.consume(tokenID: tokens.channel, delta: "")
+        _ = try decoder.consume(tokenID: textToken, delta: "final")
+        _ = try decoder.consume(tokenID: tokens.message, delta: "")
+        events += try decoder.consume(tokenID: textToken, delta: "Done.")
+        _ = try decoder.consume(tokenID: tokens.return, delta: "")
+        #expect(visibleText(events) == "Reading the file.\nDone.")
+        #expect(thinkingText(events).isEmpty)
+        try decoder.finish()
+    }
+
+    @Test("Duplicate recipients, unknown channels and malformed format hints fail closed")
+    func invalidHeaderMetadata() throws {
+        for header in ["commentary to=functions.get_weather to=functions.other",
+                       "final to=functions.get_weather", "unknown", "commentary json",
+                       "commentary to=", "commentary to=functions.get_weather xml"] {
+            let decoder = decoder()
+            _ = try decoder.consume(tokenID: tokens.channel, delta: "")
+            _ = try decoder.consume(tokenID: textToken, delta: header)
+            #expect(throws: ToolCallParserError.malformed) {
+                _ = try decoder.consume(tokenID: tokens.message, delta: "")
+            }
+        }
+    }
+
     @Test("Unknown tools and malformed JSON fail closed")
     func invalidCalls() throws {
         let unknown = decoder(allowedTools: [])

@@ -845,6 +845,22 @@ kernel void prefill_moe_scatter_pair_rows(
     const PrefillTokenExpertPairMSL pair = sorted_pairs[pair_start + row];
     route_partials[(pair.token * top_k + pair.rank) * D + d] = down[row * D + d];
 }
+kernel void gptoss_prefill_scatter_float_pair_rows(
+    device const float*                      down         [[buffer(0)]],
+    device const PrefillTokenExpertPairMSL* sorted_pairs [[buffer(1)]],
+    device float*                            route_partials [[buffer(2)]],
+    constant uint&                          pair_start   [[buffer(3)]],
+    constant uint&                          pair_count   [[buffer(4)]],
+    constant uint&                          D            [[buffer(5)]],
+    constant uint&                          top_k        [[buffer(6)]],
+    uint2                                   gid          [[thread_position_in_grid]]
+) {
+    const uint d = gid.x;
+    const uint row = gid.y;
+    if (d >= D || row >= pair_count) return;
+    const PrefillTokenExpertPairMSL pair = sorted_pairs[pair_start + row];
+    route_partials[(pair.token * top_k + pair.rank) * D + d] = down[row * D + d];
+}
 
 kernel void prefill_dequant_int4_qmm_f16_block(
     device const uint8_t* W      [[buffer(0)]],

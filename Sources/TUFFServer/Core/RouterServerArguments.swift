@@ -17,8 +17,8 @@ public struct RouterServerArguments: Equatable, Sendable {
 
     Serves every installed model on one loopback endpoint. A model loads when a
     request names it and unloads after it has been idle. Requests that name
-    `default` use the default model. Each model runs with its catalog context,
-    expert-cache and prefill settings for this Mac.
+    `default` use the default model. Context and expert-cache settings grow
+    within this Mac's memory budget. /v1/models reports the serving limits.
 
       --background               Run as TUFF's background API: read settings from
                                  Application Support/TUFF/Server and log to
@@ -37,7 +37,7 @@ public struct RouterServerArguments: Equatable, Sendable {
     static let removedFlags: [String: String] = [
         "--model": "the server routes each request by its \"model\" field; use --default-model <name>",
         "--model-id": "each model is served under its catalog ID",
-        "--max-context": "each model uses its catalog context length",
+        "--max-context": "each model uses a memory-checked serving context",
         "--vision-pack": "image packs are found beside each installed model",
         "--vision-residency": "image packs load on demand",
         "--prompt-cache-mode": "prompt reuse is always on",

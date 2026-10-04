@@ -7,6 +7,8 @@ final class GPTOSSMoEPrimitives {
     private let routerTop4: MTLComputePipelineState
     private let routeReduce: MTLComputePipelineState
     private let floatResidualRouteReduce: MTLComputePipelineState
+    private let floatPartialsRouteReduce: MTLComputePipelineState
+    private let floatPartialsHalfResidualRouteReduce: MTLComputePipelineState
 
     init(context: MetalContext) throws {
         cappedSwiGLU = try context.pipeline("gptoss_capped_swiglu")
@@ -16,6 +18,9 @@ final class GPTOSSMoEPrimitives {
         routeReduce = try context.pipeline("gptoss_route_reduce")
         floatResidualRouteReduce = try context.pipeline(
             "gptoss_route_reduce_float_residual")
+        floatPartialsRouteReduce = try context.pipeline("gptoss_route_reduce_float_partials")
+        floatPartialsHalfResidualRouteReduce = try context.pipeline(
+            "gptoss_route_reduce_float_partials_half_residual")
     }
 
     func encodeCappedSwiGLUInterleaved(
@@ -53,10 +58,10 @@ final class GPTOSSMoEPrimitives {
                            outputOffset: Int = 0,
                            queryCount: UInt32,
                            hiddenSize: UInt32,
-                           topK: UInt32 = 4) {
+                           topK: UInt32 = 4, floatPartials: Bool = false) {
         precondition(queryCount > 0 && hiddenSize > 0 && topK > 0)
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return }
-        encoder.setComputePipelineState(routeReduce)
+        encoder.setComputePipelineState(floatPartials ? floatPartialsHalfResidualRouteReduce : routeReduce)
         encoder.setBuffer(routePartials, offset: routePartialsOffset, index: 0)
         encoder.setBuffer(routeWeights, offset: routeWeightsOffset, index: 1)
         encoder.setBuffer(residual, offset: residualOffset, index: 2)
@@ -87,11 +92,12 @@ final class GPTOSSMoEPrimitives {
         outputOffset: Int = 0,
         queryCount: UInt32,
         hiddenSize: UInt32,
-        topK: UInt32 = 4
+        topK: UInt32 = 4,
+        floatPartials: Bool = false
     ) {
         precondition(queryCount > 0 && hiddenSize > 0 && topK > 0)
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return }
-        encoder.setComputePipelineState(floatResidualRouteReduce)
+        encoder.setComputePipelineState(floatPartials ? floatPartialsRouteReduce : floatResidualRouteReduce)
         encoder.setBuffer(routePartials, offset: routePartialsOffset, index: 0)
         encoder.setBuffer(routeWeights, offset: routeWeightsOffset, index: 1)
         encoder.setBuffer(residual, offset: residualOffset, index: 2)

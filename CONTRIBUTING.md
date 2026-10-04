@@ -87,7 +87,7 @@ If your change affects packaging, verify the archive rather than only the build
 directory:
 
 ```bash
-Scripts/package_app.sh 7.1.0 dist/v7.1.0
+Scripts/package_app.sh 7.2.0 dist/v7.2.0
 ```
 
 `Scripts/check.sh` runs the serial Swift suite, Python/Ruby harness regressions,
