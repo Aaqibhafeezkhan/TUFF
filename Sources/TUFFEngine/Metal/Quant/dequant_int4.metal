@@ -261,3 +261,136 @@ kernel void dequant_int4_qkv_gemv_simd(
     dequant_int4_gemv_simd_body(W, scales, biases, x, y, M, NN,
                                 1u, local_row, 0u, lane);
 }
+
+// ============================================================================
+// dequant_int4_small_block: prefill blocks too short for the batched QMM.
+//
+// Below 32 tokens the prefill used to run dequant_int4_gemv_simd once per
+// token, rereading every weight, scale and bias each time. This kernel keeps
+// the GEMV's layout (one SIMD per output row, eight rows per threadgroup) but
+// applies each weight chunk it loads to a tile of TB tokens, so a tile reads
+// the row once.
+//
+// TB is a function constant (1, 2, 4 or 8) and every tile is full: the host
+// splits a block into tiles of 8, 4, 2 and 1 rather than running a partial
+// tile. A runtime token bound inside the loop measured far slower on an M2,
+// because the accumulators no longer stayed in registers.
+//
+// Per token the arithmetic is the GEMV's: the same nibble order, the same fma
+// chain within a chunk, the same affine factoring s·Σqx + b·Σx per group and
+// one simd_sum at the end. Tokens never share an accumulator, so a nonfinite
+// input stays in its own output row.
+//
+// Grid: x = ceil(M / 8) row groups, y = tokens / TB tiles. Token rows are
+// x_stride and y_stride halves apart, which lets strided views go through
+// without a copy. The wrapper keeps x rows 8-byte aligned for the half4 loads.
+// ============================================================================
+
+constant uint FC_INT4_SMALL_BLOCK_TOKENS [[function_constant(27)]];
+constant constexpr uint kInt4SmallBlockMaxTokens = 8;
+
+static inline uint int4_small_block_tokens() {
+    return is_function_constant_defined(FC_INT4_SMALL_BLOCK_TOKENS)
+        ? min(FC_INT4_SMALL_BLOCK_TOKENS, kInt4SmallBlockMaxTokens)
+        : kInt4SmallBlockMaxTokens;
+}
+
+kernel void dequant_int4_small_block(
+    device const uint8_t* W        [[buffer(0)]],
+    device const bfloat*  scales   [[buffer(1)]],
+    device const bfloat*  biases   [[buffer(2)]],
+    device const half*    x        [[buffer(3)]],
+    device half*          y        [[buffer(4)]],
+    constant uint&        M        [[buffer(5)]],
+    constant uint&        N        [[buffer(6)]],
+    constant uint&        tokens   [[buffer(7)]],
+    constant uint&        x_stride [[buffer(8)]],
+    constant uint&        y_stride [[buffer(9)]],
+    uint2                 tg_pos   [[threadgroup_position_in_grid]],
+    uint                  sg_idx   [[simdgroup_index_in_threadgroup]],
+    uint                  lane     [[thread_index_in_simdgroup]]
+) {
+    constexpr uint rows_per_tg = 8;
+    const uint TB = int4_small_block_tokens();
+    const uint row = tg_pos.x * rows_per_tg + sg_idx;
+    if (row >= M) return;
+    const uint first = tg_pos.y * TB;
+    // The host dispatches whole tiles only; this guards a mismatched grid.
+    if (first + TB > tokens) return;
+
+    const uint n_groups  = N / quant_group_size();
+    const uint row_bytes = N / 2;
+    device const uint8_t* W_row = W      + uint(row) * row_bytes;
+    device const bfloat*  s_row = scales + uint(row) * n_groups;
+    device const bfloat*  b_row = biases + uint(row) * n_groups;
+    device const half*    x_tile = x + first * x_stride;
+
+    float acc[kInt4SmallBlockMaxTokens];
+    for (uint t = 0; t < TB; ++t) { acc[t] = 0.0f; }
+
+    // Block geometry exactly as dequant_int4_gemv_simd_body derives it.
+    const uint G = quant_group_size();
+    const uint groups_per_block = 256u / G;
+    const uint lane_shift = (G == 64u) ? 3u : ((G == 32u) ? 2u : 1u);
+    const uint full_blocks = n_groups / groups_per_block;
+    for (uint blk = 0; blk < full_blocks; ++blk) {
+        const uint byte_base = blk * 128u + lane * 4u;
+        // Two ushort loads: resident weights are 2-byte but not 4-byte
+        // aligned (see the GEMV).
+        device const ushort* wp = (device const ushort*)(W_row + byte_base);
+        const uint w4 = uint(wp[0]) | (uint(wp[1]) << 16);
+        const uint g  = blk * groups_per_block + (lane >> lane_shift);
+        const float s = float(s_row[g]);
+        const float b = float(b_row[g]);
+        const uint elem = byte_base * 2u;
+        const uint b0 =  w4        & 0xFFu;
+        const uint b1 = (w4 >> 8)  & 0xFFu;
+        const uint b2 = (w4 >> 16) & 0xFFu;
+        const uint b3 = (w4 >> 24) & 0xFFu;
+        const float q0 = float(b0 & 0x0Fu), q1 = float(b0 >> 4);
+        const float q2 = float(b1 & 0x0Fu), q3 = float(b1 >> 4);
+        const float q4 = float(b2 & 0x0Fu), q5 = float(b2 >> 4);
+        const float q6 = float(b3 & 0x0Fu), q7 = float(b3 >> 4);
+        for (uint t = 0; t < TB; ++t) {
+            device const half* xt = x_tile + t * x_stride;
+            const half4 xa = *((device const half4*)(xt + elem));
+            const half4 xb = *((device const half4*)(xt + elem + 4u));
+            const float e0 = float(xa.x), e1 = float(xa.y), e2 = float(xa.z), e3 = float(xa.w);
+            const float e4 = float(xb.x), e5 = float(xb.y), e6 = float(xb.z), e7 = float(xb.w);
+            float dot = 0.0f;
+            dot = fma(q0, e0, dot); dot = fma(q1, e1, dot);
+            dot = fma(q2, e2, dot); dot = fma(q3, e3, dot);
+            dot = fma(q4, e4, dot); dot = fma(q5, e5, dot);
+            dot = fma(q6, e6, dot); dot = fma(q7, e7, dot);
+            const float sum = e0 + e1 + e2 + e3 + e4 + e5 + e6 + e7;
+            acc[t] = fma(s, dot, acc[t]);
+            acc[t] = fma(b, sum, acc[t]);
+        }
+    }
+    // Remainder groups, one byte per lane, as in the GEMV.
+    for (uint g = full_blocks * groups_per_block; g < n_groups; ++g) {
+        if (lane >= G / 2u) continue;
+        const float s = float(s_row[g]);
+        const float b = float(b_row[g]);
+        const uint8_t byte = W_row[g * (G / 2u) + lane];
+        const float qlo = float(uint(byte & 0x0Fu));
+        const float qhi = float(uint(byte >> 4));
+        const uint elem = g * G + lane * 2u;
+        for (uint t = 0; t < TB; ++t) {
+            device const half* xt = x_tile + t * x_stride;
+            const float x0 = float(xt[elem]);
+            const float x1 = float(xt[elem + 1u]);
+            float dot = fma(qlo, x0, 0.0f);
+            dot = fma(qhi, x1, dot);
+            const float sum = x0 + x1;
+            acc[t] = fma(s, dot, acc[t]);
+            acc[t] = fma(b, sum, acc[t]);
+        }
+    }
+    for (uint t = 0; t < TB; ++t) {
+        const float total = simd_sum(acc[t]);
+        if (lane == 0) {
+            y[(first + t) * y_stride + row] = half(total);
+        }
+    }
+}

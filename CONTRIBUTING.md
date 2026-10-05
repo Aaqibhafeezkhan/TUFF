@@ -1,245 +1,135 @@
 # Contributing to TUFF
 
-All contributions that make TUFF better are welcome.
+Contributions of every size are welcome: bug fixes, Metal kernels, app design,
+accessibility, model support, tests, documentation, benchmark results and
+installation feedback. You do not need to be a Swift or Metal expert.
+Issues labelled [good first issue](https://github.com/rexmhall09/TUFF/labels/good%20first%20issue)
+are a reasonable place to start.
 
-That includes code, Metal kernels, app design, icons, accessibility, model
-support, tests, bug reports, documentation, benchmark results, installation
-feedback, and small quality-of-life fixes. You do not need to be a Swift or
-Metal expert to help.
+## How a contribution goes in
 
-## Start where you can help
+1. Fork the repository and make your change on a branch.
+2. Open a pull request. A draft is fine for early feedback, and for larger
+   architecture, format, model or interface work it is the best way to agree
+   on direction before the work gets expensive.
+3. GitHub runs the [contributor checks](.github/workflows/contributor-checks.yml).
+   Your first pull request may wait for the owner to approve running them.
+4. The owner reviews the change and decides whether to merge it. Passing
+   checks mean the pull request is ready for that review, not that it is
+   approved.
 
-Useful contributions include:
+Small fixes do not need an issue first. For a bug, the
+[bug form](https://github.com/rexmhall09/TUFF/issues/new?template=bug.yml)
+asks for what helps reproduce it; in the app, **Help > Report a Bug** fills in
+the version, Mac and model for you.
 
-- fixing a reproducible bug or confusing error
-- improving Chat, Models, Server, or Settings behavior
-- making the Mac app clearer, faster, or more accessible
-- adding CPU references, toy fixtures, format tests, or failure cases
-- qualifying a supported model on another Apple Silicon Mac
-- proposing a model with a pinned source and realistic runtime path
-- improving installation, server, architecture, or troubleshooting docs
-- reviewing code, designs, benchmark evidence, or model behavior
+## What the GitHub checks run
 
-Small fixes do not need an elaborate proposal. For larger architecture, format,
-model, or interface work, open an issue or draft pull request early enough for
-the direction to be discussed before the implementation becomes expensive.
+| Pull request | Checks |
+| --- | --- |
+| Draft | Python and Ruby harness tests, GitHub configuration, documentation links, brand assets, version, and a debug build of the package and its tests |
+| Ready for review | Everything above, plus the serial Swift test suite, a release build, packaging and the isolated updater fixtures |
 
-## Technical guardrails
+The checks are model-free. They use toy models, CPU references and throwaway
+update keys, never model packs, real-model runs, benchmarks or a signing key.
+A failing step names the script or test that failed, and the run summary lists
+what ran and what was skipped. A green run does not show that a real
+checkpoint works.
 
-TUFF supports macOS 15, Swift 6.2, Metal 3.2, and Apple Silicon. Newer Metal
-paths must remain optional and keep a tested Metal 3.2 fallback.
+## Building and testing locally
 
-Preserve these invariants:
-
-- Model installation and inference stay bounded in memory.
-- The installer never stages a second full source checkpoint.
-- Existing compatible `.gturbo` v1 installations remain readable.
-- Unfamiliar format features fail clearly instead of being misread.
-- Image input fails closed. An image is never accepted and silently ignored.
-- The app, CLI, server, tests, and other model processes do not run
-  concurrently against one machine during real-model work.
-- The loopback server stays on `127.0.0.1`. It has no remote authentication or
-  TLS and must not be exposed through a proxy or tunnel.
-- No model is described as working until it passes the relevant real-model
-  qualification.
-
-Do not add an undocumented runtime switch, silently change a production
-default, commit model weights, duplicate a local model, or purge someone else's
-download state to make a test pass.
-
-## Setup
-
-Install Xcode with Swift 6.2 or newer, select it with `xcode-select`, then clone
-this repository and run `swift package resolve`. `swift build -c release`
-builds the products. Clone builds store models and settings under `scratch/`;
-packaged builds use Application Support. Do not copy model weights into Git.
-
-## Tests
-
-Behavior changes should include a focused test in the same commit. Match the
-test to the layer being changed:
-
-- Metal kernels need an independent CPU reference and boundary coverage.
-- Model families need toy forward, prefill, tokenizer, prompt, and format tests.
-- Installer work needs resume, cancellation, discard, corruption, fingerprint,
-  disk, RAM, and legacy-install coverage where applicable.
-- Chat work needs persistence, attachment lifetime, restoration, model binding,
-  context, and structured-output coverage.
-- Server work needs queue, cancellation, contention, shutdown, and ingress
-  coverage.
-- UI work needs keyboard, VoiceOver, reduced-transparency, light and dark, and
-  small-window review in proportion to the change.
-
-Run package tests through the canonical serial runner:
-
-```bash
-Scripts/test.sh
-```
-
-Before requesting review, also run the checks that apply to your change:
+Install Xcode with Swift 6.2 or newer, select it with `xcode-select`, and run
+`swift package resolve`. Use whatever editor, agent or review tools you like;
+the same checks apply to every pull request.
 
 ```bash
 swift build -c release
-Scripts/check.sh
+Scripts/test.sh                          # serial Swift tests
+Scripts/test.sh --filter SuiteName       # one suite
+Scripts/check.sh --source-only           # tests plus every repository check
+Scripts/check.sh                         # also packages and runs updater fixtures
 ```
 
-If your change affects packaging, verify the archive rather than only the build
-directory:
+Tests must run serially through `Scripts/test.sh`; shared Metal state makes
+parallel test runs unreliable. Clone builds keep models and settings under
+`scratch/`. Packaged builds use `~/Library/Application Support/TUFF`.
 
-```bash
-Scripts/package_app.sh 7.2.0 dist/v7.2.0
-```
+## Technical expectations
 
-`Scripts/check.sh` runs the serial Swift suite, Python/Ruby harness regressions,
-GitHub configuration, symlink, documentation, brand and version checks, then
-packages an app and exercises isolated signed-updater fixtures. Use
-`Scripts/check.sh --source-only` when iterating on source. Focused Swift tests
-use `Scripts/test.sh --filter SuiteName`.
+TUFF supports macOS 15, Swift 6.2, Metal 3.2 and Apple Silicon. Newer Metal
+paths must stay optional, with a tested Metal 3.2 fallback.
 
-CI runs the complete model-free gate on non-draft PRs and pushes to main. It
-uses toy/CPU-reference fixtures and ephemeral update keys, with no model packs,
-production signing key or real-model benchmark. Model and hardware qualification
-remain separate. For example:
+- Model installation and inference stay bounded in memory. The installer never
+  stages a second full checkpoint, and no code loads a whole checkpoint, shard
+  or large tensor into Swift heap memory.
+- Existing compatible `.gturbo` v1 installations stay readable, and unfamiliar
+  format features fail clearly instead of being misread.
+- Image input fails closed: an image is never accepted and silently ignored.
+- The local server stays on `127.0.0.1`. It has no authentication or TLS.
+- No model is described as working until it passes a real-model check.
+- Chats, settings and model installations from earlier versions keep loading.
 
-```sh
-python3 Scripts/validate_release_models.py --help
-python3 Scripts/validate_release_interfaces.py --help
-python3 Scripts/benchmark_inference.py --help
-```
+Do not add an undocumented runtime switch, silently change a production
+default, commit model weights, or delete someone else's download state to make
+a test pass.
 
-State exactly what you ran and what you did not run. A model-free green suite
-does not prove that a real checkpoint works.
+Behavior changes come with a focused test. Kernels need an independent CPU
+reference and boundary cases. Model families need toy forward, prefill,
+tokenizer, prompt and format tests. Installer work needs resume, cancellation,
+corruption and disk-space cases. Chat, server and UI work need tests in
+proportion to the change, and UI changes need a screenshot.
 
-## Real-model changes
+## Real-model work
 
-Before a model run, require:
+If you run a real model, run one model process at a time, check
+`memory_pressure -Q` first, and do not stop someone else's process or delete
+their model to get past a preflight failure.
 
-- macOS 15 or newer
-- Swift 6.2 or newer
-- enough free disk
-- acceptable `memory_pressure -Q`
-- a complete verified `.gturbo` installation
-- no TUFF app, CLI, server, decode service, model test, MLX process, or other
-  local-model process already running
+A new model family or checkpoint needs its source pinned in the shared
+registry, format validation, CPU-reference primitive tests, toy forward and
+prefill comparisons, tokenizer and prompt goldens, repack resume and corruption
+tests, and a recorded run of the installed checkpoint with its stop reason and
+peak memory. If your Mac cannot run the model, say which real run is still
+needed.
 
-Run one model process at a time. Do not terminate someone else's process or
-delete or reinstall their model to clear a preflight failure.
+## Performance results
 
-A new family or checkpoint needs evidence for the complete path:
+Report what the tools print, with the commit, Mac, memory, macOS, exact
+command, prompt and generated token counts, stop reason, prefill time and
+decode rate. Give every repetition, not the best one. A repeating calibration
+prompt is not a valid speed result, and a smoke test, warmup or profiler run is
+not a performance claim.
 
-1. Pin the repository, revision, source-index fingerprint, storage, and model
-   identity in the shared registry.
-2. Add architecture and format validation before runtime execution.
-3. Compare primitives with independent CPU references.
-4. Compare toy forward and prefill output with an independent implementation.
-5. Add tokenizer and prompt-template goldens.
-6. Verify repack output, resume, cancellation, and corruption handling.
-7. Run the installed checkpoint and record coherent output, stop reason, and
-   peak working set on qualifying hardware.
-8. Set hardware and context gates from measured evidence.
+- `Scripts/benchmark_simple.rb` gives the launch-lineup numbers.
+- `Scripts/benchmark_inference.py` alternates two builds or settings in fresh
+  processes and records every run with machine observations. `--help` lists
+  its switches.
+- `Scripts/validate_release_models.py` runs the packaged text and image smoke
+  checks behind the [model validation report](docs/MODEL_VALIDATION.md).
+- `Scripts/validate_release_interfaces.py` exercises the app decode service
+  and loopback server.
+- `TUFF_PHASES=1` prints expert-cache and phase counters. They can overlap and
+  do not add up to wall-clock time.
+- Two startup switches exist for comparisons: `TUFF_EXPERT_LOOKAHEAD=off`
+  disables expert lookahead, and `TUFF_SMALL_BLOCK_PREFILL=on` enables the
+  experimental small-block prefill path for Gemma 4 26B-A4B and Qwen3.8 Flash
+  Next. Neither is an app setting.
 
-If the available Mac cannot qualify the model, leave it unavailable and say
-what real run is still required.
+The [performance report form](https://github.com/rexmhall09/TUFF/issues/new?template=benchmark.yml)
+is the place to share results.
 
-## Benchmark contributions
+## Writing
 
-Run `Scripts/benchmark_simple.rb` for the launch-lineup numbers, or
-`Scripts/benchmark_v2.rb` for the per-workload matrix, and report what the tool
-prints. Include the commit, Mac model, unified memory, macOS, Swift version,
-exact command, prompt and generated token counts, stop reason, prefill, time to
-first token, decode rate, and memory. A repeating calibration prompt is not a
-valid speed result, because repeated expert choices make decode artificially
-fast.
+Describe behavior that exists and evidence that was actually collected. Prefer
+plain, direct language and avoid marketing filler or compatibility claims you
+have not checked.
 
-Do not turn a smoke test, warmup, profiler run, contaminated session, or
-model-free test into a performance claim. Review every captured file before
-sharing it and remove personal paths or unrelated process details.
+## AI tools
 
-## Design and documentation
-
-Design work is as welcome as runtime work. Keep TUFF's interface native, clean,
-keyboard-usable, readable in light and dark appearance, and understandable
-without knowing the runtime's internal vocabulary.
-
-Documentation should describe behavior that exists and evidence that was
-actually collected. Prefer direct language. Avoid generic marketing filler,
-unverified compatibility claims, and benchmark conclusions broader than the
-workload supports.
-
-## AI-assisted contributions
-
-AI-assisted contributions are 100% welcome.
-
-In the pull request, include a short AI assistance note that:
-
-- names the tool and model when known
-- explains its role, such as exploration, implementation, tests, review, or
-  documentation
-- identifies any substantial generated or rewritten areas
-- confirms that you reviewed and understood the submitted changes
-- lists the tests and real-model checks you personally verified
-
-You remain responsible for the contribution. Do not submit raw generated code
-that you cannot explain, unreviewed model output, invented test results,
-fabricated citations, leaked credentials, or private prompt content. Check
-licenses and source terms before bringing generated assets, model files, or
-third-party material into the repository.
-
-A concise note is enough. The goal is honest attribution and accountable
-review, not line-by-line labeling.
-
-## Commits and pull requests
-
-Keep commits focused and include their corresponding tests. A larger feature
-can use several small commits that separately establish foundations, behavior,
-interface work, and documentation.
-
-A pull request should explain:
-
-- what changed and why
-- the important design or compatibility decisions
-- tests and real-model checks run
-- screenshots for visible app changes when possible
-- remaining limitations or hardware that was not available
-- AI assistance, if any
-
-Preserve unrelated work in the branch and avoid committing generated build
-products, downloaded checkpoints, personal benchmark data, or secrets.
+Use Claude, Codex, both or neither. You are responsible for what you submit:
+be able to explain it, and do not include invented test results, unreviewed
+generated output, credentials or private prompts. Check licenses before adding
+generated assets, model files or third-party material.
 
 By contributing, you agree that your contribution is licensed under the
 repository's [Apache License 2.0](LICENSE).
-
-## Local Codex review
-
-The repository skill lives at [.agents/skills/tuff-review/SKILL.md](.agents/skills/tuff-review/SKILL.md).
-Codex discovers repository skills under `.agents/skills`; the local
-`skills/list` call also verifies this path. Start a new Codex session in this
-checkout after adding or changing a skill. No separate global installation is
-needed.
-
-Invoke `$tuff-review` and name the scope: staged changes, uncommitted changes,
-or an explicit range such as `5f84318..HEAD`. The review reports actionable
-findings with file:line locations, commands actually run and missing validation.
-It does not push, publish or create a remote review. The repository has no
-remote AI review workflow.
-
-## Direct-to-main release checklist
-
-1. Preserve unrelated work and record the intended release base and version.
-2. Run `Scripts/check.sh` and package the version declared by `TUFFVersion`.
-3. Extract the archive outside the checkout. Verify signatures, resources,
-   version, CLI/app/server interfaces and applicable real-model qualification.
-   Run models sequentially and keep benchmarks separate from builds and tests.
-4. Write measured results and limits in the release validation document.
-5. Run `$tuff-review` over the full candidate diff. Fix substantive findings,
-   rerun affected checks, and repeat review after material changes.
-6. Commit scoped local changes. Stop at any requested human review gate.
-7. Only when publication is authorized, push main and wait for CI. Generate
-   the signed appcast, approve the keychain prompt personally, and publish a
-   new tag and release. Never overwrite existing assets or move tags.
-8. Verify remote commit/tag, downloaded archive/checksum, packaged version,
-   app signature and signed feed before cleaning up generated local artifacts.
-
-See [withdrawal and recovery](docs/RELEASE_RECOVERY.md) for a defective release.
-Never test withdrawal on a real public release, weaken signature verification,
-or change the personal installed app during qualification.

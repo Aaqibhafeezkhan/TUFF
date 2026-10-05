@@ -1,6 +1,6 @@
 # OMP with TUFF
 
-These settings target TUFF 7.2.0 and OMP 18.4.12. Enable **Background API** in
+These settings were tested with TUFF 7.2.0 and OMP 18.4.12. Enable **Background API** in
 TUFF, then add the provider below to `~/.omp/agent/models.yml`. Preserve any
 other providers and your existing default model.
 

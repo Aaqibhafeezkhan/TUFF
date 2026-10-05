@@ -10,9 +10,16 @@
 # - every workflow parses, declares top-level permissions, and never checks
 #   out pull request code from a `pull_request_target` or `workflow_run`
 #   job, which run with repository secrets;
+# - a workflow that builds or tests repository code never runs on a push or
+#   a schedule, reads no secrets, and gates every job on the pull request's
+#   author rather than the actor who triggered or re-ran it, so contributor
+#   pull requests are checked and the owner's direct pushes are not.
 
 require "json"
 require "yaml"
+
+# Workflows and forms are UTF-8; do not let the shell locale decide.
+Encoding.default_external = Encoding::UTF_8
 
 # TUFF_CHECK_ROOT lets the regression tests point this at a fixture tree.
 ROOT = ENV.fetch("TUFF_CHECK_ROOT", File.expand_path("..", __dir__))
@@ -77,6 +84,10 @@ ROUTING["areas"].each do |option, labels|
 end
 
 PRIVILEGED_EVENTS = %w[pull_request_target workflow_run].freeze
+AUTOMATIC_EVENTS = %w[push schedule].freeze
+RUNS_REPOSITORY_CODE = %r{\bswift (build|test|package)\b|Scripts/(test|check)\.sh|package_app\.sh|Scripts/test_}
+AUTHOR_GATE = "github.event.pull_request.user.login"
+ACTOR_CONTEXTS = /github\.(actor|triggering_actor)\b/
 
 WORKFLOWS.each do |path|
   name = relative(path)
@@ -105,6 +116,25 @@ WORKFLOWS.each do |path|
   end
   if privileged && source.match?(/\bswift (build|test)\b|Scripts\/test\.sh|package_app\.sh/)
     fail!("#{name}: a privileged workflow must not build or run repository code")
+  end
+  next unless source.match?(RUNS_REPOSITORY_CODE)
+
+  (events & AUTOMATIC_EVENTS).each do |event|
+    fail!("#{name}: runs repository code on '#{event}'; repository checks run for contributor pull requests only")
+  end
+  if source.match?(/\$\{\{[^}]*\bsecrets\./)
+    fail!("#{name}: a workflow that runs repository code must not read secrets")
+  end
+  next unless events.include?("pull_request")
+
+  Hash(document["jobs"]).each do |job_name, job|
+    condition = job["if"].to_s
+    if condition.match?(ACTOR_CONTEXTS)
+      fail!("#{name}: job '#{job_name}' decides on the actor; use the pull request author (#{AUTHOR_GATE})")
+    end
+    unless condition.include?(AUTHOR_GATE)
+      fail!("#{name}: job '#{job_name}' has no pull request author condition (#{AUTHOR_GATE})")
+    end
   end
 end
 

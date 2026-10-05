@@ -4,6 +4,7 @@ import contextlib
 import sys
 import json
 import os
+import subprocess
 from pathlib import Path
 import struct
 import tempfile
@@ -18,6 +19,28 @@ import validate_release_models as release_models
 
 
 class HarnessTests(unittest.TestCase):
+    def test_serial_runner_stops_when_preliminary_check_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scripts = root / 'Scripts'
+            scripts.mkdir()
+            source = Path(__file__).resolve().parent / 'test.sh'
+            (scripts / 'test.sh').write_text(source.read_text())
+            tools = root / 'bin'
+            tools.mkdir()
+            for name, body in [('ruby', 'exit 17'),
+                               ('swift', 'touch "$TUFF_UNEXPECTED_SWIFT"; exit 0')]:
+                tool = tools / name
+                tool.write_text('#!/bin/sh\n' + body + '\n')
+                tool.chmod(0o755)
+            marker = root / 'swift-ran'
+            result = subprocess.run(['/bin/bash', str(scripts / 'test.sh')],
+                                    env=dict(os.environ, PATH=str(tools) + ':/usr/bin:/bin',
+                                             TUFF_UNEXPECTED_SWIFT=str(marker)),
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 17, result.stderr)
+            self.assertFalse(marker.exists())
+
     def test_targeted_model_rechecks_preserve_default_and_reject_silent_skips(self):
         models={'flash':{'path':'flash'},'gemma':{'path':'gemma'},'mini':{'path':'mini'}}
         self.assertEqual(release_models.selected_models(models,None),models)
@@ -106,7 +129,8 @@ class HarnessTests(unittest.TestCase):
               '--output','output']
         for option,value in [('--interfaces','typo'),('--modes','typo'),('--shapes','typo'),
                              ('--repeat','0'),('--max-new','0'),('--timeout','0'),('--comparison-repeat','0'),
-                             ('--comparison-lookahead','off'),('--comparison-slots','16'),
+                             ('--comparison-lookahead','off'),('--comparison-small-block','off'),
+                             ('--comparison-slots','16'),
                              ('--comparison-chunk','512'),('--slots','0'),('--chunk','0')]:
             with patch.object(sys,'argv',base+[option,value]),contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as error: interfaces.main()
@@ -147,11 +171,29 @@ class HarnessTests(unittest.TestCase):
         base=['benchmark_inference.py','--cli','fixture.app/TUFFCLI','--model-root','models',
               '--output','output']
         for option,value in [('--comparison-slots','16'),('--comparison-chunk','512'),
-                             ('--comparison-lookahead','off'),('--repeat','0'),
+                             ('--comparison-lookahead','off'),('--comparison-small-block','off'),
+                             ('--shapes','typo'),('--repeat','0'),
                              ('--max-new','0'),('--timeout','0'),('--slots','0'),('--chunk','0')]:
             with patch.object(sys,'argv',base+[option,value]),contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as error: bench.main()
                 self.assertEqual(error.exception.code,2)
+
+    def test_interface_small_block_switch_reaches_the_service_environment(self):
+        args=SimpleNamespace(lookahead=None,small_block='on')
+        self.assertEqual(interfaces.environment_overrides(args),{'TUFF_SMALL_BLOCK_PREFILL':'on'})
+        self.assertEqual(interfaces.environment_overrides(SimpleNamespace(lookahead='off')),
+                         {'TUFF_EXPERT_LOOKAHEAD':'off'})
+
+    def test_small_block_comparison_changes_only_the_named_switch(self):
+        args=SimpleNamespace(lookahead='off',comparison_lookahead=None,
+                             small_block='on',comparison_small_block='off')
+        self.assertEqual(bench.environment_overrides(args,'candidate'),
+                         {'TUFF_EXPERT_LOOKAHEAD':'off','TUFF_SMALL_BLOCK_PREFILL':'on'})
+        self.assertEqual(bench.environment_overrides(args,'reference'),
+                         {'TUFF_EXPERT_LOOKAHEAD':'off','TUFF_SMALL_BLOCK_PREFILL':'off'})
+        unset=SimpleNamespace(lookahead=None,comparison_lookahead=None,
+                              small_block=None,comparison_small_block=None)
+        self.assertEqual(bench.environment_overrides(unset,'primary'),{})
 
     def test_workloads_are_stable_distinct_and_do_not_repeat_calibration_text(self):
         self.assertEqual(bench.prompt('long'),bench.prompt('long'))
@@ -225,7 +267,7 @@ class HarnessTests(unittest.TestCase):
     def test_failed_measurements_keep_output_and_machine_observations(self):
         with tempfile.TemporaryDirectory() as directory:
             prefix=Path(directory)/'minimax-m2.7-failed'
-            with patch.object(bench,'machine_state',return_value={'memory_pressure':{'available':False}}):
+            with patch.object(bench,'machine_state',return_value={'memory_pressure':{'available':False}}),patch.object(bench,'require_idle_inference'):
                 row=bench.run(['/bin/sh','-c','echo incomplete >&2; exit 3'],prefix,2)
             self.assertEqual(row['status'],'failed');self.assertEqual(row['exit_code'],3)
             self.assertTrue(Path(str(prefix)+'.stderr.txt').exists())
@@ -240,7 +282,7 @@ class HarnessTests(unittest.TestCase):
                 self.assertEqual(row['status'],expected)
 
     def test_timed_out_process_is_reaped(self):
-        with tempfile.TemporaryDirectory() as directory,patch.object(bench,'machine_state',return_value={}):
+        with tempfile.TemporaryDirectory() as directory,patch.object(bench,'machine_state',return_value={}),patch.object(bench,'require_idle_inference'):
             row=bench.run(['/bin/sleep','5'],Path(directory)/'timeout',0.02)
         self.assertEqual(row['status'],'failed');self.assertNotEqual(row['exit_code'],0)
 

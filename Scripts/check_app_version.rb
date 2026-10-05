@@ -8,11 +8,11 @@
 # automatically, so without this check it silently ages: the About panel would
 # claim an old version on a current checkout.
 #
-# The release flow is: merge work, tag main, then merge a follow-up PR that
-# bumps the constant. Between the tag and that follow-up, the constant is one
-# release behind on purpose, so exactly one release of lag is allowed. Two or
-# more means the bump was forgotten. Being ahead is allowed too, which is the
-# state after the bump merges and before the next tag.
+# The constant is normally bumped with the release work, so it is ahead of
+# the newest published release until that release is tagged. A tree can also
+# be one release behind, for example a contributor branch started just before
+# a release, so exactly one release of lag is allowed. Two or more means the
+# bump was forgotten.
 
 require "json"
 require "net/http"

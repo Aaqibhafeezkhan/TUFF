@@ -1,9 +1,18 @@
 #!/usr/bin/env bash
 # Serial test runner. Shared Metal state makes in-process parallel tests
 # unreliable. Pass any extra arguments through, for example --filter.
+# `--build-only` compiles the package and its tests with the same flags and
+# runs nothing, so a later `Scripts/test.sh` reuses the build.
+
+set -e
 
 if [[ "${1:-}" == "--package-path" ]]; then
   shift 2
+fi
+build_only=false
+if [[ "${1:-}" == "--build-only" ]]; then
+  build_only=true
+  shift
 fi
 
 script_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,4 +50,7 @@ preview_flags=(-Xswiftc -D -Xswiftc TUFF_NO_PREVIEWS)
 # test invocations can still override this when they intentionally cover Qwen.
 export TUFF_MODEL="${TUFF_MODEL:-gemma4}"
 
+if [[ "$build_only" == true ]]; then
+  exec swift build --build-tests "${testing_flags[@]}" "${preview_flags[@]}" "$@"
+fi
 exec swift test --no-parallel "${testing_flags[@]}" "${preview_flags[@]}" "$@"

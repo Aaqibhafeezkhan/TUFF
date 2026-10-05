@@ -31,7 +31,7 @@ Their measured rates and variation are listed below.
 Here is how that focus compares with other local-model tools. The linked
 project documentation was checked September 30, 2026.
 
-| | TUFF 6.1.0 | [LM Studio](https://lmstudio.ai/docs/app) | [Ollama](https://ollama.com/blog/new-app) | [Colibrì](https://github.com/JustVugg/colibri) | [TurboFieldfare](https://github.com/drumih/turbo-fieldfare) |
+| | TUFF | [LM Studio](https://lmstudio.ai/docs/app) | [Ollama](https://ollama.com/blog/new-app) | [Colibrì](https://github.com/JustVugg/colibri) | [TurboFieldfare](https://github.com/drumih/turbo-fieldfare) |
 | --- | :-: | :-: | :-: | :-: | :-: |
 | Designed exclusively for Apple Silicon Macs | ✅ | ❌ | ❌ | ❌ | ✅ |
 | Desktop chat interface | ✅ | ✅ | ✅ | ◐ | ✅ |
@@ -62,14 +62,6 @@ Ollama documents [model memory allocation and scheduling](https://ollama.com/blo
 LM Studio's [desktop app has proprietary terms](https://lmstudio.ai/app-terms).
 Ollama's app and runtime are in its [open-source repository](https://github.com/ollama/ollama).
 
-6.1.0 extends the bounded GPU sampler to Flash Next’s top-k 20 and
-MiniMax’s top-k 40. Cache diagnostics distinguish demand requests from
-predictions and report first demand hits on prefetched records and unused
-prefetch evictions. The app, CLI and server share the added metadata reserve.
-The release keeps the qualified eviction policy; experimental cache policies
-were inconsistent in repeated measurements. See the
-[release validation](docs/RELEASE_6.1.0_VALIDATION.md) for results and limits.
-
 TUFF's catalog is smaller than general model libraries. Its release validation
 covers the exact checkpoints and settings documented here. Other streaming
 engines also run models larger than RAM; this comparison does not claim that
@@ -91,7 +83,7 @@ You can inspect the source and build it yourself instead.
 Check the downloaded archive against the checksum from the same release:
 
 ```sh
-shasum -a 256 -c TUFF-v6.1.0-macos-arm64.zip.sha256
+shasum -a 256 -c TUFF-vVERSION-macos-arm64.zip.sha256
 ```
 
 Sparkle checks for updates automatically and verifies archives against the
@@ -155,11 +147,12 @@ estimated-memory gates. Such settings may swap or fail to allocate.
 
 ### Benchmarks
 
-Release measurements and their limits are in
-[the model validation report](docs/MODEL_VALIDATION.md), with build and
-integration checks in [the 6.1.0 release validation](docs/RELEASE_6.1.0_VALIDATION.md).
+Release measurements and their limits are in the
+[model validation report](docs/MODEL_VALIDATION.md), and what each release was
+checked against is in [release evidence](docs/RELEASE_EVIDENCE.md).
 
-Measured October 1, 2026 on a 16 GB M2 MacBook Air, macOS 26.6.2.
+Measured October 1, 2026 with the TUFF 6.1.0 package on a 16 GB M2 MacBook
+Air, macOS 26.6.2.
 Each run starts a fresh packaged CLI process with a 4,096-token context and
 seed 20260721. The output cap is 128 tokens, or 256 for MiniMax. Every text
 attempt answered Paris and stopped at EOS or end of turn. These short responses
@@ -186,64 +179,13 @@ fresh processes do not guarantee a cold filesystem cache. Available pressure,
 swap, thermal and power observations are in the report. The cause of timing
 variation was not measured, and these results do not establish a speedup.
 
-```sh
-python3 Scripts/validate_release_models.py \
-  --app dist/v6.1.0/TUFF.app \
-  --model-root "$HOME/Library/Application Support/TUFF/Models" \
-  --repeat 3 --text-only \
-  --output benchmark-results/release-validation
-```
+The measurement tools and how to report results are described in
+[CONTRIBUTING.md](CONTRIBUTING.md#performance-results).
 
-The harness records binary, source, shader and model-manifest identities,
-resolved inference settings, wall time, phase timings, peak RSS, and available
-thermal, power, swap and memory-state probes. Unavailable probes are identified.
-It retains all responses for review and refuses changed inputs on `--resume`.
-For an image smoke check, supply `--image`, `--image-prompt` and
-`--image-keywords` that describe your fixture. The release report records its
-fixture and criteria. A single-image check is not a vision accuracy score.
+### Bug reports and recovery
 
-`TUFF_PHASES=1` reports demand requests, predictions, demand and prefetch reads,
-logical bytes, failures and exposed waits. It also reports first demand hits on
-prefetched records and their unused evictions. Request counts describe accepted
-cache plans; grouped prefill plans are not per-token frequency. Unused records
-still resident at shutdown are excluded from eviction counts. Warm-request
-useful hits can refer to earlier reads. Logical `pread` bytes
-can be served from the OS cache; they are not physical SSD traffic. Phase
-counters are cumulative and may overlap CPU and GPU work. They cannot be added
-into a wall-clock breakdown, and unexplained time has no inferred cause.
-
-For repeated prefill and decode comparisons, use the sequential runner:
-
-```sh
-python3 Scripts/benchmark_inference.py \
-  --cli dist/v6.1.0/TUFF.app/Contents/Resources/bin/TUFFCLI \
-  --comparison-cli /path/to/reference/TUFF.app/Contents/Resources/bin/TUFFCLI \
-  --model-root "$HOME/Library/Application Support/TUFF/models" \
-  --repeat 3 --max-new 128 --output benchmark-results/paired
-```
-
-It alternates binary order and records every short/long, greedy/default sampled
-run, resolved settings, model identity and available machine observations.
-Each process starts with cold expert and KV caches. Filesystem caching remains
-uncontrolled. `Scripts/validate_release_interfaces.py` exercises the packaged
-app decode service and loopback server serially. Repeated unrelated app-service
-requests retain expert slots and reset KV state; this is separate from prefix
-reuse and from a GUI walkthrough.
-
-The interface runner also accepts `--comparison-app` and alternates complete
-sessions. `--repeat` controls requests per prompt in each warm session;
-`--comparison-repeat` controls session pairs. Each comparison launches one
-model process at a time. Both runners accept separate cache-slot, chunk and
-lookahead overrides for the two variants and record the selected settings.
-For a visible-answer interface smoke check, pass an explicit `--prompt` and
-`--required-word`; thinking text alone does not satisfy the app check.
-
-`TUFF_EXPERT_LOOKAHEAD=off` disables expert lookahead when a runner is created.
-The default retains the existing adaptive policy. Use `--lookahead on` and
-`--comparison-lookahead off` with the same binary in the comparison runner to
-measure that choice. Restart the runner after changing the setting.
-
-Help > Report a Bug previews an optional summary of system details, settings
+Help > Report a Bug opens the GitHub bug form with your version, Mac and model
+filled in, and previews an optional summary of system details, settings
 and generation timing. Check for Recovery Update looks for a newer signed
 recovery and protects local data formats. See [recovery help](docs/RELEASE_RECOVERY.md).
 
@@ -278,8 +220,8 @@ tuff serve --default-model gemma4-e2b --unload-after 300 --port 8080
 ```
 
 From a clone, run `swift run -c release TUFFServer --models-root scratch`.
-TUFF 7.1 removed fixed-model serving (`tuff serve --model`) and the app's
-Start/Stop server. The server grows each model's context to 16K (or 8K) and
+Since TUFF 7.1 there is one routed server; `tuff serve --model` and the app's
+Start/Stop server are gone. The server grows each model's context to 16K (or 8K) and
 enables batched expert prefill when the allocation estimate fits within 75% of
 the Mac's memory. Otherwise it retains the qualified catalog settings.
 `/v1/models` reports the actual context and output limits for client discovery.
@@ -320,8 +262,10 @@ swift build -c release
 Build the complete arm64 app, ZIP and checksum with:
 
 ```sh
-Scripts/package_app.sh 7.2.0 dist/v7.2.0
+Scripts/package_app.sh 7.3.0 dist/v7.3.0
 ```
+
+The version must match `Sources/TUFFModelCatalog/TUFFVersion.swift`.
 
 The packaged app stores models in
 `~/Library/Application Support/TUFF/Models` and chats in `Chats/` beside them.
@@ -374,12 +318,7 @@ An existing environment value is preserved.
 
 ```sh
 Scripts/test.sh
-ruby Scripts/check_markdown_links.rb
-ruby Scripts/check_brand_assets.rb
-ruby Scripts/check_app_version.rb
-python3 Scripts/test_benchmark_reporting.py
-ruby Scripts/test_benchmark_simple.rb
-ruby Scripts/test_benchmark_v2.rb
+Scripts/check.sh --source-only
 ```
 
 The serial suite covers independent kernel references, toy forward and prefill
@@ -390,11 +329,11 @@ alone does not qualify a checkpoint.
 
 ## Contributing and credit
 
-Code, design, documentation, tests and bug reports are welcome. See
-[CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and validation requirements.
-AI-assisted contributions are welcome too; review and test the result and
-describe the assistance. I use AI while building TUFF and take responsibility
-for the work I publish.
+Code, design, documentation, tests and bug reports are welcome. Open a pull
+request from a fork; GitHub runs the model-free checks and I review and merge.
+[CONTRIBUTING.md](CONTRIBUTING.md) has the details. Use whichever tools you
+like, AI included, as long as you can stand behind the result. I use AI while
+building TUFF and take responsibility for the work I publish.
 
 TUFF began as a fork of
 [drumih/turbo-fieldfare](https://github.com/drumih/turbo-fieldfare) by Andrey

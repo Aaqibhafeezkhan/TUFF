@@ -14,12 +14,23 @@ Encoding.default_internal = Encoding::UTF_8
 
 ROOT = Pathname.new(File.expand_path("..", __dir__))
 
+# Checks the Markdown Git tracks or has staged, so personal notes left
+# untracked in a checkout do not fail the repository checks. Outside a Git
+# checkout it falls back to every root and docs file.
 def markdown_files(arguments)
   return arguments.map { |path| ROOT.join(path).cleanpath } unless arguments.empty?
 
-  root_files = Dir[ROOT.join("*.md").to_s].map { |path| Pathname.new(path) }
-  docs_files = Dir[ROOT.join("docs/**/*.md").to_s].map { |path| Pathname.new(path) }
-  (root_files + docs_files).select(&:file?).uniq.sort
+  tracked = IO.popen(["git", "-C", ROOT.to_s, "ls-files", "-z", "--", "*.md", "docs/**/*.md"],
+                     err: File::NULL, &:read)
+  if $?.success?
+    paths = tracked.split("\0").reject(&:empty?)
+      .select { |path| !path.include?("/") || path.start_with?("docs/") }
+      .map { |path| ROOT.join(path) }
+  else
+    paths = Dir[ROOT.join("*.md").to_s] + Dir[ROOT.join("docs/**/*.md").to_s]
+    paths = paths.map { |path| Pathname.new(path) }
+  end
+  paths.select(&:file?).uniq.sort
 end
 
 def without_inline_code(line)

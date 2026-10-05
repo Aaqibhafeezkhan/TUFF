@@ -37,7 +37,29 @@ def shader_digest(cli):
     return hashlib.sha256(''.join(str(p.relative_to(bundle))+digest(p) for p in files).encode()).hexdigest()
 
 
+SHAPES = ('tiny', 'short', 'long')
+
+
+def environment_overrides(args, variant):
+    # A reference without its own value inherits the candidate's, so a
+    # comparison changes only the switches it names.
+    reference = variant == 'reference'
+    lookahead = (args.comparison_lookahead or args.lookahead) if reference else args.lookahead
+    small_block = (args.comparison_small_block or args.small_block) if reference else args.small_block
+    environment = {}
+    if lookahead:
+        environment['TUFF_EXPERT_LOOKAHEAD'] = lookahead
+    if small_block:
+        environment['TUFF_SMALL_BLOCK_PREFILL'] = small_block
+    return environment
+
+
 def prompt(shape):
+    if shape == 'tiny':
+        # Short enough that the templated prompt stays below the 32-token
+        # batched-prefill threshold on the default models. Check prompt_tokens
+        # in the results rather than assuming it.
+        return 'Name two ways to stay dry.'
     if shape == 'short':
         return 'Explain how a coastal town can prepare for a week of heavy rain. Give practical steps for residents and the council.'
     # Distinct records keep expert choices from becoming a repeating calibration loop.
@@ -111,14 +133,18 @@ def main():
     parser.add_argument('--comparison-chunk', type=int, help='Reference chunk override; otherwise use model defaults')
     parser.add_argument('--lookahead', choices=['on','off'])
     parser.add_argument('--comparison-lookahead', choices=['on','off'])
+    parser.add_argument('--small-block', choices=['on','off'],
+                        help='TUFF_SMALL_BLOCK_PREFILL for the candidate (default: unset, which is off)')
+    parser.add_argument('--comparison-small-block', choices=['on','off'],
+                        help='TUFF_SMALL_BLOCK_PREFILL for the reference')
     args = parser.parse_args()
     if min(args.repeat,args.max_new,args.timeout) < 1:
         parser.error('repeat, max-new and timeout must be positive')
-    if any(x not in ('short','long') for x in args.shapes.split(',')):
-        parser.error('--shapes accepts short,long')
+    if any(x not in SHAPES for x in args.shapes.split(',')):
+        parser.error('--shapes accepts ' + ','.join(SHAPES))
     if any(x not in ('greedy','sampled') for x in args.modes.split(',')):
         parser.error('--modes accepts greedy,sampled')
-    if any(value is not None for value in (args.comparison_lookahead,args.comparison_slots,args.comparison_chunk)) and not args.comparison_cli:
+    if any(value is not None for value in (args.comparison_lookahead,args.comparison_small_block,args.comparison_slots,args.comparison_chunk)) and not args.comparison_cli:
         parser.error('comparison overrides require --comparison-cli')
     if any(value is not None and value < 1 for value in (args.slots,args.comparison_slots,args.chunk,args.comparison_chunk)):
         parser.error('slot and chunk overrides must be positive')
@@ -171,8 +197,7 @@ def main():
                         command = ['/usr/bin/time','-l',str(binary),'--model',str(model_dir),'--messages-file',str(messages),
                             '--max-context','4096','--max-new',str(args.max_new),'--seed','20260721',*config['chat'],*sampling,*runtime]
                         prefix = args.output/f'{model}-{shape}-{mode}-{attempt+1}-{variant}'
-                        lookahead = (args.comparison_lookahead or args.lookahead) if variant=='reference' else args.lookahead
-                        environment = {'TUFF_EXPERT_LOOKAHEAD':lookahead} if lookahead else {}
+                        environment = environment_overrides(args, variant)
                         row = run(command,prefix,args.timeout,environment)
                         row['environment_overrides'] = environment
                         manifest = json.loads((model_dir/'manifest.json').read_text())

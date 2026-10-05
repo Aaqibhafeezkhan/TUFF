@@ -181,6 +181,11 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
     /// Batched MPP projections at the checkpoint's INT4 group (64, or 32 for
     /// Qwen 3.8 Flash Next). Nil where MSL 4 tensors are unavailable.
     private let prefillMPPAffine: MPPPrefillAffineQMM?
+    /// Opt-in shared-weight projections for 2-31 token prefill blocks. Nil
+    /// unless `smallBlockPrefill` is enabled, so the default runner compiles
+    /// and dispatches exactly what it did before.
+    private let smallBlockPrefill: SmallBlockPrefillPolicy
+    private let smallBlockProjection: DequantInt4SmallBlock?
     private let prefillQKVEpilogue: PrefillQKVEpilogue
     private let prefillAttention: PrefillAttention
     private let prefillPostAttention: PrefillPostAttentionSetup
@@ -357,8 +362,20 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
     private var rdadviseAdaptiveState: RDAdviceAdaptivePolicyState
     private var rdadviseAdaptivePosition: Int = -1
     private var rdadviseAdaptivePositionBytes: UInt64 = 0
-    public init(model: Model, context: MetalContext, maxContext: Int,
-                runtimeConfiguration: RuntimeConfiguration = .production) throws {
+    /// The small-block prefill path follows `TUFF_SMALL_BLOCK_PREFILL`, read
+    /// once here; see `SmallBlockPrefillPolicy`.
+    public convenience init(model: Model, context: MetalContext, maxContext: Int,
+                            runtimeConfiguration: RuntimeConfiguration = .production) throws {
+        try self.init(model: model, context: context, maxContext: maxContext,
+                      runtimeConfiguration: runtimeConfiguration,
+                      smallBlockPrefill: SmallBlockPrefillPolicy(
+                        environment: ProcessInfo.processInfo.environment,
+                        variant: model.config.variant))
+    }
+
+    init(model: Model, context: MetalContext, maxContext: Int,
+         runtimeConfiguration: RuntimeConfiguration,
+         smallBlockPrefill: SmallBlockPrefillPolicy) throws {
         let config = model.config
         if config.feedForwardKind == .mixtureOfExperts,
            let effectiveSlots = model.routedExpertCacheSlotCount(layer: 0),
@@ -454,6 +471,11 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                                              groupSize: int4Groups)
         self.prefillMPPAffine = MPPPrefillAffineQMM(context: context, bits: 4,
                                                     groupSize: int4Groups)
+        self.smallBlockPrefill = smallBlockPrefill
+        let smallBlockProjection = smallBlockPrefill.enabled
+            ? try DequantInt4SmallBlock(context: context, groupSize: int4Groups)
+            : nil
+        self.smallBlockProjection = smallBlockProjection
         self.prefillQKVEpilogue = try PrefillQKVEpilogue(context: context)
         self.prefillAttention = try PrefillAttention(context: context)
         self.prefillPostAttention = try PrefillPostAttentionSetup(context: context)
@@ -465,7 +487,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
             context: context,
             weightBits: model.sharedExpertWeightBits,
             siluActivation: silu,
-            groupSize: int4Groups)
+            groupSize: int4Groups,
+            smallBlock: smallBlockProjection)
         if cfg.feedForwardKind == .mixtureOfExperts,
            let batchedRouted = PrefillBatchedRoutedExperts(context: context,
                                                            groupSize: int4Groups,
@@ -819,6 +842,12 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
     public private(set) var totalRoutedExpertCacheMisses: UInt64 = 0
     public private(set) var lastGreedyToken: UInt32 = 0
     public var usesFusedGreedyHead: Bool { useFusedGreedyHead }
+
+    /// Projections encoded through the small-block prefill path since the
+    /// runner was created. Zero whenever the policy is off.
+    var smallBlockEncodedProjections: Int {
+        smallBlockProjection?.encodedProjections ?? 0
+    }
     /// The Qwen Gated-DeltaNet state is recurrent rather than rewindable KV,
     /// so this POC advertises verification only for the fused-head affine
     /// path without linear-attention layers.
@@ -1481,6 +1510,9 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
             : 1.0
         let t = tokens.count
         let emb = model.embedding
+        // Speculative verification keeps the per-token GEMV numerics its
+        // acceptance was written against.
+        let isSpeculativeVerification = speculativeTargetTokens != nil
 
         func encodeInt4Projection(commandBuffer: MTLCommandBuffer,
                                   family: PrefillProjectionFamily,
@@ -1507,6 +1539,27 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                               biasesOffset: Int(weights.biasOffset),
                               x: x, y: y,
                               m: tokenCount, n: rows, k: columns) {
+                return
+            }
+            // Opt-in: 2-31 token blocks read each weight row once per tile
+            // instead of once per token. A refused shape falls through.
+            if smallBlockPrefill.admits(family: family, tokenCount: tokenCount,
+                                        speculativeVerification: isSpeculativeVerification),
+               let smallBlockProjection,
+               smallBlockProjection.encode(commandBuffer: commandBuffer,
+                                           weights: weights.buffer,
+                                           weightsOffset: Int(weights.offset),
+                                           scales: weights.buffer,
+                                           scalesOffset: Int(weights.scaleOffset),
+                                           biases: weights.buffer,
+                                           biasesOffset: Int(weights.biasOffset),
+                                           x: x,
+                                           xStrideElements: xStrideElements,
+                                           y: y,
+                                           yStrideElements: yStrideElements,
+                                           rows: rows,
+                                           columns: columns,
+                                           tokenCount: tokenCount) {
                 return
             }
             if PrefillProjectionDispatchPolicy.selectedDispatch(for: family,
@@ -2181,7 +2234,10 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                     d: D,
                     intermediate: cfg.ffnIntermediateSize(layer: L),
                     xStrideElements: D,
-                    yStrideElements: D)
+                    yStrideElements: D,
+                    allowSmallBlock: smallBlockPrefill.admits(
+                        family: .shared, tokenCount: t,
+                        speculativeVerification: isSpeculativeVerification))
                 prefillRMS.encodeBF16W(
                     commandBuffer: cb,
                     x: scratch.h1,
@@ -2420,7 +2476,10 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                                                         d: D,
                                                         intermediate: cfg.ffnIntermediateSize(layer: L),
                                                         xStrideElements: D,
-                                                        yStrideElements: D)
+                                                        yStrideElements: D,
+                                                        allowSmallBlock: smallBlockPrefill.admits(
+                                                            family: .shared, tokenCount: t,
+                                                            speculativeVerification: isSpeculativeVerification))
                     if cfg.ffnSandwichNorms {
                         let postF1 = sharedProj.postF1!
                         prefillRMS.encodeBF16W(commandBuffer: sharedCB,

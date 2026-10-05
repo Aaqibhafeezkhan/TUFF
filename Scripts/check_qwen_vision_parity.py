@@ -1,7 +1,21 @@
 """Compare a Qwen vision capture with mlx-vlm using installed pack weights.
 
-The capture comes from Qwen38VisionParityTests; see docs/QWEN38_UPDATE_VALIDATION.md.
-Requires numpy and mlx-vlm. No downloads or model mutation are performed.
+Requires numpy, mlx-vlm and the pinned checkpoint's config.json saved
+locally. Reads installed packs only; nothing is downloaded or rewritten.
+First capture TUFF's projected features with the opt-in parity test, which
+the ordinary suite skips:
+
+    TUFF_QWEN_VISION_PARITY_IMAGE=/absolute/path/image.jpeg \
+    TUFF_QWEN_VISION_PARITY_MODEL=/absolute/path/qwen38-flash-next.gturbo \
+    TUFF_QWEN_VISION_PARITY_OUTPUT=/tmp/qwen-vision-capture \
+    Scripts/test.sh --filter Qwen38VisionParityTests
+
+    python3 Scripts/check_qwen_vision_parity.py \
+      /absolute/path/qwen38-flash-next.vision.gturbo \
+      /tmp/qwen-vision-capture /absolute/path/config.json
+
+The comparison fails if relative error reaches 0.08 or cosine similarity
+falls to 0.995. Recorded results are in docs/RELEASE_EVIDENCE.md.
 """
 import argparse
 import json

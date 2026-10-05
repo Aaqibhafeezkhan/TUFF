@@ -1,0 +1,166 @@
+name: Contributor checks
+
+# Deterministic, model-free checks for pull requests from anyone other than
+# the repository owner, including forks. The owner pushes to main directly and
+# tests personally, so pushes and owner-authored pull requests are not checked
+# automatically. Every job is gated on the pull request's author, never on the
+# actor, so the owner re-running a contributor's checks still runs them.
+#
+# Draft pull requests get repository checks and a debug compile of the package
+# and its tests. Ready pull requests also run the serial Swift tests, a release
+# build, packaging and the isolated updater fixtures.
+#
+# Fork code runs with a read-only token and no secrets. Nothing here signs,
+# publishes, labels, comments or merges. Passing means the pull request is
+# ready for the owner's review, not that it is approved.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  # Lets the owner or a collaborator check a branch deliberately, including an
+  # owner-authored pull request. Runs the full set.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: contributor-checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  repository:
+    name: Repository checks
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.user.login != github.repository_owner
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # Each check runs even if an earlier one failed, so one run reports
+      # every failing rule.
+      - name: Python harness regressions
+        if: success() || failure()
+        run: |
+          python3 Scripts/test_release_harnesses.py
+          python3 Scripts/test_benchmark_reporting.py
+          python3 Scripts/test_route_issue.py
+          python3 Scripts/test_release_recovery.py
+      - name: Ruby harness regressions
+        if: success() || failure()
+        run: |
+          ruby Scripts/test_benchmark_simple.rb
+          ruby Scripts/test_benchmark_v2.rb
+          ruby Scripts/test_github_config.rb
+      - name: GitHub configuration
+        if: success() || failure()
+        run: ruby Scripts/check_github_config.rb
+      - name: Tracked symlinks
+        if: success() || failure()
+        run: ruby Scripts/check_tracked_symlinks.rb
+      - name: Documentation links
+        if: success() || failure()
+        run: ruby Scripts/check_markdown_links.rb
+      - name: Brand assets
+        if: success() || failure()
+        run: ruby Scripts/check_brand_assets.rb
+      - name: App version
+        if: success() || failure()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ruby Scripts/check_app_version.rb
+
+  swift:
+    name: Swift build and tests
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.user.login != github.repository_owner
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Resolve packages
+        run: swift package resolve
+      - name: Compile package and tests (debug)
+        run: Scripts/test.sh --build-only
+      - name: Serial Swift tests
+        id: tests
+        if: github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft
+        run: |
+          set -o pipefail
+          Scripts/test.sh 2>&1 | tee "$RUNNER_TEMP/swift-test.log"
+      - name: Name failing tests
+        if: failure() && steps.tests.outcome == 'failure'
+        run: |
+          {
+            echo "### Failing Swift tests"
+            echo '```'
+            grep -E "✘|error: |failed" "$RUNNER_TEMP/swift-test.log" | grep -v "^warning" | head -60 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  package:
+    name: Release build, packaging and updater fixtures
+    if: >-
+      (github.event_name == 'workflow_dispatch' || github.event.pull_request.user.login != github.repository_owner)
+      && (github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft)
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # Ad-hoc signing and ephemeral update keys only. No production signing
+      # key exists in this repository's Actions configuration.
+      - name: Package the app
+        run: |
+          version="$(ruby -e 'puts File.read("Sources/TUFFModelCatalog/TUFFVersion.swift")[/static let current\s*=\s*"([^"]+)"/, 1]')"
+          Scripts/package_app.sh "$version" "$RUNNER_TEMP/package"
+      - name: Packaged app checks
+        run: python3 Scripts/test_packaging.py --app "$RUNNER_TEMP/package/TUFF.app"
+      - name: Isolated updater fixtures
+        run: python3 Scripts/test_updater_fixtures.py --app "$RUNNER_TEMP/package/TUFF.app"
+
+  summary:
+    name: Summary
+    if: always() && (github.event_name == 'workflow_dispatch' || github.event.pull_request.user.login != github.repository_owner)
+    needs: [repository, swift, package]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report what ran
+        env:
+          DRAFT: ${{ github.event_name != 'workflow_dispatch' && github.event.pull_request.draft }}
+          REPOSITORY: ${{ needs.repository.result }}
+          SWIFT: ${{ needs.swift.result }}
+          PACKAGE: ${{ needs.package.result }}
+        run: |
+          if [ "$DRAFT" = "true" ]; then
+            tests="not run: draft pull request"
+            package="skipped: draft pull request"
+          else
+            tests="$SWIFT"
+            package="$PACKAGE"
+          fi
+          {
+            echo "## Contributor checks"
+            echo
+            echo "| Check | Result |"
+            echo "| --- | --- |"
+            echo "| Repository checks (harness regressions, GitHub configuration, links, brand assets, version) | $REPOSITORY |"
+            echo "| Debug compile of the package and tests | $SWIFT |"
+            echo "| Serial Swift tests | $tests |"
+            echo "| Release build, packaging and updater fixtures | $package |"
+            echo
+            echo "No model packs, real-model runs or benchmarks run here; those stay with the owner."
+            if [ "$DRAFT" = "true" ]; then
+              echo "Mark the pull request ready for review to run the Swift tests and packaging."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          for result in "$REPOSITORY" "$SWIFT" "$PACKAGE"; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "At least one check did not pass. Open the failing job for the step and test names."; exit 1 ;;
+            esac
+          done
+          echo "Every check that ran passed. The pull request now waits for the owner's review; passing checks do not approve or merge it." >> "$GITHUB_STEP_SUMMARY"
