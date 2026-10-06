@@ -3,8 +3,48 @@
 Contributions of every size are welcome: bug fixes, Metal kernels, app design,
 accessibility, model support, tests, documentation, benchmark results and
 installation feedback. You do not need to be a Swift or Metal expert.
-Issues labelled [good first issue](https://github.com/rexmhall09/TUFF/labels/good%20first%20issue)
+Issues labelled [good first issue](https://github.com/rexmhall09/TUFF/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22)
 are a reasonable place to start.
+
+## Your first contribution
+
+Start with something you would like TUFF to do better: a bug you hit, a
+confusing instruction, a missing test, or an improvement you want to use.
+You can open a small pull request directly. An issue, assignment, or previous
+contribution is not required.
+
+If you want a suggested task, browse `good first issue` or
+[help wanted](https://github.com/rexmhall09/TUFF/labels/help%20wanted). These
+labels are optional starting points, and anyone can work on them. You can
+contribute even when no starter issues are open. A comment on
+an existing issue helps avoid duplicate work, but is not an approval step.
+
+Starter issues should explain the problem, point to relevant files, and say
+how to check the result. Ask for help if something is unclear, and open a
+draft pull request for early feedback. Documentation and model-free tests
+are useful contributions; you do not need to download a model.
+
+Labels describe the work, not a promised result:
+
+- `good first issue`: a small task with enough guidance to learn the process.
+  Maintainers apply this after scoping the task.
+- [new model](https://github.com/rexmhall09/TUFF/labels/new%20model): a proposed
+  model family or checkpoint. Agree on the support and validation plan first.
+- [performance](https://github.com/rexmhall09/TUFF/labels/performance): speed,
+  memory, or measurement work. A performance label does not mean a speedup has
+  been demonstrated.
+
+Use the issue forms to report a problem or suggest work. Maintainers can add
+labels during review; contributors do not need to apply labels themselves.
+
+## Other ways to help
+
+A useful contribution can be a clear bug report, reproduction steps, a
+documentation correction, help narrowing down another person's issue, or
+results from your Mac. Tell us what you tried and what would make TUFF more
+useful to you. Use [Discussions](https://github.com/rexmhall09/TUFF/discussions)
+for questions and early ideas, and issue forms for reproducible problems or
+concrete proposals. You can turn a report into a fix later.
 
 ## How a contribution goes in
 
@@ -23,6 +63,25 @@ Small fixes do not need an issue first. For a bug, the
 asks for what helps reproduce it; in the app, **Help > Report a Bug** fills in
 the version, Mac and model for you.
 
+## Review and follow-up
+
+Review focuses on whether the change solves the problem, how it behaves on
+failure, and whether it preserves compatibility and bounded memory. Keep
+pull requests small enough to follow. If part of the work needs a different
+approach, we will explain the reason and work through it in the pull request.
+Ask if feedback is unclear.
+
+Automated checks handle repeatable requirements; people review the approach
+and help resolve questions. You can open a draft before everything passes.
+If your hardware cannot run a check, say so and identify what still needs
+validation. Passing checks does not guarantee a merge, and larger proposals
+may need to be narrowed or declined.
+
+Useful contributions deserve a clear response and thanks. Returning
+contributors are welcome to take on larger work, suggest follow-up fixes,
+and help review or reproduce issues in areas they know. There is no required
+sequence of tasks or promise to become a maintainer.
+
 ## What the GitHub checks run
 
 | Pull request | Checks |
@@ -40,7 +99,7 @@ checkpoint works.
 
 Install Xcode with Swift 6.2 or newer, select it with `xcode-select`, and run
 `swift package resolve`. Use whatever editor, agent or review tools you like;
-the same checks apply to every pull request.
+the same checks apply to contributor pull requests.
 
 ```bash
 swift build -c release
@@ -110,10 +169,12 @@ not a performance claim.
   and loopback server.
 - `TUFF_PHASES=1` prints expert-cache and phase counters. They can overlap and
   do not add up to wall-clock time.
-- Two startup switches exist for comparisons: `TUFF_EXPERT_LOOKAHEAD=off`
-  disables expert lookahead, and `TUFF_SMALL_BLOCK_PREFILL=on` enables the
-  experimental small-block prefill path for Gemma 4 26B-A4B and Qwen3.8 Flash
-  Next. Neither is an app setting.
+- Three startup switches exist for comparisons: `TUFF_EXPERT_LOOKAHEAD=off`
+  disables expert lookahead, `TUFF_SMALL_BLOCK_PREFILL=on` enables the
+  experimental small-block prefill path, and `TUFF_SHARED_EXPERT_OVERLAP=on`
+  lets prefill run the shared expert while the first routed expert tile is
+  prepared. The last two apply only to Gemma 4 26B-A4B and Qwen3.8 Flash Next.
+  None is an app setting.
 
 The [performance report form](https://github.com/rexmhall09/TUFF/issues/new?template=benchmark.yml)
 is the place to share results.
@@ -126,10 +187,31 @@ have not checked.
 
 ## AI tools
 
-Use Claude, Codex, both or neither. You are responsible for what you submit:
-be able to explain it, and do not include invented test results, unreviewed
-generated output, credentials or private prompts. Check licenses before adding
-generated assets, model files or third-party material.
+AI-assisted contributions are welcome. Use Claude, Codex, another agent, or
+no AI tools. Agents can help investigate, implement, write tests, and review
+a change. You remain responsible for the pull request.
+
+1. Read the relevant code and tests before changing them. Have your agent
+   inspect the existing implementation, its callers, and its constraints
+   before proposing a fix. Check its explanation against the code.
+2. Keep the change focused. You should understand the behavior before and
+   after, why the approach fits TUFF, and how failures are handled.
+3. Personally review every changed line and the surrounding code before
+   submitting. An agent's review can help, but does not replace your own
+   review. Remove changes you cannot explain or have not checked.
+4. Check the actual test output. Report commands that ran, results, and what
+   you could not test. An agent saying tests passed is not test evidence.
+   Missing hardware is fine to disclose; invented results are not.
+5. Explain the problem, approach, and evidence in the pull request so another
+   person can review it. Stay involved in answering questions and revising it.
+
+You do not need to understand the entire repository to fix one thing. Learn
+the part you touch and the assumptions it relies on. Ask questions when you
+get stuck. No particular agent, prompt, paid service, or local review tool is
+required. The same code and evidence standards apply to every contribution.
+
+Keep credentials, private prompts and model weights out of submissions.
+Check licenses before adding generated assets or third-party material.
 
 By contributing, you agree that your contribution is licensed under the
 repository's [Apache License 2.0](LICENSE).

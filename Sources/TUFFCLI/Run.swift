@@ -183,6 +183,9 @@ public func run(args: Args,
                 "small_block_prefill": SmallBlockPrefillPolicy.resolvedSetting(
                     environment: ProcessInfo.processInfo.environment,
                     variant: architecture.variant),
+                "shared_expert_overlap": SharedExpertOverlapPolicy.resolvedSetting(
+                    environment: ProcessInfo.processInfo.environment,
+                    variant: architecture.variant),
                 "prefill": runtime.prefillPolicy.rawValue,
                 "prefill_chunk_tokens": String(runtime.prefillChunkTokens),
                 "prefill_attention_path": runtime.prefillAttentionPath.rawValue,

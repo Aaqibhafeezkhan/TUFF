@@ -59,6 +59,8 @@ extension RawCompletionLoopTests {
     }
     #expect(cancelled.reason == .cancelled)
     #expect(cancelled.newTokens >= 2)
+    #expect(cancelled.uncommittedBoundaryTokenIDs == [idA])
+    #expect(cancelled.undeliveredBoundaryTokenIDs.isEmpty)
 
     // A real stop string still reports itself, so the two stay distinguishable.
     var config = GenerationConfig(maxNewTokens: 100_000, temperature: 0)

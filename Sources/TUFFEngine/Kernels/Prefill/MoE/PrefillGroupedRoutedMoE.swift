@@ -325,6 +325,7 @@ public struct PrefillStreamedTileBinding: Sendable, Equatable {
 enum PrefillGroupedRoutedMoEError: Error, Equatable, CustomStringConvertible {
     case invalidStreamedTileBinding(String)
     case allocationFailed(String)
+    case encoderUnavailable(String)
 
     public var description: String {
         switch self {
@@ -332,6 +333,8 @@ enum PrefillGroupedRoutedMoEError: Error, Equatable, CustomStringConvertible {
             return "invalid streamed tile binding: \(reason)"
         case .allocationFailed(let label):
             return "failed to allocate \(label)"
+        case .encoderUnavailable(let phase):
+            return "could not create a compute encoder for \(phase)"
         }
     }
 }
@@ -420,10 +423,21 @@ final class PrefillGroupedRoutedMoE {
                                       argumentBuffer: PrefillStreamedTileArgumentBuffer,
                                       binding: PrefillStreamedTileBinding,
                                       params: PrefillGroupedRoutedMoEStreamedParams,
-                                      pairMicrobatchRows: Int = 32) -> Int {
-        guard params.pairCount > 0,
-              params.liveExpertCount == UInt32(binding.views.count),
-              pairMicrobatchRows > 0 else { return 0 }
+                                      pairMicrobatchRows: Int = 32,
+                                      makeEncoder: (MTLCommandBuffer) -> MTLComputeCommandEncoder? = {
+                                          $0.makeComputeCommandEncoder()
+                                      }) throws -> Int {
+        // Skipping a phase would leave stale route partials and still look
+        // like progress, so every refusal here is an error.
+        guard params.pairCount > 0 else { return 0 }
+        guard params.liveExpertCount == UInt32(binding.views.count) else {
+            throw PrefillGroupedRoutedMoEError.invalidStreamedTileBinding(
+                "params name \(params.liveExpertCount) experts, binding has \(binding.views.count)")
+        }
+        guard pairMicrobatchRows > 0 else {
+            throw PrefillGroupedRoutedMoEError.invalidStreamedTileBinding(
+                "pair microbatch rows must be positive")
+        }
         var consumed: UInt32 = 0
         var microbatchCount = 0
         while consumed < params.pairCount {
@@ -431,7 +445,11 @@ final class PrefillGroupedRoutedMoE {
             p.pairStart = params.pairStart + consumed
             p.pairCount = min(UInt32(pairMicrobatchRows), params.pairCount - consumed)
 
-            if let enc = commandBuffer.makeComputeCommandEncoder() {
+            do {
+                guard let enc = makeEncoder(commandBuffer) else {
+                    throw PrefillGroupedRoutedMoEError.encoderUnavailable(
+                        "routed gate/up phase")
+                }
                 enc.setComputePipelineState(batchedPhase1PSO)
                 enc.setBuffer(hidden, offset: hiddenOffset, index: PrefillGroupedRoutedMoEBufferIndex.hidden)
                 enc.setBuffer(sortedPairs, offset: sortedPairsOffset, index: PrefillGroupedRoutedMoEBufferIndex.sortedPairs)
@@ -452,7 +470,11 @@ final class PrefillGroupedRoutedMoE {
                 enc.endEncoding()
             }
 
-            if let enc = commandBuffer.makeComputeCommandEncoder() {
+            do {
+                guard let enc = makeEncoder(commandBuffer) else {
+                    throw PrefillGroupedRoutedMoEError.encoderUnavailable(
+                        "routed down phase")
+                }
                 enc.setComputePipelineState(batchedDownPSO)
                 enc.setBuffer(sortedPairs, offset: sortedPairsOffset, index: PrefillGroupedRoutedMoEBufferIndex.sortedPairs)
                 enc.setBuffer(routePartials, offset: routePartialsOffset,

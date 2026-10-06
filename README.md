@@ -262,7 +262,7 @@ swift build -c release
 Build the complete arm64 app, ZIP and checksum with:
 
 ```sh
-Scripts/package_app.sh 7.3.0 dist/v7.3.0
+Scripts/package_app.sh 7.3.1 dist/v7.3.1
 ```
 
 The version must match `Sources/TUFFModelCatalog/TUFFVersion.swift`.
@@ -331,9 +331,13 @@ alone does not qualify a checkpoint.
 
 Code, design, documentation, tests and bug reports are welcome. Open a pull
 request from a fork; GitHub runs the model-free checks and I review and merge.
-[CONTRIBUTING.md](CONTRIBUTING.md) has the details. Use whichever tools you
-like, AI included, as long as you can stand behind the result. I use AI while
-building TUFF and take responsibility for the work I publish.
+Start with a problem you want to fix, or browse the optional
+[good first issues](https://github.com/rexmhall09/TUFF/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22).
+Small fixes do not need an issue first, and model-free contributions do not
+need a model download. [CONTRIBUTING.md](CONTRIBUTING.md) explains the process
+and how to ask for early feedback. AI tools are welcome; understand the code
+you change and personally review every changed line. I use AI while building
+TUFF and take responsibility for the work I publish.
 
 TUFF began as a fork of
 [drumih/turbo-fieldfare](https://github.com/drumih/turbo-fieldfare) by Andrey

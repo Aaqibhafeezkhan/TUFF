@@ -8,6 +8,8 @@ final class GenerationTaskRegistry: Sendable {
     private struct Entry: Sendable {
         let id: UUID
         var task: Task<Void, Never>?
+        var cancellationRequested = false
+        var idleWaiters: [CheckedContinuation<Void, Never>] = []
     }
 
     private let state = Mutex<Entry?>(nil)
@@ -24,7 +26,7 @@ final class GenerationTaskRegistry: Sendable {
         let shouldCancel = state.withLock { entry -> Bool in
             guard entry?.id == id else { return true }
             entry?.task = task
-            return false
+            return entry?.cancellationRequested == true
         }
         if shouldCancel { task.cancel() }
     }
@@ -32,21 +34,38 @@ final class GenerationTaskRegistry: Sendable {
     func take(_ id: UUID) -> Task<Void, Never>? {
         state.withLock { entry in
             guard entry?.id == id else { return nil }
-            defer { entry = nil }
+            // Cancellation does not mean the producer has finished. Retain
+            // its reservation until clear() acknowledges all cleanup.
+            entry?.cancellationRequested = true
             return entry?.task
         }
     }
 
     func takeCurrent() -> Task<Void, Never>? {
         state.withLock { entry in
-            defer { entry = nil }
+            entry?.cancellationRequested = true
             return entry?.task
         }
     }
 
     func clear(_ id: UUID) {
-        state.withLock { entry in
-            if entry?.id == id { entry = nil }
+        let waiters = state.withLock { entry -> [CheckedContinuation<Void, Never>] in
+            guard entry?.id == id else { return [] }
+            let waiters = entry?.idleWaiters ?? []
+            entry = nil
+            return waiters
+        }
+        for waiter in waiters { waiter.resume() }
+    }
+
+    func waitUntilIdle() async {
+        await withCheckedContinuation { continuation in
+            let alreadyIdle = state.withLock { entry -> Bool in
+                guard entry != nil else { return true }
+                entry?.idleWaiters.append(continuation)
+                return false
+            }
+            if alreadyIdle { continuation.resume() }
         }
     }
 
@@ -86,7 +105,15 @@ public final class RealInferenceClient: AppModelLifecycleClient, @unchecked Send
     }
 
     public func unload() async {
+        cancel()
+        await waitUntilIdle()
         await session.unload()
+    }
+
+    /// Waits for the producer's cleanup, including pending GPU and prefetch
+    /// work. A cancelled stream consumer may finish before its producer does.
+    public func waitUntilIdle() async {
+        await generationTasks.waitUntilIdle()
     }
 
     public func generate(_ request: AppGenerationRequest) -> AsyncThrowingStream<AppInferenceEvent, Error> {

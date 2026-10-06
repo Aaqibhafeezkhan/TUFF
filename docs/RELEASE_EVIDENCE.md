@@ -2,8 +2,8 @@
 
 What each recent release was checked against, and the limits that still apply.
 Release notes, archives, checksums and signed update feeds are on the
-[releases page](https://github.com/rexmhall09/TUFF/releases). The latest
-packaged benchmark run is in the [model validation report](MODEL_VALIDATION.md).
+[releases page](https://github.com/rexmhall09/TUFF/releases). Published model-lineup
+results are in the [model validation report](MODEL_VALIDATION.md).
 Earlier, longer write-ups remain in Git history at each release tag.
 
 All real-model checks ran on one 16 GB M2 MacBook Air (Mac14,2) with macOS
@@ -12,6 +12,124 @@ checks confirm that a model runs and answers correctly; they do not measure
 answer quality or sustained speed. Timing on this fanless Mac varies widely
 between identical runs, and filesystem caches, swap and host activity were
 not controlled.
+
+## 7.3.1 (October 5, 2026)
+
+Structured-output boundary fixes, decode-service disconnect cleanup, safer prefill failure cleanup and contributor guidance.
+
+- Independent review fixed cancellation after a suspended expert fetch and a producer/consumer lifetime gap. The service now waits for producer cleanup before model unloading or the next command. Regression tests cover both overlap schedules, delayed cleanup and reuse.
+- The focused regressions passed 96 Swift tests. `Scripts/check.sh` passed 1,777 Swift tests across 12 products, 40 Python tests, 14 Ruby tests, repository checks, a release build, packaging and every isolated updater fixture.
+- Structured-output tests drive the production server orchestration and real tokenizer fixtures for Gemma, Qwen, MiniMax and Harmony. Exact-limit tool closures, withheld stop tokens, ordinary text, incomplete calls and stop strings passed. Raw callback cancellation has no withheld boundary token.
+- Prefill tests cover exact logits and greedy output, encoder failures, fetch/binding failures, cancellation, submitted-work drains and runner reuse. Speculative overlap exclusion and all catalog variants' switch policy passed. Real speculative failure cleanup was not exercised.
+- Transport tests use real pipes and a fake inference producer. They cover EOF, failed output, queued work, a registration race, explicit cancel, completion, delayed producer cleanup and shutdown.
+- First-time contribution guidance is optional and supports useful fixes, model-free work and early draft PRs. AI tools are welcome, with personal review and an understanding of the affected code. GitHub Issues and Discussions were confirmed enabled. Starter issues [#5](https://github.com/rexmhall09/TUFF/issues/5) and [#6](https://github.com/rexmhall09/TUFF/issues/6) have scoped model-free tasks. New model reports receive the `new model` label. Configuration checks passed. No live contributor PR was created to exercise Actions, and there is no owner push CI.
+- Visible app UI is unchanged. No screenshot was taken.
+
+### Qualification and decision
+
+**Shared-expert overlap remains disabled by default.** Use `TUFF_SHARED_EXPERT_OVERLAP=on` before runner creation to enable the experiment for Gemma 4 26B-A4B or Qwen3.8 Flash Next. CLI gains and losses varied by repetition and workload. Flash Next long greedy requests regressed in all three pairs, and Gemma short sampled prefill regressed in all three. Other results included wins within the observed variation. There is no release speedup claim.
+
+All 48 CLI observations and 48 interface requests passed. The 24 CLI output pairs were byte-identical; all 24 app and HTTP output pairs matched. All ten real packaged cancellation, disconnect and tool checks passed. No CLI expert-read failures were reported.
+
+Both variants used the same packaged 7.3.1 binaries on the 16 GB M2 MacBook Air. The GUI and Background API were closed. No builds or tests ran during measurements. All model processes ran sequentially under `caffeinate -i`, using three alternating on/off pairs per workload.
+
+CLI prompts were 36/1,082 tokens for Flash Next short/long and 36/1,109 for Gemma. Chunks were 2,048 for Flash Next and 512 for Gemma; slots were 32 and 16. Both greedy and seeded sampled modes generated up to 32 tokens. The small-block experiment was off in both variants. No chunk-32 matrix was repeated.
+
+App-service requests used tiny prompts in fresh processes. HTTP used a short capital-of-France prompt; its first request includes lazy model loading and its next request may reuse state. These are interface smoke workloads, not long-context HTTP performance results. App and server timings should not be compared directly with CLI process time.
+
+Filesystem caches, swap and host activity were uncontrolled and recorded by the harness. Successive attempts are repeated OS-cache observations. Only these two installed checkpoints on this Mac were measured. Other catalog models, images, real speculative decoding and other Macs were not requalified. A model load already in progress can finish before a disconnected service exits, and an explicit cancel before generation registration remains a pre-existing no-op.
+
+Packaged CLI SHA-256: `b1ec58fd6d3899ab98439fc6b111d260384f9cc34fbfb47092b3d561be559366`. Shader resources SHA-256: `1d807e27786ce7a20a0d19fe748706d20e236ae0e9dc08eef39d65df36a68891`. The harness recorded base HEAD `d8b766432faebe7a9565169d0b27a44391fe1f0d` because the reviewed changes were uncommitted during qualification. The aggregate SHA-256 of the sorted 718-file source, script and test hash map was `2045b4315306c333362e90eef5f8f86115373534952337ba54e3492fef4223db`. The released binaries are the binaries measured here.
+
+Reproduction used `Scripts/benchmark_inference.py` with the same packaged CLI for `--cli` and `--comparison-cli`, `--models qwen38-flash-next,gemma4 --shapes short,long --modes greedy,sampled --repeat 3 --shared-overlap on --comparison-shared-overlap off --small-block off --comparison-small-block off`. Interfaces used `Scripts/validate_release_interfaces.py` with the same app for both builds, `--shapes tiny --interfaces app,server --repeat 1 --comparison-repeat 3` and the same model, mode and switch arguments. An external observer sampled the packaged server process for the HTTP RSS measurements.
+
+### Every CLI repetition
+
+Each paired cell is **off / on**. Times are seconds and memory is MiB. Process time includes startup and model loading. Prefill and decode are CLI footer measurements. RSS and footprint are separate peak counters from `/usr/bin/time -l`. Every pair passed and had byte-identical output.
+
+| Model | Shape | Mode | Pair | Prompt/new tokens | Prefill | Decode | Tokens/s | Process time | Peak RSS | Peak footprint |
+| --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| qwen38-flash-next | short | greedy | 1 | 36/32 | 37.17 / 35.47 | 21.25 / 15.92 | 1.506 / 2.010 | 63.57 / 56.12 | 2066.5 / 2788.8 | 5402.3 / 5400.3 |
+| qwen38-flash-next | short | greedy | 2 | 36/32 | 27.30 / 29.81 | 14.59 / 15.05 | 2.194 / 2.127 | 45.73 / 49.15 | 3059.3 / 2818.8 | 5588.5 / 5402.6 |
+| qwen38-flash-next | short | greedy | 3 | 36/32 | 29.81 / 30.96 | 15.89 / 19.70 | 2.014 / 1.624 | 49.78 / 54.54 | 2760.7 / 2135.0 | 5402.4 / 5583.5 |
+| qwen38-flash-next | short | sampled | 1 | 36/32 | 29.76 / 28.24 | 14.19 / 14.62 | 2.255 / 2.189 | 48.16 / 46.84 | 3005.1 / 2921.7 | 5401.6 / 5582.5 |
+| qwen38-flash-next | short | sampled | 2 | 36/32 | 30.66 / 27.39 | 59.10 / 14.21 | 0.541 / 2.252 | 93.78 / 45.48 | 2059.4 / 3032.5 | 5400.8 / 5583.5 |
+| qwen38-flash-next | short | sampled | 3 | 36/32 | 31.20 / 29.96 | 17.72 / 16.92 | 1.806 / 1.892 | 53.78 / 51.75 | 2686.8 / 2845.4 | 5400.4 / 5574.8 |
+| qwen38-flash-next | long | greedy | 1 | 1082/32 | 59.35 / 56.97 | 34.91 / 43.05 | 0.917 / 0.743 | 98.94 / 105.81 | 1651.2 / 1587.8 | 5407.2 / 5408.2 |
+| qwen38-flash-next | long | greedy | 2 | 1082/32 | 47.33 / 52.06 | 23.41 / 34.71 | 1.367 / 0.922 | 77.00 / 91.65 | 2322.1 / 1617.1 | 5406.3 / 5404.2 |
+| qwen38-flash-next | long | greedy | 3 | 1082/32 | 46.00 / 47.32 | 18.21 / 19.19 | 1.758 / 1.668 | 69.54 / 72.41 | 2725.5 / 2409.8 | 5405.3 / 5406.9 |
+| qwen38-flash-next | long | sampled | 1 | 1082/32 | 50.36 / 47.41 | 19.75 / 18.21 | 1.620 / 1.758 | 75.30 / 70.63 | 2557.4 / 2784.9 | 5407.2 / 5407.2 |
+| qwen38-flash-next | long | sampled | 2 | 1082/32 | 45.99 / 46.45 | 20.76 / 17.80 | 1.541 / 1.798 | 72.30 / 69.78 | 2747.8 / 2772.9 | 5404.2 / 5404.3 |
+| qwen38-flash-next | long | sampled | 3 | 1082/32 | 44.82 / 46.72 | 18.43 / 20.63 | 1.736 / 1.551 | 67.63 / 72.01 | 2684.2 / 2604.7 | 5404.4 / 5603.8 |
+| gemma4 | short | greedy | 1 | 36/32 | 4.89 / 5.05 | 3.55 / 3.59 | 9.023 / 8.911 | 11.52 / 12.05 | 1847.7 / 1812.8 | 2182.6 / 2176.8 |
+| gemma4 | short | greedy | 2 | 36/32 | 4.85 / 5.15 | 3.78 / 3.67 | 8.464 / 8.720 | 11.64 / 12.21 | 1756.9 / 1752.8 | 2180.3 / 2175.7 |
+| gemma4 | short | greedy | 3 | 36/32 | 5.09 / 5.03 | 3.90 / 3.80 | 8.196 / 8.422 | 11.93 / 11.84 | 1750.5 / 1734.7 | 2176.7 / 2176.7 |
+| gemma4 | short | sampled | 1 | 36/32 | 4.97 / 5.12 | 3.93 / 3.98 | 8.145 / 8.049 | 11.95 / 12.08 | 1603.7 / 1508.9 | 2187.0 / 2186.0 |
+| gemma4 | short | sampled | 2 | 36/32 | 4.86 / 5.10 | 3.93 / 3.94 | 8.152 / 8.114 | 11.85 / 11.98 | 1589.8 / 1619.3 | 2185.8 / 2185.9 |
+| gemma4 | short | sampled | 3 | 36/32 | 5.04 / 5.10 | 3.91 / 3.89 | 8.180 / 8.220 | 11.91 / 11.94 | 1514.6 / 1531.9 | 2181.4 / 2181.4 |
+| gemma4 | long | greedy | 1 | 1109/32 | 16.34 / 16.61 | 4.26 / 4.63 | 7.503 / 6.908 | 23.57 / 24.45 | 1572.4 / 1531.0 | 2182.7 / 2185.6 |
+| gemma4 | long | greedy | 2 | 1109/32 | 18.68 / 17.99 | 5.02 / 4.66 | 6.373 / 6.865 | 26.90 / 26.57 | 1534.1 / 1543.2 | 2186.3 / 2181.0 |
+| gemma4 | long | greedy | 3 | 1109/32 | 17.55 / 16.81 | 4.23 / 4.24 | 7.568 / 7.551 | 25.69 / 24.51 | 1570.6 / 1553.3 | 2183.0 / 2180.8 |
+| gemma4 | long | sampled | 1 | 1109/32 | 18.22 / 16.90 | 4.52 / 4.59 | 7.084 / 6.976 | 25.93 / 25.01 | 1524.0 / 1591.4 | 2183.9 / 2186.3 |
+| gemma4 | long | sampled | 2 | 1109/32 | 16.82 / 16.79 | 4.42 / 4.52 | 7.242 / 7.084 | 24.39 / 24.46 | 1560.5 / 1502.0 | 2181.7 / 2181.6 |
+| gemma4 | long | sampled | 3 | 1109/32 | 17.93 / 16.44 | 4.42 / 4.81 | 7.245 / 6.657 | 25.45 / 24.45 | 1552.6 / 1539.1 | 2187.5 / 2182.5 |
+
+### Every app-service repetition
+
+Off / on. Request latency excludes loading and includes IPC. Peak footprint is the terminal event counter. Each request used a fresh service and cold runner, with the trusted-install setting. Every pair passed and matched visible output.
+
+| Model | Mode | Pair | Prompt/new tokens | Prefill (s) | Decode (s) | Tokens/s | Request (s) | Load (s) | Peak footprint (MiB) |
+| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| qwen38-flash-next | greedy | 1 | 22/32 | 10.19 / 8.61 | 16.84 / 14.76 | 1.900 / 2.168 | 27.04 / 23.38 | 3.87 / 4.29 | 5393.1 / 5557.4 |
+| qwen38-flash-next | sampled | 1 | 22/32 | 9.25 / 8.03 | 15.39 / 13.99 | 2.079 / 2.287 | 24.65 / 22.02 | 3.71 / 4.14 | 5395.8 / 5470.7 |
+| qwen38-flash-next | greedy | 2 | 22/32 | 8.37 / 8.57 | 15.54 / 15.42 | 2.059 / 2.075 | 23.92 / 24.00 | 3.94 / 4.26 | 5567.3 / 5567.3 |
+| qwen38-flash-next | sampled | 2 | 22/32 | 8.30 / 8.10 | 13.88 / 13.82 | 2.305 / 2.315 | 22.19 / 21.92 | 3.96 / 4.26 | 5393.2 / 5395.9 |
+| qwen38-flash-next | greedy | 3 | 22/32 | 8.28 / 8.68 | 14.84 / 14.88 | 2.156 / 2.150 | 23.13 / 23.57 | 4.12 / 4.13 | 5570.4 / 5395.8 |
+| qwen38-flash-next | sampled | 3 | 22/32 | 8.71 / 8.27 | 15.16 / 14.46 | 2.111 / 2.213 | 23.88 / 22.74 | 4.56 / 4.16 | 5557.7 / 5567.4 |
+| gemma4 | greedy | 1 | 23/32 | 2.74 / 2.29 | 3.10 / 3.61 | 10.337 / 8.862 | 5.84 / 5.90 | 2.78 / 2.78 | 2162.3 / 2166.8 |
+| gemma4 | sampled | 1 | 23/32 | 2.16 / 2.11 | 3.26 / 3.63 | 9.817 / 8.826 | 5.42 / 5.74 | 3.13 / 2.75 | 2163.1 / 2167.8 |
+| gemma4 | greedy | 2 | 23/32 | 2.42 / 2.42 | 3.65 / 3.71 | 8.756 / 8.629 | 6.07 / 6.13 | 2.70 / 2.92 | 2168.8 / 2163.2 |
+| gemma4 | sampled | 2 | 23/32 | 2.49 / 2.33 | 3.73 / 3.85 | 8.584 / 8.309 | 6.22 / 6.18 | 2.70 / 2.70 | 2167.9 / 2170.8 |
+| gemma4 | greedy | 3 | 23/32 | 2.53 / 2.40 | 3.74 / 3.87 | 8.557 / 8.276 | 6.27 / 6.27 | 2.74 / 2.76 | 2167.0 / 2170.1 |
+| gemma4 | sampled | 3 | 23/32 | 2.49 / 2.39 | 3.92 / 4.11 | 8.168 / 7.788 | 6.41 / 6.50 | 3.07 / 2.81 | 2170.6 / 2171.0 |
+
+### Every HTTP repetition
+
+Off / on. Greedy is the first request in each fresh server and includes lazy model loading; sampled follows it. The server uses catalog settings. HTTP exposes no separate prefill/decode timing, so those measurements are unavailable. RSS was sampled externally every 0.25 seconds during each request. These are highest observed request RSS values, not exact peaks or footprint counters. Every pair passed and matched the full assistant message.
+
+| Model | Mode | Pair | Prompt/new tokens | Cached prompt tokens | Request (s) | Observed RSS (MiB) |
+| --- | --- | ---: | --- | --- | ---: | ---: |
+| qwen38-flash-next | greedy | 1 | 25/8 | 0 / 0 | 20.01 / 17.66 | 2517.5 / 3166.5 |
+| qwen38-flash-next | sampled | 1 | 25/8 | 0 / 0 | 17.12 / 15.53 | 1647.6 / 1607.8 |
+| qwen38-flash-next | greedy | 2 | 25/8 | 0 / 0 | 18.93 / 18.12 | 2704.8 / 2829.5 |
+| qwen38-flash-next | sampled | 2 | 25/8 | 0 / 0 | 17.01 / 16.18 | 1636.5 / 2450.8 |
+| qwen38-flash-next | greedy | 3 | 25/8 | 0 / 0 | 18.29 / 19.85 | 2718.1 / 2659.4 |
+| qwen38-flash-next | sampled | 3 | 25/8 | 0 / 0 | 12.68 / 16.19 | 2314.6 / 1710.6 |
+| gemma4 | greedy | 1 | 26/8 | 0 / 0 | 6.39 / 6.55 | 1772.5 / 1711.6 |
+| gemma4 | sampled | 1 | 26/8 | 0 / 0 | 3.04 / 3.28 | 1795.0 / 1613.8 |
+| gemma4 | greedy | 2 | 26/8 | 0 / 0 | 6.70 / 6.15 | 1525.5 / 1683.5 |
+| gemma4 | sampled | 2 | 26/8 | 0 / 0 | 3.23 / 3.19 | 1538.5 / 1690.1 |
+| gemma4 | greedy | 3 | 26/8 | 0 / 0 | 6.63 / 6.43 | 1535.2 / 1646.8 |
+| gemma4 | sampled | 3 | 26/8 | 0 / 0 | 3.34 / 3.13 | 1535.3 / 1553.9 |
+
+### Packaged cancellation, disconnect and tool checks
+
+All checks below used the packaged binaries, one process at a time, with overlap on and small-block prefill off. Cancel was issued after visible output began. Input disconnect included a queued request that was discarded. Output disconnect closed the reader while generating. HTTP disconnect closed an active SSE response and then made another request. Tool checks called `read(README.md)` and then answered with the supplied tool result.
+
+| Model | Check | Result | Recorded time (s) |
+| --- | --- | --- | ---: |
+| gemma4 | cancel-and-reuse | Passed | 3.78 |
+| gemma4 | input-disconnect | Passed | 0.38 |
+| gemma4 | output-disconnect | Passed | 0.35 |
+| gemma4 | http-tool-and-reply | Passed | 12.94 |
+| gemma4 | http-stream-disconnect-and-reuse | Passed | 4.78 |
+| qwen38-flash-next | cancel-and-reuse | Passed | 22.63 |
+| qwen38-flash-next | input-disconnect | Passed | 2.49 |
+| qwen38-flash-next | output-disconnect | Passed | 2.81 |
+| qwen38-flash-next | http-tool-and-reply | Passed | 120.77 |
+| qwen38-flash-next | http-stream-disconnect-and-reuse | Passed | 17.22 |
+
+For cancel-and-reuse, the recorded time includes cancellation, the next response and shutdown. Disconnect times measure interrupt to process exit. Tool time covers both tool requests; HTTP reuse time covers only the follow-up response. These timings are smoke observations, not benchmarks.
 
 ## 7.3.0 (October 5, 2026)
 

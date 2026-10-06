@@ -53,6 +53,71 @@ import TUFFEngine
         registry.clear(next)
     }
 
+    @Test func generationRegistryRetainsCancelledProducerUntilCleanup() async {
+        let registry = GenerationTaskRegistry()
+        let id = UUID()
+        let next = UUID()
+        let cleanup = RegistryCleanupGate()
+        #expect(registry.reserve(id))
+        let producer = Task<Void, Never> {
+            await cleanup.wait()
+            registry.clear(id)
+        }
+        registry.attach(producer, to: id)
+        registry.takeCurrent()?.cancel()
+
+        #expect(producer.isCancelled)
+        #expect(!registry.reserve(next))
+        let drain = Task { await registry.waitUntilIdle() }
+        // Only the producer's acknowledgement releases the reservation.
+        registry.clear(next)
+        #expect(!registry.reserve(next))
+        await cleanup.open()
+        await producer.value
+        await drain.value
+        #expect(registry.reserve(next))
+        registry.clear(next)
+    }
+
+    @Test func generationRegistryRemembersCancellationBeforeTaskAttachment() async {
+        let registry = GenerationTaskRegistry()
+        let id = UUID()
+        let next = UUID()
+        let cleanup = RegistryCleanupGate()
+        #expect(registry.reserve(id))
+        #expect(registry.takeCurrent() == nil)
+        let drain = Task { await registry.waitUntilIdle() }
+        let producer = Task<Void, Never> {
+            await cleanup.wait()
+            registry.clear(id)
+        }
+        registry.attach(producer, to: id)
+
+        #expect(producer.isCancelled)
+        #expect(!registry.reserve(next))
+        await cleanup.open()
+        await producer.value
+        await drain.value
+        #expect(registry.reserve(next))
+        registry.clear(next)
+    }
+
+    private actor RegistryCleanupGate {
+        private var opened = false
+        private var waiter: CheckedContinuation<Void, Never>?
+
+        func wait() async {
+            guard !opened else { return }
+            await withCheckedContinuation { waiter = $0 }
+        }
+
+        func open() {
+            opened = true
+            waiter?.resume()
+            waiter = nil
+        }
+    }
+
     @Test func generationRunnerPolicyKeepsFusionHeadForPureGreedyChunkedPrefill() {
         let request = AppGenerationRequest(
             modelDirectory: URL(fileURLWithPath: "/tmp/model.gturbo"),

@@ -1038,120 +1038,26 @@ public actor ServerModelSession: ServerInferenceBackend {
         let decoder = Self.assistantDecoder(
             tokenizer: tokenizer, tools: request.tools,
             reasoning: request.reasoning)
-        let state = ServerDecodeState(
-            stopMatcher: StreamingStopMatcher(stops: request.generationConfig.stopStrings))
-
-        let handle: @Sendable ([StructuredAssistantEvent]) -> Void = { events in
-            for event in events {
-                switch event {
-                case .content(let text):
-                    let visible = state.stopMatcher.push(text)
-                    if !visible.isEmpty {
-                        state.content += visible
-                        onEvent(.content(visible))
-                    }
-                    if state.stopMatcher.isStopped { state.shouldStop = true }
-                case .thinking:
-                    // The Chat Completions endpoint does not expose a thought
-                    // channel. It remains separate from visible content.
-                    break
-                case .toolCall(let call):
-                    state.calls.append(call)
-                    onEvent(.toolCall(call))
-                }
-            }
-        }
 
         completionStarted = true
-        let result = try await runRawCompletion(
+        let decoded = try await Self.decodeStructuredCompletion(
             producer: runner,
             tokenizer: tokenizer,
-            promptIds: effectivePromptIDs,
+            decoder: decoder,
+            renderedPromptIDs: renderedPromptIDs,
+            effectivePromptIDs: effectivePromptIDs,
             multimodalInput: multimodalInput,
             config: config,
+            stopStrings: request.generationConfig.stopStrings,
+            needsToolTemplate: needsToolTemplate,
             context: context,
             scratch: scratch,
             prefillConfig: prefillConfig,
             start: completionStart,
-            shouldStop: { state.shouldStop }) { @Sendable progress in
-                guard state.decodingError == nil else { return }
-                do {
-                    switch progress {
-                    case .prefill:
-                        break
-                    case .token(_, let tokenID, let delta):
-                        let events = try decoder.consume(
-                            tokenID: tokenID, delta: delta)
-                        handle(events)
-                    case .tail(let text):
-                        // The flush tail is not tied to a token ID, so it must
-                        // go through the decoder's channel state explicitly;
-                        // appending it directly would leak text held back
-                        // inside the thought channel or a tool call.
-                        let events = try decoder.consumeTail(text)
-                        handle(events)
-                    }
-                } catch {
-                    state.decodingError = error
-                    state.shouldStop = true
-                }
-        }
-        // Stop tokens are intentionally not emitted as `.token` progress by
-        // the raw loop. Most dialects finish their structure before that
-        // boundary; Harmony's `<|call|>` is both the tool-payload terminator and
-        // a stop token, so the structured decoder must consume the recorded
-        // boundary explicitly before `finish()` validates its state.
-        if state.decodingError == nil {
-            do {
-                for tokenID in result.uncommittedBoundaryTokenIDs {
-                    handle(try decoder.consume(tokenID: tokenID, delta: ""))
-                }
-            } catch {
-                state.decodingError = error
-            }
-        }
-        func structuredFailure(
-            kind: StructuredOutputFailureKind,
-            cause: StructuredOutputFailureCause
-        ) -> StructuredOutputFailure {
-            StructuredOutputFailure(
-                kind: kind,
-                cause: cause,
-                diagnostics: StructuredOutputFailureDiagnostics(
-                    renderedPromptIDs: renderedPromptIDs,
-                    effectivePromptIDs: effectivePromptIDs,
-                    result: result,
-                    maxCompletionTokens: config.maxNewTokens,
-                    decodedCalls: state.calls.count,
-                    visibleBytes: state.content.utf8.count,
-                    stopStringMatched: state.stopMatcher.isStopped,
-                    toolStartID: tokenizer.toolCallStartID,
-                    toolEndID: tokenizer.toolCallEndID,
-                    toolResponseID: tokenizer.toolResponseID,
-                    toolResponseEndID: tokenizer.toolResponseEndID))
-        }
-        if let decodingError = state.decodingError {
-            throw structuredFailure(
-                kind: .decoderConsume,
-                cause: .classify(decodingError))
-        }
-        do {
-            try decoder.finish()
-        } catch {
-            throw structuredFailure(
-                kind: .decoderFinish,
-                cause: .classify(error))
-        }
-        if needsToolTemplate, result.reason == .toolCalls, state.calls.isEmpty {
-            throw structuredFailure(kind: .orphanToolResponse, cause: .none)
-        }
-        let tail = state.stopMatcher.finish()
-        if !tail.isEmpty {
-            state.content += tail
-            onEvent(.content(tail))
-        }
+            onEvent: onEvent)
+        let result = decoded.result
         let reason: String
-        if !state.calls.isEmpty {
+        if !decoded.calls.isEmpty {
             reason = "tool_calls"
         } else if result.reason == .maxTokens {
             reason = "length"
@@ -1166,15 +1072,15 @@ public actor ServerModelSession: ServerInferenceBackend {
             promptCache.publish(
                 domain: promptCacheDomain,
                 request: request,
-                content: state.content,
-                calls: state.calls,
+                content: decoded.content,
+                calls: decoded.calls,
                 result: result,
-                stopStringFiltered: state.stopMatcher.isStopped)
+                stopStringFiltered: decoded.stopStringFiltered)
         }
         completed = true
         return ServerCompletion(
-            content: state.content,
-            toolCalls: state.calls,
+            content: decoded.content,
+            toolCalls: decoded.calls,
             finishReason: reason,
             usage: OpenAIUsage(promptTokens: result.prefillTokens,
                                completionTokens: result.newTokens,
@@ -1222,6 +1128,157 @@ public actor ServerModelSession: ServerInferenceBackend {
         !request.tools.isEmpty || request.messages.contains {
             $0.role == .developer || $0.role == .tool || !$0.toolCalls.isEmpty
         }
+    }
+}
+
+/// What one structured completion produced: the raw decode result plus the
+/// visible content and tool calls the assistant decoder accepted.
+struct ServerStructuredDecodeOutcome: Sendable {
+    let result: RawDecodeResult
+    let content: String
+    let calls: [ParsedToolCall]
+    let stopStringFiltered: Bool
+}
+
+extension ServerModelSession {
+    /// Runs the raw completion loop through the structured assistant decoder.
+    /// This is the server's production decode path; it is static so tests can
+    /// drive it with a scripted producer and a real tokenizer.
+    static func decodeStructuredCompletion(
+        producer: any LogitProducer,
+        tokenizer: GFTokenizer,
+        decoder: StructuredAssistantDecoder,
+        renderedPromptIDs: [Int32],
+        effectivePromptIDs: [Int32],
+        multimodalInput: MultimodalPrefillInput?,
+        config: GenerationConfig,
+        stopStrings: [String],
+        needsToolTemplate: Bool,
+        context: MetalContext,
+        scratch: RawCompletionScratch,
+        prefillConfig: PrefillRuntimeConfig,
+        start: RawCompletionStart,
+        onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
+    ) async throws -> ServerStructuredDecodeOutcome {
+        let state = ServerDecodeState(
+            stopMatcher: StreamingStopMatcher(stops: stopStrings))
+
+        let handle: @Sendable ([StructuredAssistantEvent]) -> Void = { events in
+            for event in events {
+                switch event {
+                case .content(let text):
+                    let visible = state.stopMatcher.push(text)
+                    if !visible.isEmpty {
+                        state.content += visible
+                        onEvent(.content(visible))
+                    }
+                    if state.stopMatcher.isStopped { state.shouldStop = true }
+                case .thinking:
+                    // The Chat Completions endpoint does not expose a thought
+                    // channel. It remains separate from visible content.
+                    break
+                case .toolCall(let call):
+                    state.calls.append(call)
+                    onEvent(.toolCall(call))
+                }
+            }
+        }
+
+        let result = try await runRawCompletion(
+            producer: producer,
+            tokenizer: tokenizer,
+            promptIds: effectivePromptIDs,
+            multimodalInput: multimodalInput,
+            config: config,
+            context: context,
+            scratch: scratch,
+            prefillConfig: prefillConfig,
+            start: start,
+            shouldStop: { state.shouldStop }) { @Sendable progress in
+                guard state.decodingError == nil else { return }
+                do {
+                    switch progress {
+                    case .prefill:
+                        break
+                    case .token(_, let tokenID, let delta):
+                        let events = try decoder.consume(
+                            tokenID: tokenID, delta: delta)
+                        handle(events)
+                    case .tail(let text):
+                        // The flush tail is not tied to a token ID, so it must
+                        // go through the decoder's channel state explicitly;
+                        // appending it directly would leak text held back
+                        // inside the thought channel or a tool call.
+                        let events = try decoder.consumeTail(text)
+                        handle(events)
+                    }
+                } catch {
+                    state.decodingError = error
+                    state.shouldStop = true
+                }
+        }
+        // Stop tokens are intentionally not emitted as `.token` progress by
+        // the raw loop. Most dialects finish their structure before that
+        // boundary; Harmony's `<|call|>` is both the tool-payload terminator and
+        // a stop token, so the structured decoder must consume it explicitly
+        // before `finish()` validates its state. Only the withheld boundary is
+        // replayed: a token that ended generation at the length limit, a stop
+        // string or a cancellation was already consumed through `.token`, and
+        // a second pass would close a Gemma, Qwen or MiniMax call twice.
+        if state.decodingError == nil {
+            do {
+                for tokenID in result.undeliveredBoundaryTokenIDs {
+                    handle(try decoder.consume(tokenID: tokenID, delta: ""))
+                }
+            } catch {
+                state.decodingError = error
+            }
+        }
+        func structuredFailure(
+            kind: StructuredOutputFailureKind,
+            cause: StructuredOutputFailureCause
+        ) -> StructuredOutputFailure {
+            StructuredOutputFailure(
+                kind: kind,
+                cause: cause,
+                diagnostics: StructuredOutputFailureDiagnostics(
+                    renderedPromptIDs: renderedPromptIDs,
+                    effectivePromptIDs: effectivePromptIDs,
+                    result: result,
+                    maxCompletionTokens: config.maxNewTokens,
+                    decodedCalls: state.calls.count,
+                    visibleBytes: state.content.utf8.count,
+                    stopStringMatched: state.stopMatcher.isStopped,
+                    toolStartID: tokenizer.toolCallStartID,
+                    toolEndID: tokenizer.toolCallEndID,
+                    toolResponseID: tokenizer.toolResponseID,
+                    toolResponseEndID: tokenizer.toolResponseEndID))
+        }
+        if let decodingError = state.decodingError {
+            throw structuredFailure(
+                kind: .decoderConsume,
+                cause: .classify(decodingError))
+        }
+        do {
+            try decoder.finish()
+        } catch {
+            throw structuredFailure(
+                kind: .decoderFinish,
+                cause: .classify(error))
+        }
+        if needsToolTemplate, result.reason == .toolCalls, state.calls.isEmpty {
+            throw structuredFailure(kind: .orphanToolResponse, cause: .none)
+        }
+        let tail = state.stopMatcher.finish()
+        if !tail.isEmpty {
+            state.content += tail
+            onEvent(.content(tail))
+        }
+        return ServerStructuredDecodeOutcome(
+            result: result,
+            content: state.content,
+            calls: state.calls,
+            stopStringFiltered: state.stopMatcher.isStopped)
     }
 }
 

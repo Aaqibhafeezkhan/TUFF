@@ -28,6 +28,13 @@ public struct RawDecodeResult: Sendable {
     public let kvPosition: Int
     public let kvBackedTokenIDs: [Int32]
     public let uncommittedBoundaryTokenIDs: [Int32]
+    /// The part of `uncommittedBoundaryTokenIDs` that was never reported as
+    /// `.token` progress: a stop token (EOS, EOT, tool response, Harmony
+    /// `<|call|>`, or an extra stop token). A max-token, stop-string or
+    /// cancelled boundary was already reported, so it is not listed here.
+    /// A caller replaying the boundary into a structured decoder must use
+    /// this list, or the decoder consumes the same token twice.
+    public let undeliveredBoundaryTokenIDs: [Int32]
     public let speculative: SpeculativeDecodeMetrics
 
     public init(prefillTokens: Int,
@@ -40,6 +47,7 @@ public struct RawDecodeResult: Sendable {
                 kvPosition: Int,
                 kvBackedTokenIDs: [Int32],
                 uncommittedBoundaryTokenIDs: [Int32],
+                undeliveredBoundaryTokenIDs: [Int32] = [],
                 speculative: SpeculativeDecodeMetrics = .init()) {
         self.prefillTokens = prefillTokens
         self.cachedPromptTokens = cachedPromptTokens
@@ -51,6 +59,7 @@ public struct RawDecodeResult: Sendable {
         self.kvPosition = kvPosition
         self.kvBackedTokenIDs = kvBackedTokenIDs
         self.uncommittedBoundaryTokenIDs = uncommittedBoundaryTokenIDs
+        self.undeliveredBoundaryTokenIDs = undeliveredBoundaryTokenIDs
         self.speculative = speculative
     }
 
@@ -327,6 +336,7 @@ public func runRawCompletion(producer: any LogitProducer,
     var generated = 0
     var reason: StopReason = .maxTokens
     var uncommittedBoundaryTokenIDs: [Int32] = []
+    var undeliveredBoundaryTokenIDs: [Int32] = []
     var speculativeRounds = 0
     var speculativeProposedTokens = 0
     var speculativeAcceptedTokens = 0
@@ -354,8 +364,12 @@ public func runRawCompletion(producer: any LogitProducer,
     func emitToken(_ tokenID: Int32) -> Bool {
         generated += 1
         uncommittedBoundaryTokenIDs = [tokenID]
+        undeliveredBoundaryTokenIDs.removeAll(keepingCapacity: true)
 
         if tokenizer.stopTokenIDs.contains(tokenID) || config.extraStopTokens.contains(tokenID) {
+            // A stop token is never reported as `.token`; record that so a
+            // caller can replay exactly this boundary and nothing else.
+            undeliveredBoundaryTokenIDs = [tokenID]
             if tokenID == tokenizer.endOfTurnID {
                 reason = .endOfTurn
             } else if tokenID == tokenizer.toolResponseID {
@@ -624,6 +638,7 @@ public func runRawCompletion(producer: any LogitProducer,
                            kvPosition: position,
                            kvBackedTokenIDs: history,
                            uncommittedBoundaryTokenIDs: uncommittedBoundaryTokenIDs,
+                           undeliveredBoundaryTokenIDs: undeliveredBoundaryTokenIDs,
                            speculative: SpeculativeDecodeMetrics(
                                rounds: speculativeRounds,
                                proposedTokens: speculativeProposedTokens,

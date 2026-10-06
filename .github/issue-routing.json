@@ -3,6 +3,8 @@
     "bug": "Something isn't working",
     "enhancement": "New feature or request",
     "performance": "Speed, memory or benchmark report",
+    "new model": "Support for a new model family or checkpoint",
+    "good first issue": "Small, scoped tasks with guidance for first-time contributors",
     "needs-triage": "Not yet reviewed by a maintainer",
     "accessibility": "Barrier affecting people with disabilities",
     "documentation": "Improvements or additions to documentation",
@@ -18,7 +20,7 @@
   "areas": {
     "Chat and generation": ["area: chat"],
     "Model downloads and installation": ["area: models"],
-    "New model support": ["area: models"],
+    "New model support": ["area: models", "new model"],
     "Inference speed or memory": ["area: inference"],
     "Local server (tuff serve or the Server screen)": ["area: server"],
     "Command line (tuff, TUFFCLI)": ["area: cli"],

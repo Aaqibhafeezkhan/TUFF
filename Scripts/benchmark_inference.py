@@ -46,11 +46,16 @@ def environment_overrides(args, variant):
     reference = variant == 'reference'
     lookahead = (args.comparison_lookahead or args.lookahead) if reference else args.lookahead
     small_block = (args.comparison_small_block or args.small_block) if reference else args.small_block
+    shared_overlap = getattr(args, 'shared_overlap', None)
+    if reference:
+        shared_overlap = getattr(args, 'comparison_shared_overlap', None) or shared_overlap
     environment = {}
     if lookahead:
         environment['TUFF_EXPERT_LOOKAHEAD'] = lookahead
     if small_block:
         environment['TUFF_SMALL_BLOCK_PREFILL'] = small_block
+    if shared_overlap:
+        environment['TUFF_SHARED_EXPERT_OVERLAP'] = shared_overlap
     return environment
 
 
@@ -137,6 +142,10 @@ def main():
                         help='TUFF_SMALL_BLOCK_PREFILL for the candidate (default: unset, which is off)')
     parser.add_argument('--comparison-small-block', choices=['on','off'],
                         help='TUFF_SMALL_BLOCK_PREFILL for the reference')
+    parser.add_argument('--shared-overlap', choices=['on','off'],
+                        help='TUFF_SHARED_EXPERT_OVERLAP for the candidate (default: unset, which is off)')
+    parser.add_argument('--comparison-shared-overlap', choices=['on','off'],
+                        help='TUFF_SHARED_EXPERT_OVERLAP for the reference')
     args = parser.parse_args()
     if min(args.repeat,args.max_new,args.timeout) < 1:
         parser.error('repeat, max-new and timeout must be positive')
@@ -144,7 +153,7 @@ def main():
         parser.error('--shapes accepts ' + ','.join(SHAPES))
     if any(x not in ('greedy','sampled') for x in args.modes.split(',')):
         parser.error('--modes accepts greedy,sampled')
-    if any(value is not None for value in (args.comparison_lookahead,args.comparison_small_block,args.comparison_slots,args.comparison_chunk)) and not args.comparison_cli:
+    if any(value is not None for value in (args.comparison_lookahead,args.comparison_small_block,args.comparison_shared_overlap,args.comparison_slots,args.comparison_chunk)) and not args.comparison_cli:
         parser.error('comparison overrides require --comparison-cli')
     if any(value is not None and value < 1 for value in (args.slots,args.comparison_slots,args.chunk,args.comparison_chunk)):
         parser.error('slot and chunk overrides must be positive')

@@ -84,7 +84,7 @@ extension PrefillGroupedRoutedMoETests {
         pairStart: tile.pairStart, pairCount: tile.pairCount, d: UInt32(d),
         routedIntermediate: UInt32(f), topK: UInt32(topK), hiddenStrideElements: UInt32(d),
         binding: binding, offsets: pool.offsets)
-      grouped.encodeStreamedBatched(
+      try grouped.encodeStreamedBatched(
         commandBuffer: commandBuffer, hidden: hiddenBuffer, sortedPairs: pairBuffer,
         routePartials: output, gateUpActScratch: activation, downScratch: down,
         argumentBuffer: try grouped.makeStreamedArgumentBuffer(device: ctx.device, binding: binding),

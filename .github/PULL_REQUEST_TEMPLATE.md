@@ -39,3 +39,4 @@ and whether existing installs, chats and settings still load. Otherwise
 ---
 
 - [ ] No credentials, private paths, personal prompts, chats or model weights in the diff, logs or screenshots.
+- [ ] I personally reviewed the diff and can explain the changes, including any work produced with AI tools.

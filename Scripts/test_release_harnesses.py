@@ -130,7 +130,7 @@ class HarnessTests(unittest.TestCase):
         for option,value in [('--interfaces','typo'),('--modes','typo'),('--shapes','typo'),
                              ('--repeat','0'),('--max-new','0'),('--timeout','0'),('--comparison-repeat','0'),
                              ('--comparison-lookahead','off'),('--comparison-small-block','off'),
-                             ('--comparison-slots','16'),
+                             ('--comparison-shared-overlap','off'),('--comparison-slots','16'),
                              ('--comparison-chunk','512'),('--slots','0'),('--chunk','0')]:
             with patch.object(sys,'argv',base+[option,value]),contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as error: interfaces.main()
@@ -172,7 +172,7 @@ class HarnessTests(unittest.TestCase):
               '--output','output']
         for option,value in [('--comparison-slots','16'),('--comparison-chunk','512'),
                              ('--comparison-lookahead','off'),('--comparison-small-block','off'),
-                             ('--shapes','typo'),('--repeat','0'),
+                             ('--comparison-shared-overlap','off'),('--shapes','typo'),('--repeat','0'),
                              ('--max-new','0'),('--timeout','0'),('--slots','0'),('--chunk','0')]:
             with patch.object(sys,'argv',base+[option,value]),contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaises(SystemExit) as error: bench.main()
@@ -183,6 +183,8 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(interfaces.environment_overrides(args),{'TUFF_SMALL_BLOCK_PREFILL':'on'})
         self.assertEqual(interfaces.environment_overrides(SimpleNamespace(lookahead='off')),
                          {'TUFF_EXPERT_LOOKAHEAD':'off'})
+        self.assertEqual(interfaces.environment_overrides(SimpleNamespace(lookahead=None,shared_overlap='on')),
+                         {'TUFF_SHARED_EXPERT_OVERLAP':'on'})
 
     def test_small_block_comparison_changes_only_the_named_switch(self):
         args=SimpleNamespace(lookahead='off',comparison_lookahead=None,
@@ -194,6 +196,20 @@ class HarnessTests(unittest.TestCase):
         unset=SimpleNamespace(lookahead=None,comparison_lookahead=None,
                               small_block=None,comparison_small_block=None)
         self.assertEqual(bench.environment_overrides(unset,'primary'),{})
+
+    def test_shared_overlap_comparison_changes_only_the_named_switch(self):
+        args=SimpleNamespace(lookahead=None,comparison_lookahead=None,
+                             small_block=None,comparison_small_block=None,
+                             shared_overlap='on',comparison_shared_overlap='off')
+        self.assertEqual(bench.environment_overrides(args,'candidate'),
+                         {'TUFF_SHARED_EXPERT_OVERLAP':'on'})
+        self.assertEqual(bench.environment_overrides(args,'reference'),
+                         {'TUFF_SHARED_EXPERT_OVERLAP':'off'})
+        inherited=SimpleNamespace(lookahead=None,comparison_lookahead=None,
+                                  small_block=None,comparison_small_block=None,
+                                  shared_overlap='on',comparison_shared_overlap=None)
+        self.assertEqual(bench.environment_overrides(inherited,'reference'),
+                         {'TUFF_SHARED_EXPERT_OVERLAP':'on'})
 
     def test_workloads_are_stable_distinct_and_do_not_repeat_calibration_text(self):
         self.assertEqual(bench.prompt('long'),bench.prompt('long'))

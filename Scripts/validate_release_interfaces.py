@@ -27,6 +27,8 @@ def environment_overrides(args):
         environment['TUFF_EXPERT_LOOKAHEAD'] = args.lookahead
     if getattr(args, 'small_block', None):
         environment['TUFF_SMALL_BLOCK_PREFILL'] = args.small_block
+    if getattr(args, 'shared_overlap', None):
+        environment['TUFF_SHARED_EXPERT_OVERLAP'] = args.shared_overlap
     return environment
 
 
@@ -212,6 +214,8 @@ def main():
     p.add_argument('--comparison-lookahead',choices=['on','off'])
     p.add_argument('--small-block',choices=['on','off'],help='TUFF_SMALL_BLOCK_PREFILL for the candidate (default: unset, which is off)')
     p.add_argument('--comparison-small-block',choices=['on','off'])
+    p.add_argument('--shared-overlap',choices=['on','off'],help='TUFF_SHARED_EXPERT_OVERLAP for the candidate (default: unset, which is off)')
+    p.add_argument('--comparison-shared-overlap',choices=['on','off'])
     p.add_argument('--slots',type=int,help='App-service expert-cache slots; the server uses catalog settings');p.add_argument('--comparison-slots',type=int)
     p.add_argument('--chunk',type=int,help='App-service prefill chunk; the server uses catalog settings');p.add_argument('--comparison-chunk',type=int)
     p.add_argument('--output',type=Path,required=True);p.add_argument('--models',default='qwen38-flash-next,gemma4')
@@ -227,7 +231,7 @@ def main():
             p.error(f'--{name} accepts '+','.join(sorted(allowed)))
     if min(args.repeat,args.max_new,args.timeout,args.comparison_repeat) < 1:
         p.error('repeat, max-new and timeout must be positive')
-    if any(value is not None for value in (args.comparison_lookahead,args.comparison_small_block,args.comparison_slots,args.comparison_chunk)) and not args.comparison_app:
+    if any(value is not None for value in (args.comparison_lookahead,args.comparison_small_block,args.comparison_shared_overlap,args.comparison_slots,args.comparison_chunk)) and not args.comparison_app:
         p.error('comparison overrides require --comparison-app')
     if any(value is not None and value < 1 for value in (args.slots,args.comparison_slots,args.chunk,args.comparison_chunk)):
         p.error('slot and chunk overrides must be positive')
@@ -249,6 +253,7 @@ def main():
                 session.app=app.resolve()
                 session.lookahead=(args.comparison_lookahead or args.lookahead) if variant=='reference' else args.lookahead
                 session.small_block=(args.comparison_small_block or args.small_block) if variant=='reference' else args.small_block
+                session.shared_overlap=(args.comparison_shared_overlap or args.shared_overlap) if variant=='reference' else args.shared_overlap
                 selected=copy.deepcopy(config)
                 slots=args.comparison_slots if variant=='reference' else args.slots
                 chunk=args.comparison_chunk if variant=='reference' else args.chunk

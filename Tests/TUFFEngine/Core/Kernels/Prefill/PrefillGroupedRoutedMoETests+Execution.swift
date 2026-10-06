@@ -70,7 +70,7 @@ extension PrefillGroupedRoutedMoETests {
         d: UInt32(d), routedIntermediate: UInt32(f), topK: UInt32(topK),
         hiddenStrideElements: UInt32(d), binding: binding, offsets: pool.offsets)
       let argumentBuffer = try grouped.makeStreamedArgumentBuffer(device: ctx.device, binding: binding)
-      microbatches += grouped.encodeStreamedBatched(
+      microbatches += try grouped.encodeStreamedBatched(
         commandBuffer: commandBuffer, hidden: hiddenBuffer, sortedPairs: pairBuffer,
         routePartials: outputBuffer, gateUpActScratch: activationScratch, downScratch: downScratch,
         argumentBuffer: argumentBuffer, binding: binding, params: params, pairMicrobatchRows: 4)
@@ -93,4 +93,90 @@ extension PrefillGroupedRoutedMoETests {
     #expect(bindings.flatMap(\.views).allSatisfy { $0.offset > 0 })
   }
 
+}
+
+extension PrefillGroupedRoutedMoETests {
+  /// A phase that cannot get an encoder is an error, not a silent skip that
+  /// still reports a microbatch, whichever phase fails.
+  @Test(arguments: [0, 1, 2])
+  func streamedBatchedEncoderFailurePropagates(failingEncoder: Int) throws {
+    let d = 64
+    let f = 64
+    let rows = 3
+    let topK = 2
+    let routes = try PrefillMoEGrouping.groupTokenExpertPairs(
+      (0..<rows).flatMap { token in
+        (0..<topK).map { rank in
+          Self.pair(token: UInt32(token), expert: UInt32((token * topK + rank) % 4), rank: UInt32(rank))
+        }
+      },
+      queryCount: rows,
+      topK: topK,
+      numExperts: 4,
+      tileExpertCount: 4)
+    let tile = try #require(routes.tiles.first)
+    let pool = Self.makeSyntheticExpertPool(numExperts: 4, d: d, f: f)
+    let ctx = try MetalContext()
+    let grouped = try PrefillGroupedRoutedMoE(context: ctx)
+    let hidden = try #require(Fp16Buffer.make(ctx.device, halves: [Float16](repeating: 0.01, count: rows * d)))
+    let pairs = try #require(ctx.device.makeBuffer(
+      bytes: routes.sortedPairs,
+      length: routes.sortedPairs.count * MemoryLayout<PrefillTokenExpertPair>.stride,
+      options: .storageModeShared))
+    let output = try #require(Fp16Buffer.make(ctx.device, halves: [Float16](repeating: 0, count: rows * topK * d)))
+    let activation = try #require(ctx.device.makeBuffer(
+      length: 3 * 4 * f * MemoryLayout<Float16>.stride, options: .storageModePrivate))
+    let down = try #require(ctx.device.makeBuffer(
+      length: 4 * d * MemoryLayout<Float16>.stride, options: .storageModePrivate))
+    let first = Int(tile.groupStart)
+    let expertIDs = routes.groups[first..<(first + Int(tile.groupCount))].map { Int($0.expert) }
+    let binding = try PrefillStreamedTileBinding(
+      expertIDs: expertIDs,
+      views: Self.streamedViewsWithNonzeroOffsets(device: ctx.device, pool: pool, expertIDs: expertIDs))
+    let params = PrefillGroupedRoutedMoEStreamedParams(
+      pairStart: tile.pairStart, pairCount: tile.pairCount,
+      d: UInt32(d), routedIntermediate: UInt32(f), topK: UInt32(topK),
+      hiddenStrideElements: UInt32(d), binding: binding, offsets: pool.offsets)
+    let argumentBuffer = try grouped.makeStreamedArgumentBuffer(device: ctx.device, binding: binding)
+    let commandBuffer = try #require(ctx.queue.makeCommandBuffer())
+
+    // Six pairs in microbatches of two. Each microbatch opens a gate/up then a
+    // down encoder, so even indices are gate/up and odd ones are down.
+    var created = 0
+    let expectedPhase = failingEncoder % 2 == 0 ? "routed gate/up phase" : "routed down phase"
+    #expect(throws: PrefillGroupedRoutedMoEError.encoderUnavailable(expectedPhase)) {
+      try grouped.encodeStreamedBatched(
+        commandBuffer: commandBuffer, hidden: hidden, sortedPairs: pairs,
+        routePartials: output, gateUpActScratch: activation, downScratch: down,
+        argumentBuffer: argumentBuffer, binding: binding, params: params,
+        pairMicrobatchRows: 2,
+        makeEncoder: { commandBuffer in
+          defer { created += 1 }
+          return created == failingEncoder ? nil : commandBuffer.makeComputeCommandEncoder()
+        })
+    }
+    #expect(created == failingEncoder + 1)
+  }
+
+  @Test func streamedBatchedRejectsAMismatchedBinding() throws {
+    let ctx = try MetalContext()
+    let grouped = try PrefillGroupedRoutedMoE(context: ctx)
+    let pool = Self.makeSyntheticExpertPool(numExperts: 4, d: 64, f: 64)
+    let binding = try PrefillStreamedTileBinding(
+      expertIDs: [0, 1],
+      views: Self.streamedViewsWithNonzeroOffsets(device: ctx.device, pool: pool, expertIDs: [0, 1]))
+    var params = PrefillGroupedRoutedMoEStreamedParams(
+      pairStart: 0, pairCount: 2, d: 64, routedIntermediate: 64, topK: 1,
+      hiddenStrideElements: 64, binding: binding, offsets: pool.offsets)
+    params.liveExpertCount = 3
+    let buffer = try #require(ctx.device.makeBuffer(length: 4_096, options: .storageModePrivate))
+    let commandBuffer = try #require(ctx.queue.makeCommandBuffer())
+    #expect(throws: PrefillGroupedRoutedMoEError.self) {
+      try grouped.encodeStreamedBatched(
+        commandBuffer: commandBuffer, hidden: buffer, sortedPairs: buffer,
+        routePartials: buffer, gateUpActScratch: buffer, downScratch: buffer,
+        argumentBuffer: try grouped.makeStreamedArgumentBuffer(device: ctx.device, binding: binding),
+        binding: binding, params: params)
+    }
+  }
 }
