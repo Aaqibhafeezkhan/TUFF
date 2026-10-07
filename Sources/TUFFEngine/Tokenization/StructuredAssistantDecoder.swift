@@ -87,7 +87,28 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
         }
     }
 
+    /// Generated tokens the decoder routed to reasoning: tokens consumed
+    /// inside a thought or analysis channel, including the markers that open
+    /// and close it. Reported as `reasoning_tokens`.
+    public private(set) var reasoningTokenCount = 0
+
+    /// Whether text arriving now belongs to reasoning.
+    public var isInReasoning: Bool {
+        if let harmonyDecoder { return harmonyDecoder.isInAnalysis }
+        return channel == .thought
+    }
+
     public func consume(tokenID: Int32, delta: String) throws -> [StructuredAssistantEvent] {
+        let wasReasoning = isInReasoning
+        let events = try consumeToken(tokenID: tokenID, delta: delta)
+        if wasReasoning || isInReasoning
+            || events.contains(where: { if case .thinking = $0 { true } else { false } }) {
+            reasoningTokenCount += 1
+        }
+        return events
+    }
+
+    private func consumeToken(tokenID: Int32, delta: String) throws -> [StructuredAssistantEvent] {
         guard !failed else { throw ToolCallParserError.malformed }
         if let harmonyDecoder {
             return try harmonyDecoder.consume(tokenID: tokenID, delta: delta)

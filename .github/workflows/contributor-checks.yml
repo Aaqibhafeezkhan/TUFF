@@ -32,7 +32,9 @@ jobs:
   repository:
     name: Repository checks
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.user.login != github.repository_owner
-    runs-on: macos-26
+    # Match the Xcode 27 / Swift 6.4 toolchain used to validate releases.
+    # This is a standard runner, free for this public repository.
+    runs-on: xcode-27
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -43,10 +45,12 @@ jobs:
       - name: Python harness regressions
         if: success() || failure()
         run: |
+          python3 Scripts/test_calibrate_runtime.py
           python3 Scripts/test_release_harnesses.py
           python3 Scripts/test_benchmark_reporting.py
           python3 Scripts/test_route_issue.py
           python3 Scripts/test_release_recovery.py
+          python3 Scripts/test_homebrew.py
       - name: Ruby harness regressions
         if: success() || failure()
         run: |
@@ -74,7 +78,9 @@ jobs:
   swift:
     name: Swift build and tests
     if: github.event_name == 'workflow_dispatch' || github.event.pull_request.user.login != github.repository_owner
-    runs-on: macos-26
+    # Match the Xcode 27 / Swift 6.4 toolchain used to validate releases.
+    # This is a standard runner, free for this public repository.
+    runs-on: xcode-27
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
@@ -84,6 +90,11 @@ jobs:
         run: swift package resolve
       - name: Compile package and tests (debug)
         run: Scripts/test.sh --build-only
+      # Check the socket-heavy fixture before the long GPU suites, so hosted
+      # runner resource failures report promptly instead of after the full run.
+      - name: Connection-limit fixture
+        if: github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft
+        run: Scripts/test.sh --filter connectionsBeyondTheCapAreClosed
       - name: Serial Swift tests
         id: tests
         if: github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft
@@ -105,7 +116,9 @@ jobs:
     if: >-
       (github.event_name == 'workflow_dispatch' || github.event.pull_request.user.login != github.repository_owner)
       && (github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft)
-    runs-on: macos-26
+    # Match the Xcode 27 / Swift 6.4 toolchain used to validate releases.
+    # This is a standard runner, free for this public repository.
+    runs-on: xcode-27
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4

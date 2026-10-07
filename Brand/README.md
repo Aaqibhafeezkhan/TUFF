@@ -10,7 +10,8 @@ shadows, highlights, outlines, or baked depth.
 
 `TUFF.icon` is the editable 1024 by 1024 Icon Composer source. Its black canvas
 and two layers let Icon Composer produce the default, dark, clear, and tinted
-system renditions.
+system renditions. The bird uses the original full-size geometry again in
+8.0.0, removing the 80 percent scale introduced in 5.0.0.
 
 Icon Composer rims each layer's own silhouette, so anything that must not have a
 glass edge running through it has to share a layer. The beak therefore sits on

@@ -36,6 +36,7 @@ struct AppSettingsView: View {
                 switch section {
                 case .general: generalSettings
                 case .models: modelSettings(advanced: false)
+                case .search: SearchSettingsView(model: model)
                 case .advanced: modelSettings(advanced: true)
                 }
             }

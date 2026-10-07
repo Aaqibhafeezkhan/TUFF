@@ -116,6 +116,42 @@ public enum DocumentTextExtractor {
         return ExtractedDocument(displayName: name, text: trimmed)
     }
 
+    /// Text in sections that keep their location: one per PDF page, or one
+    /// for a text file. Used by local search, which cites pages.
+    public struct Section: Equatable, Sendable {
+        /// One-based PDF page, or nil for a text file.
+        public let page: Int?
+        public let text: String
+    }
+
+    public static func extractSections(from url: URL,
+                                       maximumPDFPages: Int = 1_000) throws -> [Section] {
+        let name = url.lastPathComponent
+        guard canExtract(from: url) else {
+            throw DocumentExtractionError.unsupportedType(url.pathExtension.lowercased())
+        }
+        if url.pathExtension.lowercased() == "pdf" {
+            guard let document = PDFDocument(url: url) else {
+                throw DocumentExtractionError.unreadable(name)
+            }
+            var sections: [Section] = []
+            for index in 0..<min(document.pageCount, maximumPDFPages) {
+                guard let content = document.page(at: index)?.string?
+                    .trimmingCharacters(in: .whitespacesAndNewlines), !content.isEmpty else { continue }
+                sections.append(Section(page: index + 1, text: content))
+            }
+            guard !sections.isEmpty else { throw DocumentExtractionError.empty(name) }
+            return sections
+        }
+        guard let content = try? String(contentsOf: url, encoding: .utf8) else {
+            throw DocumentExtractionError.unreadable(name)
+        }
+        guard !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw DocumentExtractionError.empty(name)
+        }
+        return [Section(page: nil, text: content)]
+    }
+
     /// The document as it is added to a prompt. The delimiters are plain text so
     /// every model reads them the same way, and the name is kept so the answer
     /// can refer to the file.

@@ -362,6 +362,44 @@ public final class KVCacheManager {
         }
     }
 
+    /// Adds the rows a sequence of `position` tokens has written to a
+    /// snapshot. A ring layer holds at most its capacity, in physical order,
+    /// so its rows are copied as they lie; restore puts them back in the same
+    /// slots. `skipLayer` excludes layers that read another layer's KV and
+    /// never write their own.
+    func addSnapshotRanges(to builder: inout RunnerStateSnapshotBuilder,
+                           position: Int, skipLayer: (Int) -> Bool = { _ in false }) {
+        precondition(position >= 0 && position <= maxContext)
+        for layer in 0..<config.numLayers where kinds[layer] != .linear && !skipLayer(layer) {
+            let rows = kinds[layer] == .swa && fp16RingEnabled
+                ? min(position, capacityTokens[layer])
+                : position
+            precondition(rows <= capacityTokens[layer], "KV rows exceed layer capacity")
+            let bytes = rows * strides[layer]
+            builder.add("kv.K.\(layer)", kBuffers[layer], length: bytes)
+            builder.add("kv.V.\(layer)", vBuffers[layer], length: bytes)
+        }
+    }
+
+    /// Bytes `addSnapshotRanges` would copy, without building anything.
+    func snapshotBytes(position: Int, skipLayer: (Int) -> Bool = { _ in false }) -> Int {
+        var total = 0
+        for layer in 0..<config.numLayers where kinds[layer] != .linear && !skipLayer(layer) {
+            let rows = kinds[layer] == .swa && fp16RingEnabled
+                ? min(position, capacityTokens[layer])
+                : position
+            total += 2 * RunnerStateSnapshotBuilder.aligned(rows * strides[layer])
+        }
+        return total
+    }
+
+    /// Sets the cursor to a restored sequence's length. The rows must already
+    /// be in place; storage for `position` must exist (see `ensureCapacity`).
+    func restorePosition(_ target: Int) {
+        validateValidTokenCount(target)
+        position = target
+    }
+
     private func validateRange(start: Int, count: Int) {
         precondition(count >= 0, "count must be non-negative")
         precondition(start >= 0, "start must be non-negative")

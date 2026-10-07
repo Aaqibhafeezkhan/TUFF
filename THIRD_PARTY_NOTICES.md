@@ -5,31 +5,50 @@ TUFF repository source is licensed under the
 and documentation. It does not relicense model weights or third-party
 packages.
 
-This file records the dependency review updated on 2026-08-26. It is an
-attribution aid, not legal advice. Anyone distributing a compiled product must
-also preserve the license and NOTICE material required by the exact dependency
-versions included in that product.
+The dependency review below is dated 2026-08-26. The model source inventory
+was synchronized with TUFF's catalog on 2026-10-06, including checks of the
+pinned E2B, 12B QAT and Flash Next model cards. This inventory refresh is not a
+new dependency or legal review. Anyone distributing a compiled product must
+preserve the license and NOTICE material required by its exact dependencies.
 
 ## Model weights
 
 Model weights are not included in this repository. The installer downloads a
 pinned revision of each checkpoint and repacks it locally. Every entry below is
-the exact revision TUFF installs; the license column records what that model
-card states, and the model card remains authoritative.
+the exact revision TUFF installs. The license column distinguishes metadata in
+the pinned quantization card from upstream publisher terms when that metadata
+is absent or inconsistent. Source license files remain authoritative.
 
 | Model | Source repository | Pinned revision | License stated by the model card |
 | --- | --- | --- | --- |
+| Gemma 4 E2B IT | [`mlx-community/gemma-4-e2b-it-4bit`](https://huggingface.co/mlx-community/gemma-4-e2b-it-4bit/tree/238767527555cb75a05732a84dff5d6ba0dd6809) | `238767527555cb75a05732a84dff5d6ba0dd6809` | Pinned card labels `gemma`; Google's current model card states Apache-2.0, as noted below |
 | Gemma 4 E4B IT | [`mlx-community/gemma-4-e4b-it-4bit`](https://huggingface.co/mlx-community/gemma-4-e4b-it-4bit) | `475b9088d29754a3379866cf5aeb6b41acd313c2` | Apache-2.0 quantization of Google's Gemma 4 E4B instruction checkpoint |
+| Gemma 4 12B IT QAT | [`mlx-community/gemma-4-12B-it-qat-4bit`](https://huggingface.co/mlx-community/gemma-4-12B-it-qat-4bit/tree/e70c6b3ba0979b3357dcd2f223ad8bde7787a6b6) | `e70c6b3ba0979b3357dcd2f223ad8bde7787a6b6` | No license field in the pinned card; see Google's Gemma 4 terms below |
 | Gemma 4 26B-A4B IT | [`mlx-community/gemma-4-26b-a4b-it-4bit`](https://huggingface.co/mlx-community/gemma-4-26b-a4b-it-4bit) | `0d77464eeb233a2da68ebf9d7dc4edaac7db956d` | Apache-2.0 quantization of Google's Gemma 4 26B-A4B instruction checkpoint |
 | Qwen3.6 35B-A3B | [`mlx-community/Qwen3.6-35B-A3B-4bit`](https://huggingface.co/mlx-community/Qwen3.6-35B-A3B-4bit) | `38740b847e4cb78f352aba30aa41c76e08e6eb46` | Apache-2.0 quantization of Alibaba's Qwen3.6 35B-A3B checkpoint |
 | GPT-OSS 20B | [`openai/gpt-oss-20b`](https://huggingface.co/openai/gpt-oss-20b) | `6cee5e81ee83917806bbde320786a8fb61efebee` | Apache-2.0 |
 | GPT-OSS 120B | [`openai/gpt-oss-120b`](https://huggingface.co/openai/gpt-oss-120b) | `b5c939de8f754692c1647ca79fbf85e8c1e70f8a` | Apache-2.0 |
 | MiniMax M2.7 | [`mlx-community/MiniMax-M2.7-4bit`](https://huggingface.co/mlx-community/MiniMax-M2.7-4bit) | `66d2e5cb7c5cda05251b4625c504af4b034df7ff` | Modified MIT terms linked by the model card |
+| Qwen3.8 Flash Next | [`mlx-community/Qwen3.8-Flash-Next-4bit`](https://huggingface.co/mlx-community/Qwen3.8-Flash-Next-4bit/tree/07b5dc6c54600a359b87f1e53e7adf6351c72a2c) | `07b5dc6c54600a359b87f1e53e7adf6351c72a2c` | No license field in the pinned card; the upstream publisher labels the model `qwen-community-1.0` |
 
 Google publishes Gemma 4 under the
 [Apache License 2.0](https://ai.google.dev/gemma/apache_2). The GPT-OSS
 checkpoints are the official OpenAI releases and are installed in their native
 MXFP4 form rather than requantized.
+
+The pinned E2B quantization card's `gemma` tag differs from the Apache-2.0
+license stated by Google's [E2B model card](https://huggingface.co/google/gemma-4-E2B-it).
+The pinned 12B QAT quantization card has no license field or separate license
+file; Google's [12B QAT model card](https://huggingface.co/google/gemma-4-12B-it-qat-q4_0-unquantized)
+states Apache-2.0. These observations record the metadata difference rather
+than resolving or replacing the source terms.
+
+Flash Next's pinned quantization card also has no license field or separate
+license file. Its linked [upstream model card](https://huggingface.co/Qwen/Qwen3.8-Flash-Next)
+states `qwen-community-1.0` and supplies the
+[Qwen Community License](https://huggingface.co/Qwen/Qwen3.8-Flash-Next/blob/main/LICENSE).
+Do not infer Apache-2.0 terms from other Qwen checkpoints or from missing
+quantization-card metadata.
 
 MiniMax M2.7 is governed by the upstream
 [MiniMax model license](https://github.com/MiniMax-AI/MiniMax-M2.7/blob/main/LICENSE),
@@ -38,8 +57,10 @@ which the pinned model card labels `modified-mit`.
 Downloaded weights remain a separate work governed by their source terms. Do
 not redistribute weights as part of TUFF releases.
 
-Optional image add-ons are companion packs built from the same Gemma 4 26B-A4B
-and Qwen3.6 revisions listed above; they carry no separate terms.
+The six optional image companions are repacked from the corresponding pinned
+sources above: Gemma 4 E2B, E4B, 12B QAT and 26B-A4B, Qwen3.6 and Qwen3.8
+Flash Next. Consult the same source model cards and license files for those
+weights; packaging them separately does not replace their upstream terms.
 
 ## Swift package graph
 

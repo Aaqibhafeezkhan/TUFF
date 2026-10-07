@@ -4,10 +4,12 @@ set -euo pipefail
 script_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$script_directory/.."
 Scripts/test.sh
+python3 Scripts/test_calibrate_runtime.py
 python3 Scripts/test_release_harnesses.py
 python3 Scripts/test_benchmark_reporting.py
 python3 Scripts/test_route_issue.py
 python3 Scripts/test_release_recovery.py
+python3 Scripts/test_homebrew.py
 ruby Scripts/test_benchmark_simple.rb
 ruby Scripts/test_benchmark_v2.rb
 ruby Scripts/test_github_config.rb

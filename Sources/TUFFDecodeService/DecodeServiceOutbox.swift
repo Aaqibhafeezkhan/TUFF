@@ -16,6 +16,7 @@ final class DecodeServiceOutbox: @unchecked Sendable {
         var latestToken: AppTokenEvent?
         var terminal: DecodeServiceEvent?
         var terminalCommitted = false
+        var toolCalls: [GFTokenizer.HistoricalToolCall] = []
         var finished = false
         var sequence: UInt64 = 0
     }
@@ -53,6 +54,8 @@ final class DecodeServiceOutbox: @unchecked Sendable {
         case .thinking(let token):
             state.pendingThinking += token.textDelta
             state.latestToken = token
+        case .toolCalls(let calls):
+            state.toolCalls = calls.map(\.historical)
         case .finished(let diagnostics):
             if !state.terminalCommitted {
                 state.terminal = terminal(.finished, diagnostics: diagnostics)
@@ -67,6 +70,9 @@ final class DecodeServiceOutbox: @unchecked Sendable {
             if !state.terminalCommitted {
                 state.terminal = terminal(
                     .failed, diagnostics: diagnostics, error: error.userMessage)
+                if case .malformedToolCall = error {
+                    state.terminal?.errorKind = "malformedToolCall"
+                }
                 state.terminalCommitted = true
             }
         }
@@ -152,7 +158,13 @@ final class DecodeServiceOutbox: @unchecked Sendable {
                     visionTowerMappedBytes: towerBytes())
                 try handle.write(contentsOf: DecodeFrameCodec.encode(snapshot))
             }
-            if let terminal {
+            if var terminal {
+                if terminal.kind == .finished {
+                    condition.lock()
+                    let calls = state.toolCalls
+                    condition.unlock()
+                    terminal.toolCalls = calls.isEmpty ? nil : calls
+                }
                 try handle.write(contentsOf: DecodeFrameCodec.encode(terminal))
             }
             if terminal != nil { return }
@@ -163,7 +175,7 @@ final class DecodeServiceOutbox: @unchecked Sendable {
     private func terminal(_ kind: DecodeServiceEventKind,
                           diagnostics: AppDiagnostics?,
                           error: String? = nil) -> DecodeServiceEvent {
-        DecodeServiceEvent(
+        var event = DecodeServiceEvent(
             kind: kind, generationID: generationID,
             tokenCount: diagnostics?.generatedTokens ?? 0,
             promptTokenCount: diagnostics?.promptTokenCount,
@@ -179,6 +191,11 @@ final class DecodeServiceOutbox: @unchecked Sendable {
             prefill: diagnostics?.prefill.map(Self.prefillDiagnostics),
             runner: diagnostics?.runner.map(Self.runnerDiagnostics),
             droppedTurns: diagnostics?.droppedTurns)
+        event.cachedPromptTokens = diagnostics?.cachedPromptTokens
+        event.conversationCacheSource = diagnostics?.conversationCacheSource
+        event.retainedConversations = diagnostics?.retainedConversations
+        event.retainedConversationBytes = diagnostics?.retainedConversationBytes
+        return event
     }
 
     private static func prefillDiagnostics(_ value: PrefillExecutionDiagnostics)

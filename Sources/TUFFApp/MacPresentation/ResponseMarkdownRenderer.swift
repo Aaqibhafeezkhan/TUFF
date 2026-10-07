@@ -52,6 +52,9 @@ public struct ResponseMarkdownRenderer {
         self.scale = scale
     }
 
+    /// The scheme `AppCitations` gives a validated citation.
+    public static let citationScheme = "tuff-source"
+
     public func render(_ source: String) -> Result {
         guard !source.isEmpty else {
             return Result(attributedString: NSAttributedString(), usedFallback: false)
@@ -110,6 +113,26 @@ public struct ResponseMarkdownRenderer {
         } catch {
             return fallback(source)
         }
+    }
+
+    /// `source` rendered, with each citation number in `ranges` made a link.
+    /// A number inside code is left alone. Links are added here, after the
+    /// Markdown is rendered, so citations never pass through the Markdown or
+    /// math parsers.
+    public func render(_ source: String, citations: (String) -> [(range: NSRange, url: URL)])
+        -> NSAttributedString {
+        let rendered = NSMutableAttributedString(attributedString: render(source).attributedString)
+        for citation in citations(rendered.string) {
+            guard NSMaxRange(citation.range) <= rendered.length,
+                  rendered.attribute(.backgroundColor, at: citation.range.location,
+                                     effectiveRange: nil) == nil else { continue }
+            rendered.addAttributes([
+                .link: citation.url,
+                .foregroundColor: NSColor.linkColor,
+                .toolTip: "Open source \(citation.url.absoluteString.dropFirst(Self.citationScheme.count + 1))",
+            ], range: citation.range)
+        }
+        return rendered
     }
 
     public func plainText(_ source: String) -> String {
@@ -242,9 +265,16 @@ public struct ResponseMarkdownRenderer {
         if inlineIntent?.contains(.strikethrough) == true {
             values[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
         }
-        if link != nil {
+        if let link {
             values[.foregroundColor] = NSColor.linkColor
             values[.underlineStyle] = NSUnderlineStyle.single.rawValue
+            // Only citations the app validated are clickable. A link the
+            // model wrote stays styled text: its address is unverified.
+            if link.scheme == Self.citationScheme {
+                values[.link] = link
+                values[.underlineStyle] = nil
+                values[.toolTip] = "Open source \(link.absoluteString.dropFirst(Self.citationScheme.count + 1))"
+            }
         }
         return values
     }

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Metal
 import TUFFEngine
@@ -197,7 +198,10 @@ actor RealInferenceSession {
     private var runner: ModelForwardRunner?
     private var scratch: RawCompletionScratch?
     private var model: Model?
-    private var promptReuse = AppPromptReuseState()
+    /// The conversation the runner holds and any retained ones. Replaced with
+    /// the session, so nothing outlives the model it was computed by.
+    private var conversations = ConversationStateStore(budgetBytes: 0)
+    private var conversationDomain: ConversationCacheDomain?
 
     /// Bytes of image tower held mapped right now, published outside the actor
     /// so a reader does not have to await it mid-decode.
@@ -218,7 +222,8 @@ actor RealInferenceSession {
                       onState: @Sendable (AppModelLoadState) -> Void) async throws {
         if loadedKey == key, runner != nil { return }
 
-        promptReuse.clear()
+        conversations = ConversationStateStore(budgetBytes: 0)
+        conversationDomain = nil
         runner = nil
         scratch = nil
         model = nil
@@ -309,8 +314,15 @@ actor RealInferenceSession {
             scratch = loadedScratch
             model = loadedModel
             loadedKey = key
+            conversations = ConversationStateStore(
+                budgetBytes: Self.retainedConversationBudget(
+                    model: loadedModel, key: key,
+                    imagePackInstalled: loadedVisionRuntime != nil))
+            conversationDomain = Self.conversationDomain(
+                model: loadedModel, key: key, runtime: runtimeConfiguration)
             visionRuntime = loadedVisionRuntime
             visionRuntimeError = loadedVisionRuntimeError
+            context.logLoadStatistics(key.directory.lastPathComponent)
             onState(.ready(modelDirectory: key.directory,
                            loadSeconds: Date().timeIntervalSince(start)))
         } catch is CancellationError {
@@ -359,6 +371,54 @@ actor RealInferenceSession {
         let trim: AppConversationTrim
     }
 
+    /// Whether completed turns render their reasoning back: Harmony keeps
+    /// its analysis channel, and Qwen 3.6 does when asked to preserve it.
+    static func rendersFinalThinking(request: AppGenerationRequest,
+                                     modelVariant: ModelVariant?) -> Bool {
+        modelVariant == .gptOss_20B || modelVariant == .gptOss_120B
+            || (modelVariant == .qwen36_35B_A3B && request.preserveThinking)
+    }
+
+    /// Encodes `turns` plus the current message through the template the
+    /// request needs: Harmony for GPT-OSS, the model's own tool template when
+    /// tools are declared or present, and the plain chat renderer otherwise.
+    static func encode(request: AppGenerationRequest,
+                       turns: ArraySlice<AppChatTurn>,
+                       tokenizer: GFTokenizer,
+                       modelVariant: ModelVariant?,
+                       harmonyDate: String) throws -> [Int32] {
+        let isHarmony = modelVariant == .gptOss_20B || modelVariant == .gptOss_120B
+        let preservesChatMLThinking = modelVariant == .qwen36_35B_A3B
+            && request.preserveThinking
+        let messages = AppConversationMessages.messages(
+            for: request, turns: turns,
+            finalThinking: rendersFinalThinking(request: request, modelVariant: modelVariant))
+        if isHarmony {
+            return try tokenizer.encodeHarmonyChat(
+                messages: messages,
+                tools: request.tools,
+                reasoningEffort: request.reasoningEffort ?? .medium,
+                currentDate: harmonyDate)
+        }
+        // The generation prompt ends exactly where the assistant's text
+        // begins, so a partial answer appended here is continued rather than
+        // restarted. Harmony is excluded upstream: it opens a channel after
+        // that point, and text placed here would not land in the reply.
+        if request.usesToolTemplate {
+            return try tokenizer.encodeToolChat(
+                messages: messages, tools: request.tools,
+                reasoning: request.reasoning, preserveThinking: preservesChatMLThinking)
+                + (request.assistantPrefix.isEmpty
+                    ? [] : tokenizer.encode(request.assistantPrefix, addBOS: false))
+        }
+        let rendered = try tokenizer.applyChatTemplate(
+            messages,
+            modelVariant: modelVariant,
+            reasoning: request.reasoning,
+            preserveThinking: preservesChatMLThinking)
+        return tokenizer.encode(rendered + request.assistantPrefix, addBOS: false)
+    }
+
     /// Render the conversation to tokens, dropping oldest turns until it fits.
     ///
     /// A conversation grows without bound while the context window does not, so
@@ -366,62 +426,20 @@ actor RealInferenceSession {
     /// — the ones a follow-up question actually depends on — and keeps the app
     /// usable instead of failing the moment history outgrows the window.
     ///
-    /// The current prompt is never dropped: if it alone does not fit, that is a
-    /// real context overflow and is reported as one, exactly as before.
+    /// The current prompt and its tool rounds are never dropped: if they alone
+    /// do not fit, that is a real context overflow and is reported as one.
     static func renderConversation(
         request: AppGenerationRequest,
         tokenizer: GFTokenizer,
         maxContext: Int,
-        modelVariant: ModelVariant? = nil
+        modelVariant: ModelVariant? = nil,
+        harmonyDate: String = HarmonyPromptRenderer.calendarDate()
     ) throws -> RenderedConversation {
-        let isHarmony = modelVariant == .gptOss_20B
-            || modelVariant == .gptOss_120B
-        let preservesChatMLThinking = modelVariant == .qwen36_35B_A3B
-            && request.preserveThinking
-        func encode(_ turns: ArraySlice<AppChatTurn>) throws -> [Int32] {
-            var messages: [GFTokenizer.Message] = []
-            messages.reserveCapacity(turns.count * 2 + 2)
-            // The system prompt leads the conversation. Every template this
-            // renderer drives accepts a system message first and only first,
-            // which is why it goes here rather than folded into the prompt.
-            if !request.systemPrompt.isEmpty {
-                messages.append(GFTokenizer.Message(
-                    role: .system, content: request.systemPrompt))
-            }
-            for turn in turns {
-                messages.append(GFTokenizer.Message(role: .user, content: turn.prompt))
-                messages.append(
-                    GFTokenizer.Message(
-                        role: .assistant,
-                        content: turn.response,
-                        thinking: isHarmony || preservesChatMLThinking
-                            ? turn.thinking : nil))
-            }
-            messages.append(GFTokenizer.Message(role: .user, content: request.prompt))
-            if isHarmony {
-                return try tokenizer.encodeHarmonyChat(
-                    messages: messages,
-                    reasoningEffort: request.reasoningEffort ?? .medium,
-                    currentDate: HarmonyPromptRenderer.calendarDate())
-            }
-            // The generation prompt ends exactly where the assistant's text
-            // begins, so a partial answer appended here is continued rather
-            // than restarted. Harmony is excluded upstream: it opens a channel
-            // after that point, and text placed here would not land in the
-            // reply.
-            let rendered = try tokenizer.applyChatTemplate(
-                messages,
-                modelVariant: modelVariant,
-                reasoning: request.reasoning,
-                preserveThinking: preservesChatMLThinking)
-            return tokenizer.encode(
-                rendered + request.assistantPrefix, addBOS: false)
-        }
-
         var dropped = 0
         while true {
-            let kept = request.history[dropped...]
-            let tokens = try encode(kept)
+            let tokens = try encode(request: request, turns: request.history[dropped...],
+                                    tokenizer: tokenizer, modelVariant: modelVariant,
+                                    harmonyDate: harmonyDate)
             if tokens.count < maxContext {
                 return RenderedConversation(
                     tokens: tokens,
@@ -465,61 +483,24 @@ actor RealInferenceSession {
         family: ModelFamily = .gemma4,
         modelVariant: ModelVariant? = nil
     ) throws -> RenderedMultimodalConversation {
-        var currentContent = request.imageAttachments.map {
-            MultimodalContentPart.image(id: $0.id)
-        }
-        if !request.prompt.isEmpty { currentContent.append(.text(request.prompt)) }
         let preservesChatMLThinking = family == .qwen36 && request.preserveThinking
-
-        func render(_ turns: ArraySlice<AppChatTurn>) throws -> MultimodalPrefillInput {
-            var messages: [MultimodalMessage] = []
-            messages.reserveCapacity(turns.count * 2 + 2)
-            // The system prompt leads the conversation, as in the text path.
-            if !request.systemPrompt.isEmpty {
-                messages.append(MultimodalMessage(
-                    role: .system, content: [.text(request.systemPrompt)]))
-            }
+        var dropped = 0
+        while true {
             // The renderer refuses features nothing refers to, and dropping a
-            // turn to fit the context drops its images with it — so the map is
+            // turn to fit the context drops its images with it, so the map is
             // rebuilt for each attempt rather than handed the whole set once.
-            var used: [UUID: VisionFeatures] = [:]
-            for turn in turns {
-                var content: [MultimodalContentPart] = []
-                for image in turn.images {
-                    guard let encoded = features[image.id] else { continue }
-                    used[image.id] = encoded
-                    content.append(.image(id: image.id))
-                }
-                // An earlier message can be images with nothing typed; the
-                // renderer refuses an empty content list, and the text part is
-                // what the template needs anyway.
-                if !turn.prompt.isEmpty || content.isEmpty {
-                    content.append(.text(turn.prompt))
-                }
-                messages.append(MultimodalMessage(role: .user, content: content))
-                messages.append(MultimodalMessage(
-                    role: .assistant,
-                    content: [.text(turn.response)],
-                    thinking: preservesChatMLThinking ? turn.thinking : nil))
-            }
-            for part in currentContent {
-                guard case .image(let id) = part, let encoded = features[id] else { continue }
-                used[id] = encoded
-            }
-            messages.append(MultimodalMessage(role: .user, content: currentContent))
-            return try MultimodalPromptRenderer.render(
-                messages: messages,
-                featuresByID: used,
+            let built = AppConversationMessages.multimodalMessages(
+                for: request, turns: request.history[dropped...], features: features,
+                finalThinking: preservesChatMLThinking)
+            let input = try MultimodalPromptRenderer.render(
+                messages: built.messages,
+                featuresByID: built.used,
                 tokenizer: tokenizer,
+                tools: request.tools,
                 family: family,
                 modelVariant: modelVariant,
                 reasoning: request.reasoning,
                 preserveThinking: preservesChatMLThinking)
-        }
-
-        var dropped = 0
-        while true {
-            let input = try render(request.history[dropped...])
             if input.effectiveTokenIDs.count < maxContext {
                 return RenderedMultimodalConversation(
                     input: input,
@@ -537,8 +518,76 @@ actor RealInferenceSession {
         }
     }
 
+    /// The untrimmed conversation as the cache sees it. A request whose
+    /// render had to drop turns neither publishes nor matches through this.
+    static func transcript(for request: AppGenerationRequest,
+                           modelVariant: ModelVariant?,
+                           harmonyDate: String?) -> ConversationTranscript {
+        let isHarmony = modelVariant == .gptOss_20B || modelVariant == .gptOss_120B
+        let turns = request.history[...]
+        return ConversationTranscript(
+            messages: AppConversationMessages.messages(
+                for: request, turns: turns,
+                finalThinking: rendersFinalThinking(request: request, modelVariant: modelVariant)),
+            imageIdentities: AppConversationMessages.imageIdentities(for: request, turns: turns),
+            tools: request.tools,
+            reasoning: request.reasoning,
+            reasoningEffort: request.reasoningEffort,
+            harmonyCurrentDate: isHarmony ? harmonyDate : nil,
+            preserveThinking: request.preserveThinking)
+    }
+
+    /// The app bridges a finished exchange to the next user message only for
+    /// ordinary, non-thinking turns, as it always has. With reasoning on,
+    /// the cached tokens hold reasoning a fresh render would drop, so the
+    /// next message is matched by an exact rendered prefix instead. Tool
+    /// results always continue the KV, because the templates keep the
+    /// in-progress turn's reasoning.
+    static func allowsTextBridge(_ request: AppGenerationRequest) -> Bool {
+        request.assistantPrefix.isEmpty && request.reasoning == .off
+            && !request.preserveThinking && request.reasoningEffort == nil
+    }
+
+    static func retainedConversationBudget(model: Model, key: SessionLoadKey,
+                                           imagePackInstalled: Bool) -> Int {
+        guard let descriptor = TUFFModelCatalog.all.first(where: {
+            $0.architecture.id.rawValue == model.config.variant.rawValue
+        }) else { return 0 }
+        return descriptor.retainedConversationBudgetBytes(
+            contextTokens: key.maxContext,
+            expertCacheSlots: key.options.expertCacheSlots,
+            prefillChunkTokens: key.options.prefillChunkTokens,
+            device: TUFFDeviceCapabilities.current(),
+            imagePackInstalled: imagePackInstalled)
+    }
+
+    static func conversationDomain(model: Model, key: SessionLoadKey,
+                                   runtime: RuntimeConfiguration) -> ConversationCacheDomain {
+        let switches = ProcessInfo.processInfo.environment
+            .filter { $0.key.hasPrefix("TUFF_") }
+            .map { "\($0.key)=\($0.value)" }.sorted()
+        let identity = ([GFTokenizer.toolChatTemplateIdentity,
+                         String(runtime.expertCacheSlots), runtime.expertCachePolicy.rawValue,
+                         runtime.prefillPolicy.rawValue, String(runtime.prefillChunkTokens),
+                         runtime.headPath.rawValue, String(key.forceLogitsHead)] + switches)
+            .joined(separator: ":")
+        let template = GFTokenizer.tokenizerFolder(forModelDirectory: key.directory)
+            .flatMap { try? Data(contentsOf: $0.appendingPathComponent("chat_template.jinja")) }
+            .map(Self.sha256Hex) ?? "builtin"
+        return ConversationCacheDomain(
+            modelID: model.modelID, sourceSnapshotHash: model.sourceSnapshotHash,
+            runtimeProfileHash: Self.sha256Hex(Data(identity.utf8)),
+            maximumContext: key.maxContext, kvStorage: PrefillKVStorageMode.fp16.rawValue,
+            fp16RingEnabled: runtime.fp16RingEnabled, templateSHA256: template)
+    }
+
+    static func sha256Hex(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
     func unload() {
-        promptReuse.clear()
+        conversations = ConversationStateStore(budgetBytes: 0)
+        conversationDomain = nil
         visionRuntime = nil
         visionRuntimeError = nil
         model = nil
@@ -567,6 +616,7 @@ actor RealInferenceSession {
             prefillConfig = coerced
         }
         let progress = ProgressState()
+        var completionStarted = false
         do {
             try request.validate()
             let executedPrefillMode: PrefillExecutedMode =
@@ -581,26 +631,50 @@ actor RealInferenceSession {
                 forceLogitsHead: Self.forceLogitsHead(for: request))
             guard let loadedKey else { throw AppInferenceError.modelNotLoaded }
             guard loadedKey == requestKey else { throw AppInferenceError.reloadRequired }
-            guard let runner, let tokenizer, let ctx, let scratch, let model else {
+            guard let runner, let tokenizer, let ctx, let scratch, let model,
+                  let conversationDomain else {
                 throw AppInferenceError.modelLoadFailed("session lost its loaded state")
             }
+            let variant = model.config.variant
+            let harmonyDate = HarmonyPromptRenderer.calendarDate()
+            let transcript = Self.transcript(for: request, modelVariant: variant,
+                                             harmonyDate: harmonyDate)
 
             var promptIds: [Int32]
-            let multimodalInput: MultimodalPrefillInput?
+            var multimodalInput: MultimodalPrefillInput?
             var conversationTrim: AppConversationTrim
-            // Images the conversation already contains are part of the context
-            // just as much as the ones attached to this message: a follow-up
-            // question about a picture used to be answered by a model that
-            // could no longer see it.
-            if encodableAttachments.isEmpty {
-                let rendered = try Self.renderConversation(
-                    request: request,
-                    tokenizer: tokenizer,
-                    maxContext: runner.maxContext,
-                    modelVariant: model.config.variant)
-                promptIds = rendered.tokens
+            var completionStart = RawCompletionStart.reset
+            var cacheSource = ConversationStateStore.Source.cold
+
+            // Text-only prompts render first, so an exact rendered prefix can
+            // match. With images the rendered ids cannot identify them, so
+            // only the message history can establish a match, and a hit skips
+            // encoding the images already inside the cached state.
+            let renderedText: RenderedConversation? = encodableAttachments.isEmpty
+                ? try Self.renderConversation(request: request, tokenizer: tokenizer,
+                                              maxContext: runner.maxContext,
+                                              modelVariant: variant, harmonyDate: harmonyDate)
+                : nil
+            let plan = conversations.plan(
+                domain: conversationDomain, transcript: transcript,
+                renderedPromptIDs: renderedText.map {
+                    $0.trim.droppedTurns == 0 ? $0.tokens : []
+                },
+                tokenizer: tokenizer, modelVariant: variant,
+                conversationKey: request.conversationKey,
+                runner: runner,
+                allowsTextBridge: Self.allowsTextBridge(request))
+            if case .hit(let effective, _) = plan.match, effective.count < runner.maxContext {
+                promptIds = effective
                 multimodalInput = nil
-                conversationTrim = rendered.trim
+                conversationTrim = AppConversationTrim(droppedTurns: 0,
+                                                        promptTokens: effective.count)
+                completionStart = plan.start
+                cacheSource = plan.source
+            } else if let renderedText {
+                promptIds = renderedText.tokens
+                multimodalInput = nil
+                conversationTrim = renderedText.trim
             } else {
                 guard let visionRuntime else {
                     throw AppInferenceError.invalidRequest(
@@ -632,18 +706,10 @@ actor RealInferenceSession {
                     tokenizer: tokenizer,
                     maxContext: runner.maxContext,
                     family: model.config.family,
-                    modelVariant: model.config.variant)
+                    modelVariant: variant)
                 promptIds = rendered.input.effectiveTokenIDs
                 multimodalInput = rendered.input
                 conversationTrim = rendered.trim
-            }
-            if conversationTrim.droppedTurns == 0, multimodalInput == nil,
-               let continued = promptReuse.textContinuation(
-                    request: request, tokenizer: tokenizer, modelVariant: model.config.variant),
-               continued.count < runner.maxContext {
-                promptIds = continued
-                conversationTrim = AppConversationTrim(droppedTurns: 0,
-                                                        promptTokens: continued.count)
             }
             progress.promptTokenCount = promptIds.count
             progress.conversationTrim = conversationTrim
@@ -655,19 +721,18 @@ actor RealInferenceSession {
                     requested: request.maxNewTokens,
                     promptTokenCount: promptIds.count,
                     maxContext: runner.maxContext))
-            // Consume the cache entry before executing: cancellation or any
-            // failure must not leave a claim about partially advanced state.
-            let completionStart = promptReuse.takeStart(
-                promptIDs: promptIds, position: runner.continuationPosition,
-                hasImages: multimodalInput != nil)
             progress.prefillStart = Date()
 
+            let toolNames = Set(request.tools.map(\.name))
             let assistantDecoder = StructuredAssistantDecoder(
                 tokenizer: tokenizer,
-                // Chat declares no tools, so a tool-shaped reply is refused.
-                allowedTools: [],
+                // A tool-shaped reply naming anything undeclared is refused.
+                allowedTools: toolNames,
                 promptOpensThinking: StructuredAssistantDecoder.promptOpensThinking(
-                    tokenizer: tokenizer, reasoning: request.reasoning))
+                    tokenizer: tokenizer, reasoning: request.reasoning),
+                parameterSchemas: Dictionary(
+                    request.tools.map { ($0.name, $0.parameters) },
+                    uniquingKeysWith: { first, _ in first }))
             let publishAssistantEvents: @Sendable (
                 [StructuredAssistantEvent], Int, Double
             ) -> Void = { events, index, elapsed in
@@ -682,13 +747,16 @@ actor RealInferenceSession {
                         progress.responseText += text
                         continuation.yield(.token(token(text)))
                     case .thinking(let text):
+                        progress.thinkingText += text
                         continuation.yield(.thinking(token(text)))
-                    case .toolCall:
-                        break
+                    case .toolCall(let call):
+                        progress.toolCalls.append(AppToolCall(
+                            id: call.id, name: call.name, arguments: call.arguments))
                     }
                 }
             }
 
+            completionStarted = true
             let result = try await runRawCompletion(
                 producer: runner, tokenizer: tokenizer, promptIds: promptIds,
                 multimodalInput: multimodalInput,
@@ -727,20 +795,58 @@ actor RealInferenceSession {
                     }
                 }
             }
-            if let assistantDecodeError = progress.assistantDecodeError { throw assistantDecodeError }
-            try assistantDecoder.finish()
+            // A stop token that closes a structure (Harmony's `<|call|>`) is not
+            // reported as `.token`; the decoder must see it before `finish()`.
+            if progress.assistantDecodeError == nil {
+                do {
+                    for tokenID in result.undeliveredBoundaryTokenIDs {
+                        publishAssistantEvents(
+                            try assistantDecoder.consume(tokenID: tokenID, delta: ""),
+                            max(progress.generated - 1, 0), progress.elapsedDecodeSeconds)
+                    }
+                } catch {
+                    progress.assistantDecodeError = error
+                }
+            }
+            if let assistantDecodeError = progress.assistantDecodeError {
+                throw Self.structuredFailure(assistantDecodeError)
+            }
+            // A call still open when the length limit ended generation was cut
+            // off, not malformed: nothing of it runs, the answer so far stands
+            // as a length stop, and the state holding the partial call is not
+            // offered for reuse.
+            let truncatedCall = try Self.finish(assistantDecoder, reason: result.reason)
+            if truncatedCall { progress.toolCalls = [] }
+            if !toolNames.isEmpty, result.reason == .toolCalls, progress.toolCalls.isEmpty {
+                throw AppInferenceError.malformedToolCall("a tool response marker without a call")
+            }
             // An awaited completion must not publish into a session that was
             // unloaded or replaced while that completion was in flight.
             if self.loadedKey == requestKey, self.runner === runner {
-                promptReuse.record(result, hasImages: multimodalInput != nil,
-                    request: conversationTrim.droppedTurns == 0 ? request : nil,
-                    response: progress.responseText)
+                conversations.publish(conversationTrim.droppedTurns == 0 && !truncatedCall
+                    ? ConversationCache.entry(
+                        domain: conversationDomain, transcript: transcript,
+                        content: request.assistantPrefix + progress.responseText,
+                        thinking: progress.thinkingText,
+                        calls: progress.toolCalls.map {
+                            ParsedToolCall(id: $0.id, name: $0.name, arguments: $0.arguments,
+                                           argumentsJSON: "")
+                        },
+                        result: result,
+                        conversationKey: request.conversationKey)
+                    : nil)
             }
+            progress.cachedPromptTokens = result.cachedPromptTokens
+            progress.cacheSource = result.cachedPromptTokens > 0 ? cacheSource : .cold
 
+            if !progress.toolCalls.isEmpty {
+                continuation.yield(.toolCalls(progress.toolCalls))
+            }
             let diagnostics = makeDiagnostics(request: request,
                                               memorySampler: memorySampler,
                                               progress: progress,
-                                              stopReason: Self.stopReason(result.reason),
+                                              stopReason: progress.toolCalls.isEmpty
+                                                ? Self.stopReason(result.reason) : .toolCalls,
                                               prefillSeconds: result.prefillSeconds,
                                               decodeSeconds: result.decodeSeconds,
                                               generated: result.newTokens,
@@ -748,6 +854,7 @@ actor RealInferenceSession {
             continuation.yield(.finished(diagnostics))
             continuation.finish()
         } catch is CancellationError {
+            if completionStarted { conversations.invalidateActive() }
             let diagnostics = makeDiagnostics(request: request,
                                               memorySampler: memorySampler,
                                               progress: progress,
@@ -762,6 +869,7 @@ actor RealInferenceSession {
             continuation.yield(.cancelled(diagnostics))
             continuation.finish(throwing: AppInferenceError.cancelled)
         } catch let prefillError as PrefillError {
+            if completionStarted { conversations.invalidateActive() }
             let diagnostics = Self.prefillFailureDiagnostics(config: prefillConfig,
                                                              kvStorageMode: .fp16,
                                                              reason: prefillError.description)
@@ -773,11 +881,45 @@ actor RealInferenceSession {
                            prefill: diagnostics,
                            forcePartialDiagnostics: true)
         } catch let appError as AppInferenceError {
+            if completionStarted { conversations.invalidateActive() }
             failGeneration(appError, request: request, memorySampler: memorySampler,
                            progress: progress, continuation: continuation)
         } catch {
+            if completionStarted { conversations.invalidateActive() }
             failGeneration(.unknown("\(error)"), request: request, memorySampler: memorySampler,
                            progress: progress, continuation: continuation)
+        }
+    }
+
+    /// Finishes structured decoding. Returns true when a tool call was still
+    /// open as the length limit ended generation: a truncation, reported as a
+    /// length stop with no calls run. Any other open or broken call throws.
+    static func finish(_ decoder: StructuredAssistantDecoder, reason: StopReason) throws -> Bool {
+        do {
+            try decoder.finish()
+            return false
+        } catch ToolCallParserError.malformed where reason == .maxTokens {
+            return true
+        } catch {
+            throw structuredFailure(error)
+        }
+    }
+
+    /// Parser failures are tool-call failures the app can retry; anything else
+    /// stays a generation error.
+    static func structuredFailure(_ error: Error) -> Error {
+        switch error {
+        case let parser as ToolCallParserError:
+            switch parser {
+            case .unknownTool(let name):
+                return AppInferenceError.malformedToolCall("unknown tool \(name.prefix(40))")
+            case .malformed:
+                return AppInferenceError.malformedToolCall("malformed call")
+            case .oversized:
+                return AppInferenceError.malformedToolCall("call larger than the parser accepts")
+            }
+        default:
+            return error
         }
     }
 
@@ -815,7 +957,7 @@ actor RealInferenceSession {
         } else {
             ttft = nil
         }
-        return AppDiagnostics(
+        var diagnostics = AppDiagnostics(
             generatedTokens: generated,
             stopReason: stopReason,
             promptTokenCount: progress.promptTokenCount,
@@ -829,6 +971,13 @@ actor RealInferenceSession {
             prefill: prefill,
             runner: runnerDiagnostics(progress: progress, generated: generated),
             droppedTurns: progress.conversationTrim?.droppedTurns ?? 0)
+        let statistics = conversations.statistics
+        diagnostics.cachedPromptTokens = progress.cachedPromptTokens
+        diagnostics.conversationCacheSource = progress.cachedPromptTokens == nil
+            ? nil : progress.cacheSource.rawValue
+        diagnostics.retainedConversations = statistics.retainedConversations
+        diagnostics.retainedConversationBytes = statistics.retainedBytes
+        return diagnostics
     }
 
     /// Per-token buckets as diffs of the runner's cumulative counters from the
@@ -889,6 +1038,10 @@ private final class ProgressState: @unchecked Sendable {
     var countersAtDecodeStart: RunnerCounterSnapshot?
     var assistantDecodeError: Error?
     var responseText = ""
+    var thinkingText = ""
+    var toolCalls: [AppToolCall] = []
+    var cachedPromptTokens: Int?
+    var cacheSource: ConversationStateStore.Source = .cold
 
     var elapsedDecodeSeconds: Double {
         guard let decodeStart else { return 0 }

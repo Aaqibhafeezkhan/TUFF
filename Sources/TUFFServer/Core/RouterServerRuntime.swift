@@ -104,6 +104,7 @@ public enum RouterServerRuntime {
                     modelDirectory: directory,
                     maxContext: installed.inferencePlan(for: descriptor).contextTokens,
                     promptCacheMode: .singlePrefix,
+                    retainedConversationBytes: installed.retainedConversationBytes(for: descriptor),
                     runtimeConfiguration: installed.runtimeConfiguration(for: descriptor),
                     context: try sharedContext.get(),
                     // The app verified these packs when it installed them, and

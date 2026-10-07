@@ -63,6 +63,36 @@ public struct DecodeLoadRequest: Codable, Sendable {
     }
 }
 
+/// A tool result as the model reads it.
+public struct DecodeToolResult: Codable, Sendable, Equatable {
+    public var callID: String
+    public var name: String
+    public var content: String
+
+    public init(callID: String, name: String, content: String) {
+        self.callID = callID
+        self.name = name
+        self.content = content
+    }
+}
+
+/// One generation that ended in tool calls, and the results that answered
+/// them. Rendered as the model's native tool turns, never as user text.
+public struct DecodeToolRound: Codable, Sendable, Equatable {
+    public var thinking: String?
+    public var content: String
+    public var calls: [GFTokenizer.HistoricalToolCall]
+    public var results: [DecodeToolResult]
+
+    public init(thinking: String? = nil, content: String = "",
+                calls: [GFTokenizer.HistoricalToolCall], results: [DecodeToolResult]) {
+        self.thinking = thinking
+        self.content = content
+        self.calls = calls
+        self.results = results
+    }
+}
+
 /// One completed exchange carried across the IPC boundary as conversation
 /// history. Mirrors `AppChatTurn`, which lives in the app module the service
 /// cannot import.
@@ -74,13 +104,17 @@ public struct DecodeChatTurn: Codable, Sendable, Equatable {
     /// that never sends them and a newer service still agree; absent means the
     /// turn contributes text only, which is what every v2 client sent.
     public var images: [DecodeImageAttachment]?
+    /// Tool rounds before `response`. Absent from clients before 8.0.
+    public var toolRounds: [DecodeToolRound]?
 
     public init(prompt: String, response: String, thinking: String? = nil,
-                images: [DecodeImageAttachment]? = nil) {
+                images: [DecodeImageAttachment]? = nil,
+                toolRounds: [DecodeToolRound]? = nil) {
         self.prompt = prompt
         self.response = response
         self.thinking = thinking
         self.images = images
+        self.toolRounds = toolRounds
     }
 }
 
@@ -125,6 +159,11 @@ public struct DecodeGenerationRequest: Codable, Sendable {
     public var seed: UInt64?
     public var runtimeOptions: DecodeRuntimeOptions
     public var generationID: UUID
+    /// Declared tools, rounds already run for this message, and the chat it
+    /// belongs to. All absent from clients before 8.0.
+    public var tools: [GFTokenizer.FunctionDefinition]?
+    public var currentRounds: [DecodeToolRound]?
+    public var conversationKey: String?
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -153,6 +192,11 @@ public struct DecodeGenerationRequest: Codable, Sendable {
         runtimeOptions = try container.decode(
             DecodeRuntimeOptions.self, forKey: .runtimeOptions)
         generationID = try container.decode(UUID.self, forKey: .generationID)
+        tools = try container.decodeIfPresent(
+            [GFTokenizer.FunctionDefinition].self, forKey: .tools)
+        currentRounds = try container.decodeIfPresent(
+            [DecodeToolRound].self, forKey: .currentRounds)
+        conversationKey = try container.decodeIfPresent(String.self, forKey: .conversationKey)
     }
 
     public init(prompt: String, systemPrompt: String? = nil,
@@ -167,7 +211,10 @@ public struct DecodeGenerationRequest: Codable, Sendable {
                 repetitionPenalty: Float = 1,
                 seed: UInt64? = nil,
                 runtimeOptions: DecodeRuntimeOptions = DecodeRuntimeOptions(),
-                generationID: UUID = UUID()) {
+                generationID: UUID = UUID(),
+                tools: [GFTokenizer.FunctionDefinition]? = nil,
+                currentRounds: [DecodeToolRound]? = nil,
+                conversationKey: String? = nil) {
         self.prompt = prompt
         self.systemPrompt = systemPrompt
         self.assistantPrefix = assistantPrefix
@@ -185,6 +232,9 @@ public struct DecodeGenerationRequest: Codable, Sendable {
         self.seed = seed
         self.runtimeOptions = runtimeOptions
         self.generationID = generationID
+        self.tools = tools
+        self.currentRounds = currentRounds
+        self.conversationKey = conversationKey
     }
 }
 
@@ -293,6 +343,16 @@ public struct DecodeServiceEvent: Codable, Sendable {
     /// Turns the renderer dropped to make the prompt fit. Absent on events from
     /// a service that predates the field.
     public var droppedTurns: Int?
+    /// Calls the model made, on a finished event. Parsed and validated
+    /// against the declared tool names; nothing has run.
+    public var toolCalls: [GFTokenizer.HistoricalToolCall]?
+    /// A machine-readable failure, so the app can tell a malformed tool call
+    /// from other errors.
+    public var errorKind: String?
+    public var cachedPromptTokens: Int?
+    public var conversationCacheSource: String?
+    public var retainedConversations: Int?
+    public var retainedConversationBytes: Int?
 
     public init(kind: DecodeServiceEventKind, generationID: UUID,
                 sequence: UInt64 = 0, textDelta: String = "",

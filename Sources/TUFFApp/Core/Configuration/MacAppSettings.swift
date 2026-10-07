@@ -167,6 +167,11 @@ struct MacAppSettings: Codable, Equatable, Sendable {
     /// Applies to every model, because it is a statement about the person's
     /// willingness to risk swapping, not about one checkpoint.
     var bypassModelRestrictions: Bool = false
+    /// Composer switches for web search and local file search. Off until the
+    /// person turns them on; they stay as last set.
+    var webSearchEnabled: Bool = false
+    var fileSearchEnabled: Bool = false
+    var searchProvider: AppSearchProviderKind = .duckDuckGo
 
     // Source compatibility for the v1 app and focused tests. These map only to
     // Gemma's stable profile; app code uses `profile(for:)` explicitly.
@@ -222,6 +227,9 @@ struct MacAppSettings: Codable, Equatable, Sendable {
         case customAccentColorHex
         case bypassModelRestrictions
         case zoomLevel
+        case webSearchEnabled
+        case fileSearchEnabled
+        case searchProvider
     }
 
     private enum LegacyCodingKeys: String, CodingKey {
@@ -314,6 +322,12 @@ struct MacAppSettings: Codable, Equatable, Sendable {
                 Bool.self, forKey: .bypassModelRestrictions) ?? false
             zoomLevel = try container.decodeIfPresent(
                 AppZoomLevel.self, forKey: .zoomLevel) ?? .default
+            webSearchEnabled = try container.decodeIfPresent(
+                Bool.self, forKey: .webSearchEnabled) ?? false
+            fileSearchEnabled = try container.decodeIfPresent(
+                Bool.self, forKey: .fileSearchEnabled) ?? false
+            searchProvider = (try? container.decodeIfPresent(
+                AppSearchProviderKind.self, forKey: .searchProvider)) ?? .duckDuckGo
             return
         }
 

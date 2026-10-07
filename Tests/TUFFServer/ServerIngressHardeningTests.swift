@@ -299,38 +299,85 @@ private actor EchoBackend: ServerInferenceBackend {
     /// Accepted sockets were unbounded: each costs a descriptor and can pin a
     /// staging directory, so the count has to be capped.
     @Test func connectionsBeyondTheCapAreClosed() async throws {
+        var descriptorLimits = rlimit()
+        try #require(getrlimit(RLIMIT_NOFILE, &descriptorLimits) == 0)
+        let originalLimits = descriptorLimits
+        // Both ends of every connection live in this process. A default soft
+        // limit of 256 cannot fit 128 pairs plus the listener and runtime files.
+        let fixtureBudget = rlim_t(TUFFHTTPServer.maximumConnections * 2 + 256)
+        if descriptorLimits.rlim_cur < fixtureBudget {
+            try #require(descriptorLimits.rlim_max >= fixtureBudget,
+                         "connection-cap fixture needs \(fixtureBudget) descriptors")
+            descriptorLimits.rlim_cur = fixtureBudget
+            try #require(setrlimit(RLIMIT_NOFILE, &descriptorLimits) == 0)
+        }
+        defer {
+            if descriptorLimits.rlim_cur != originalLimits.rlim_cur {
+                var restored = originalLimits
+                #expect(setrlimit(RLIMIT_NOFILE, &restored) == 0)
+            }
+        }
+        print("Connection-cap fixture descriptors: original=\(originalLimits.rlim_cur) budget=\(descriptorLimits.rlim_cur) hard=\(descriptorLimits.rlim_max)")
         let server = TUFFHTTPServer(
             modelID: "test-model", queueLimit: 1, backend: EchoBackend())
-        let channel = try await server.start(port: 0)
-        let port = try #require(channel.localAddress?.port)
-        let cap = TUFFHTTPServer.maximumConnections
-        var sockets: [Int32] = []
-        defer { sockets.forEach { _ = Darwin.close($0) } }
-        for _ in 0..<cap {
-            sockets.append(try connectedSocket(port: port))
+        do {
+            let channel = try await server.start(port: 0)
+            let port = try #require(channel.localAddress?.port)
+            let cap = TUFFHTTPServer.maximumConnections
+            var sockets: [Int32] = []
+            defer { sockets.forEach { _ = Darwin.close($0) } }
+            let admissionStarted = Date()
+            let admissionDeadline = admissionStarted.addingTimeInterval(45)
+            for index in 0..<cap {
+                try #require(Date() < admissionDeadline,
+                             "connection setup timed out before connection \(index + 1)")
+                sockets.append(try connectedSocket(port: port))
+                // Pace admission rather than filling the kernel's smaller listen
+                // backlog. Every connection below the cap must actually be admitted.
+                // Bound each wait separately while allowing enough total time
+                // for repeated polling on slower hosted VMs.
+                let connectionDeadline = min(admissionDeadline, Date().addingTimeInterval(4))
+                while await server.acceptedConnectionCount < index + 1, Date() < connectionDeadline {
+                    try await Task.sleep(nanoseconds: 20_000_000)
+                }
+                let admitted = await server.acceptedConnectionCount
+                try #require(admitted == index + 1,
+                             "admitted \(admitted) of \(index + 1) connections")
+                if admitted.isMultiple(of: 32) {
+                    print("Connection-cap fixture admitted \(admitted) in \(Date().timeIntervalSince(admissionStarted)) seconds")
+                }
+            }
+            var closed = false
+            do {
+                let overflow = try connectedSocket(port: port)
+                sockets.append(overflow)
+                // Depending on handshake timing, immediate server closure can
+                // produce EOF or ECONNRESET, including during connect itself.
+                var descriptor = pollfd(fd: overflow, events: Int16(POLLIN), revents: 0)
+                let overflowDeadline = Date().addingTimeInterval(4)
+                while Date() < overflowDeadline {
+                    guard Darwin.poll(&descriptor, 1, 100) > 0 else { continue }
+                    var buffer = [UInt8](repeating: 0, count: 64)
+                    let received = Darwin.recv(overflow, &buffer, buffer.count, 0)
+                    if received == 0 || (received < 0 && errno == ECONNRESET) {
+                        closed = true
+                        break
+                    }
+                    if received < 0 {
+                        throw RawSocketError.systemCall("recv", errno)
+                    }
+                }
+            } catch RawSocketError.systemCall(let operation, let code)
+                where operation == "connect" && code == ECONNRESET {
+                closed = true
+            }
+            #expect(closed, "connection past the cap stayed open")
+            #expect(await server.acceptedConnectionCount == cap)
+            try await server.shutdown()
+        } catch {
+            try? await server.shutdown()
+            throw error
         }
-        // The accept loop runs on the event loop; wait for it to catch up.
-        let deadline = Date().addingTimeInterval(4)
-        while await server.acceptedConnectionCount < cap, Date() < deadline {
-            try await Task.sleep(nanoseconds: 20_000_000)
-        }
-        #expect(await server.acceptedConnectionCount == cap)
-
-        let overflow = try connectedSocket(port: port)
-        sockets.append(overflow)
-        // A refused connection is accepted by the kernel and then closed, so it
-        // reads EOF rather than failing to connect.
-        var descriptor = pollfd(fd: overflow, events: Int16(POLLIN), revents: 0)
-        var closed = false
-        let overflowDeadline = Date().addingTimeInterval(4)
-        while Date() < overflowDeadline {
-            guard Darwin.poll(&descriptor, 1, 100) > 0 else { continue }
-            var buffer = [UInt8](repeating: 0, count: 64)
-            if Darwin.recv(overflow, &buffer, buffer.count, 0) == 0 { closed = true; break }
-        }
-        #expect(closed, "connection past the cap stayed open")
-        #expect(await server.acceptedConnectionCount == cap)
-        try await server.shutdown()
     }
 }
 

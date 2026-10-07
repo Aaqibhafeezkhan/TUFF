@@ -32,6 +32,12 @@ public final class AppConversationStore {
     public internal(set) var outputTurnIsRecorded = false
     public var outputText = ""
     public var outputThinkingText = ""
+    /// Tool work for the answer in the output slot: what is running or ran,
+    /// the finished rounds, and the sources found so far.
+    public var outputToolActivities: [AppToolActivity] = []
+    public var outputToolRounds: [AppToolRound] = []
+    public var outputSources: [AppSource] = []
+    public var outputCapabilities: AppChatCapabilities = .none
     public var conversation: [AppChatTurn] = []
     public var runIdentity = 0
     public private(set) var conversations: [AppConversationRecord] = []
@@ -86,6 +92,7 @@ public final class AppConversationStore {
         outputDocumentAttachments = []
         outputText = ""
         outputThinkingText = ""
+        clearOutputTools()
         outputTurnIsRecorded = false
         persistArchive()
     }
@@ -124,6 +131,7 @@ public final class AppConversationStore {
         outputDocumentAttachments = []
         outputText = ""
         outputThinkingText = ""
+        clearOutputTools()
         outputTurnIsRecorded = false
         restoreSelectedTurns()
         persistArchive()
@@ -153,6 +161,7 @@ public final class AppConversationStore {
         outputDocumentAttachments = []
         outputText = ""
         outputThinkingText = ""
+        clearOutputTools()
         outputTurnIsRecorded = false
         clearPendingTurn()
         persistArchive()
@@ -179,6 +188,7 @@ public final class AppConversationStore {
             outputDocumentAttachments = []
             outputText = ""
             outputThinkingText = ""
+            clearOutputTools()
             outputTurnIsRecorded = false
             restoreSelectedTurns()
         }
@@ -244,7 +254,8 @@ public final class AppConversationStore {
             thinking: nil,
             attachments: durableAttachments,
             documents: turn.documents,
-            modelID: modelID))
+            modelID: modelID,
+            capabilities: turn.capabilities))
         if conversations[index].title == "New Chat" {
             conversations[index].title = Self.automaticTitle(for: Self.titleSource(turn))
         }
@@ -267,9 +278,24 @@ public final class AppConversationStore {
     /// Called for every terminal outcome, not only a clean finish: an answer
     /// cut off halfway is what the reader has, and throwing it away was the
     /// behaviour this replaced.
+    public func clearOutputTools() {
+        outputToolActivities = []
+        outputToolRounds = []
+        outputSources = []
+        outputCapabilities = .none
+    }
+
+    /// The next citation number in the selected chat: sources are numbered
+    /// across the whole chat so a number never means two things.
+    public var nextSourceID: Int {
+        (conversation.flatMap(\.sources).map(\.id).max() ?? 0) + 1
+    }
+
     public func completeTurn(
         response: String,
         thinking: String?,
+        toolRounds: [AppToolRound] = [],
+        sources: [AppSource] = [],
         now: Date = Date()
     ) {
         guard let pending = pendingTurn,
@@ -279,6 +305,8 @@ public final class AppConversationStore {
                 where: { $0.id == pending.turnID }) else { return }
         conversations[index].turns[turnIndex].response = response
         conversations[index].turns[turnIndex].thinking = thinking
+        conversations[index].turns[turnIndex].toolRounds = toolRounds
+        conversations[index].turns[turnIndex].sources = sources
         conversations[index].updatedAt = now
         moveConversationToFront(at: index)
 
@@ -438,6 +466,9 @@ public final class AppSettingsStore {
     public var accentColorMode: AppAccentColorMode = .appDefault
     public var customAccentColorHex: String = AppHexColor.defaultPurple.hexString
     public var zoomLevel: AppZoomLevel = .default
+    public var webSearchEnabled = false
+    public var fileSearchEnabled = false
+    public var searchProvider: AppSearchProviderKind = .duckDuckGo
     /// App-wide escape hatch from the hardware and memory gates.
     public var bypassModelRestrictions = false
     /// The selected model's system prompt, loaded from its profile.

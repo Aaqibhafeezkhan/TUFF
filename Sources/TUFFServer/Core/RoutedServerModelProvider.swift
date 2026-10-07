@@ -61,14 +61,31 @@ public struct ServerInstalledModels: Sendable {
         return "ready"
     }
 
+    /// The working set plus the retained-conversation budget. A model with
+    /// its image pack already reserves the whole budget, which covers both.
     public func estimatedBytes(for descriptor: TUFFModelDescriptor) -> UInt64 {
         let plan = inferencePlan(for: descriptor)
         let estimate = descriptor.estimatedInferenceWorkingSetBytes(
             contextTokens: plan.contextTokens,
             expertCacheSlots: plan.expertCacheSlots,
             prefillChunkTokens: descriptor.recommendedPrefillChunkTokens(on: device))
-        return visionCapability(for: descriptor) == "ready"
-            ? max(device.safeAppMemoryBudgetBytes, estimate) : estimate
+        if visionCapability(for: descriptor) == "ready" {
+            return max(device.safeAppMemoryBudgetBytes, estimate)
+        }
+        let total = estimate.addingReportingOverflow(
+            UInt64(retainedConversationBytes(for: descriptor)))
+        return total.overflow ? .max : total.partialValue
+    }
+
+    /// Retained conversation state this model's session may keep.
+    public func retainedConversationBytes(for descriptor: TUFFModelDescriptor) -> Int {
+        let plan = inferencePlan(for: descriptor)
+        return descriptor.retainedConversationBudgetBytes(
+            contextTokens: plan.contextTokens,
+            expertCacheSlots: plan.expertCacheSlots,
+            prefillChunkTokens: descriptor.recommendedPrefillChunkTokens(on: device),
+            device: device,
+            imagePackInstalled: visionCapability(for: descriptor) == "ready")
     }
 
     /// Tool inventories need more than the short qualification prompts. Grow

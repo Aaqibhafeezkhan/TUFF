@@ -97,7 +97,9 @@ checkpoint works.
 
 ## Building and testing locally
 
-Install Xcode with Swift 6.2 or newer, select it with `xcode-select`, and run
+Release validation and contributor checks use Xcode 27 with Swift 6.4.
+Earlier toolchains are not qualified by those checks. Install Xcode, select it
+with `xcode-select`, and run
 `swift package resolve`. Use whatever editor, agent or review tools you like;
 the same checks apply to contributor pull requests.
 
@@ -112,6 +114,25 @@ Scripts/check.sh                         # also packages and runs updater fixtur
 Tests must run serially through `Scripts/test.sh`; shared Metal state makes
 parallel test runs unreliable. Clone builds keep models and settings under
 `scratch/`. Packaged builds use `~/Library/Application Support/TUFF`.
+
+### Homebrew release metadata
+
+`Casks/tuff.rb` lives in this repository and uses the same ZIP as the GitHub
+release. After preparing the final archive, update its pinned version and
+checksum, then verify them before publishing:
+
+```sh
+python3 Scripts/update_homebrew.py VERSION dist/vVERSION/TUFF-vVERSION-macos-arm64.zip
+python3 Scripts/update_homebrew.py VERSION dist/vVERSION/TUFF-vVERSION-macos-arm64.zip --check
+python3 Scripts/test_homebrew.py
+```
+
+The script checks the packaged app's version and hashes the actual archive.
+It does not build, install, sign or publish anything. Any change to the ZIP
+requires updating the checksum again. Keep the cask in the release commit,
+verify it against the public download after publication, and preserve user
+data during installation tests. Do not add a `zap` stanza that removes models,
+chats, settings or search keys.
 
 ## Technical expectations
 
@@ -151,6 +172,35 @@ tests, and a recorded run of the installed checkpoint with its stop reason and
 peak memory. If your Mac cannot run the model, say which real run is still
 needed.
 
+The opt-in [API adapter check](Scripts/validate_api_adapters.py) runs synthetic
+text and JSON-function tool rounds through Messages and Responses, in JSON
+and streaming form. The [conversation follow-up check](Scripts/validate_conversation_followups.py)
+compares uninterrupted Gemma 26B reasoning and image conversations with runs
+interrupted by another conversation. The image workload needs the installed
+Gemma image companion and generates its own red-square image.
+
+Use packaged executables outside Applications, turn off the Background API,
+and run these separately with no build, tests or other model process running:
+
+```sh
+python3 Scripts/validate_api_adapters.py \
+  --server dist/v8.0.0/TUFF.app/Contents/MacOS/TUFFServer \
+  --models-root "$HOME/Library/Application Support/TUFF/Models" \
+  --models gemma4,qwen38-flash-next --output scratch/api-adapters
+
+python3 Scripts/validate_conversation_followups.py \
+  --service dist/v8.0.0/TUFF.app/Contents/MacOS/TUFFDecodeService \
+  --model-root "$HOME/Library/Application Support/TUFF/Models" \
+  --workloads reasoning,image --output scratch/conversation-followups
+```
+
+Each command requires a new output directory, uses an isolated app home and
+records executable identity, machine observations and every request. They use
+synthetic prompts and tool results, execute no external tools, and download
+no weights. The image helper stages its synthetic image in the Mac's actual
+attachment temp directory and removes only its own unique directory afterward.
+These are correctness checks, not speed claims or client compatibility tests.
+
 ## Performance results
 
 Report what the tools print, with the commit, Mac, memory, macOS, exact
@@ -169,12 +219,48 @@ not a performance claim.
   and loopback server.
 - `TUFF_PHASES=1` prints expert-cache and phase counters. They can overlap and
   do not add up to wall-clock time.
+- `TUFF_TOKENIZATION_CACHE=off` disables the exact-input CPU tokenization cache
+  for comparisons. This is separate from retained GPU conversation state.
 - Three startup switches exist for comparisons: `TUFF_EXPERT_LOOKAHEAD=off`
   disables expert lookahead, `TUFF_SMALL_BLOCK_PREFILL=on` enables the
   experimental small-block prefill path, and `TUFF_SHARED_EXPERT_OVERLAP=on`
   lets prefill run the shared expert while the first routed expert tile is
   prepared. The last two apply only to Gemma 4 26B-A4B and Qwen3.8 Flash Next.
   None is an app setting.
+
+The opt-in chunk-size calibrator compares its model-specific baseline with
+explicit candidates on your Mac. Use a packaged decode service outside
+Applications, stop the Background API first, and run with no other model,
+build or test process:
+
+```sh
+python3 Scripts/calibrate_runtime.py \
+  --service dist/v8.0.0/TUFF.app/Contents/MacOS/TUFFDecodeService \
+  --model-root "$HOME/Library/Application Support/TUFF/Models" \
+  --models gemma4,qwen38-flash-next --chunks 128,512,2048 \
+  --shapes short,long --repeat 3 --output scratch/calibration
+```
+
+Add `--cache-slots 16,24,32` to also compare expert-cache capacity for Gemma
+26B and Flash Next. This optional sweep requires at least 16 GiB of unified
+memory and limits context to 4,096 tokens. It always includes the baseline
+slots (16 for Gemma, 32 for Flash Next) and reloads each slot configuration
+serially. It does not sweep dense models or other MoE families, and it does
+not remove runtime load checks. A refused candidate is recorded and cannot
+be recommended. The fixed bounds are not a general memory-admission guarantee;
+other applications and model state can still create pressure.
+
+It uses fixed synthetic greedy prompts, loads one model at a time and writes
+every repetition to `rows.json`, with identity and recommendation files beside
+it. A candidate needs at least three complete paired repetitions with matching
+output and a complete-request gain beyond both 5% and observed noise. Decode
+and peak-memory regressions can reject it. Otherwise the baseline remains the
+recommendation. Nothing is applied to app settings, and no weights are
+downloaded. Results apply to the measured model, Mac and prompt shapes; this
+is not speculative-decoding calibration or a general speed claim. With a
+cache sweep, `selected` still names the selected chunk size and the additive
+`selected_cache_slots` field names the slots. `runtime_options` contains both
+settings. Without that flag, only chunk sizes are compared.
 
 The [performance report form](https://github.com/rexmhall09/TUFF/issues/new?template=benchmark.yml)
 is the place to share results.

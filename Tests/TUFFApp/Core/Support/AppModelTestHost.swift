@@ -40,7 +40,8 @@ func makeAppModel(
     conversationStore: AppConversationStore = AppConversationStore(),
     visionRuntimeSupported: Bool = true,
     settingsPersistenceEnabled: Bool = false,
-    deviceCapabilities: TUFFDeviceCapabilities = .qualifyingTestHost
+    deviceCapabilities: TUFFDeviceCapabilities = .qualifyingTestHost,
+    toolStore: AppToolStore? = nil
 ) -> AppModel {
     AppModel(
         modelDirectory: modelDirectory,
@@ -53,5 +54,6 @@ func makeAppModel(
         conversationStore: conversationStore,
         visionRuntimeSupported: visionRuntimeSupported,
         settingsPersistenceEnabled: settingsPersistenceEnabled,
-        deviceCapabilities: deviceCapabilities)
+        deviceCapabilities: deviceCapabilities,
+        toolStore: toolStore)
 }

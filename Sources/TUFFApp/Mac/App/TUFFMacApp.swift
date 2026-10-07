@@ -39,7 +39,6 @@ private final class ForegroundAppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-@main
 struct TUFFMacApp: App {
     @NSApplicationDelegateAdaptor private var appDelegate: ForegroundAppDelegate
     @State private var isReportingBug = false
@@ -61,7 +60,8 @@ struct TUFFMacApp: App {
             installer: RepackModelInstallerClient(descriptor: .selected),
             conversationStore: .persistentDefault(),
             visionRuntimeSupported: AppModel.currentDeviceSupportsVisionRuntime,
-            settingsPersistenceEnabled: true)
+            settingsPersistenceEnabled: true,
+            toolStore: .standard())
         let updateController = AppUpdateController()
         self.inferenceBroker = inferenceBroker
         self.loadModelRequested = CommandLine.arguments.contains("--load-model")

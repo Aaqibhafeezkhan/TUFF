@@ -68,6 +68,17 @@ public struct AppDiagnostics: Equatable, Sendable {
     /// The renderer has always computed this and nothing ever read it, so a long
     /// chat silently forgot its beginning. Carried here so the app can say so.
     public var droppedTurns: Int = 0
+    /// Prompt tokens reused from retained state rather than prefilled.
+    public var cachedPromptTokens: Int?
+    /// Where the reused state came from: the conversation the runner already
+    /// held, a retained snapshot, or none.
+    public var conversationCacheSource: String?
+    /// Retained conversations and their bytes after this request.
+    public var retainedConversations: Int?
+    public var retainedConversationBytes: Int?
+    /// Tool rounds and tool time for the answer this diagnostic finished.
+    public var toolRounds: Int = 0
+    public var toolSeconds: Double?
 
     public var requestStartTimeToFirstTokenSeconds: Double? {
         guard let prefillSeconds, let timeToFirstTokenSeconds else { return nil }
@@ -132,6 +143,9 @@ public enum AppInferenceEvent: Equatable, Sendable {
     case memorySample
     case token(AppTokenEvent)
     case thinking(AppTokenEvent)
+    /// Calls the model made, emitted before `.finished`. The calls are
+    /// complete and parsed; nothing has been executed.
+    case toolCalls([AppToolCall])
     case finished(AppDiagnostics)
     case cancelled(AppDiagnostics)
     case failed(AppInferenceError, partial: AppDiagnostics?)

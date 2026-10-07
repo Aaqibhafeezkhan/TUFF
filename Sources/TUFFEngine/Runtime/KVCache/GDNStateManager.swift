@@ -84,6 +84,25 @@ public final class GDNStateManager {
 
     public func isLinear(layer: Int) -> Bool { stateBuffers[layer] != nil }
 
+    /// Adds every linear layer's recurrent and convolution state to a
+    /// snapshot. Both are fixed size and fully live at any position.
+    func addSnapshotRanges(to builder: inout RunnerStateSnapshotBuilder) {
+        for layer in 0..<config.numLayers {
+            if let state = stateBuffers[layer] {
+                builder.add("gdn.state.\(layer)", state, length: state.length)
+            }
+            if let tail = convTailBuffers[layer] {
+                builder.add("gdn.conv.\(layer)", tail, length: tail.length)
+            }
+        }
+    }
+
+    var snapshotBytes: Int {
+        (stateBuffers + convTailBuffers).reduce(0) {
+            $0 + RunnerStateSnapshotBuilder.aligned($1?.length ?? 0)
+        }
+    }
+
     /// Reset all recurrent state to the empty-context value (zeros).
     public func reset() {
         zeroAll()

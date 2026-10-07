@@ -78,11 +78,13 @@ public struct OpenAIChatMessage: Codable, Equatable, Sendable {
     public let toolCalls: [OpenAIToolCall]?
     public let toolCallID: String?
     public let name: String?
+    public var reasoningContent: String? = nil
 
     enum CodingKeys: String, CodingKey {
         case role, content, name
         case toolCalls = "tool_calls"
         case toolCallID = "tool_call_id"
+        case reasoningContent = "reasoning_content"
     }
 }
 
@@ -158,10 +160,7 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
     /// from `enable_thinking` or `chat_template_kwargs.enable_thinking`.
     public let enableThinking: Bool?
     /// Qwen's request to render earlier assistant reasoning back into the
-    /// prompt. TUFF never returns reasoning and drops any a client sends back,
-    /// so no history carries reasoning and this cannot change the prompt. It
-    /// is type-checked and accepted because Qwen clients such as oh-my-pi send
-    /// it on every request.
+    /// prompt. Accepted directly or through chat_template_kwargs.
     public let preserveThinking: Bool?
     /// As sent. Only `enable_thinking` and `preserve_thinking` are accepted,
     /// and both are folded into the fields above.
@@ -172,6 +171,11 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
     /// Kept as raw JSON so a value of any shape reaches the validator as a
     /// request error rather than as malformed JSON. Only `type` is read.
     public let responseFormat: JSONValue?
+    /// The caller's name for its conversation. It orders the server's search
+    /// among retained conversations and replaces that conversation's older
+    /// state; it never establishes a match by itself. Values that are not
+    /// strings were tolerated before 8.0 and are still ignored.
+    public let promptCacheKey: String?
 
     enum CodingKeys: String, CodingKey, CaseIterable {
         case model, messages, stream, temperature, stop, seed, tools, n, logprobs
@@ -190,6 +194,7 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
         case chatTemplateKwargs = "chat_template_kwargs"
         case reasoningEffort = "reasoning_effort"
         case responseFormat = "response_format"
+        case promptCacheKey = "prompt_cache_key"
     }
 
     /// The `chat_template_kwargs` TUFF understands: the same switches it
@@ -206,7 +211,6 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
         "store",
         "metadata",
         "service_tier",
-        "prompt_cache_key",
         "safety_identifier",
     ]
 
@@ -337,6 +341,13 @@ public struct OpenAIChatRequest: Codable, Equatable, Sendable {
             GPTOSSReasoningEffort.self, forKey: .reasoningEffort)
         responseFormat = try container.decodeIfPresent(
             JSONValue.self, forKey: .responseFormat)
+        switch try container.decodeIfPresent(JSONValue.self, forKey: .promptCacheKey) {
+        case .string(let key)? where !key.isEmpty:
+            // Bounded so a key cannot become a large per-entry allocation.
+            promptCacheKey = String(key.utf8.prefix(256)) ?? String(key.prefix(64))
+        default:
+            promptCacheKey = nil
+        }
     }
 
     /// Names at most eight keys, each bounded, and for a single key suggests
@@ -425,26 +436,43 @@ public struct OpenAIUsage: Codable, Equatable, Sendable {
         }
     }
 
+    public struct CompletionTokensDetails: Codable, Equatable, Sendable {
+        public let reasoningTokens: Int
+
+        enum CodingKeys: String, CodingKey {
+            case reasoningTokens = "reasoning_tokens"
+        }
+
+        public init(reasoningTokens: Int) {
+            self.reasoningTokens = reasoningTokens
+        }
+    }
+
     public let promptTokens: Int
     public let completionTokens: Int
     public let totalTokens: Int
     public let promptTokensDetails: PromptTokensDetails
+    /// Present only when the response carries reasoning.
+    public let completionTokensDetails: CompletionTokensDetails?
 
     enum CodingKeys: String, CodingKey {
         case promptTokens = "prompt_tokens"
         case completionTokens = "completion_tokens"
         case totalTokens = "total_tokens"
         case promptTokensDetails = "prompt_tokens_details"
+        case completionTokensDetails = "completion_tokens_details"
     }
 
     public init(promptTokens: Int,
                 completionTokens: Int,
                 totalTokens: Int,
-                cachedTokens: Int = 0) {
+                cachedTokens: Int = 0,
+                reasoningTokens: Int? = nil) {
         self.promptTokens = promptTokens
         self.completionTokens = completionTokens
         self.totalTokens = totalTokens
         self.promptTokensDetails = PromptTokensDetails(cachedTokens: cachedTokens)
+        self.completionTokensDetails = reasoningTokens.map(CompletionTokensDetails.init)
     }
 }
 
@@ -526,6 +554,7 @@ public struct ValidatedChatRequest: Sendable {
     public let generationConfig: GenerationConfig
     public let maximumCompletionTokens: Int
     public let reasoning: ChatReasoning
+    public let preserveThinking: Bool
     public let reasoningEffort: GPTOSSReasoningEffort?
     /// The local calendar day rendered into Harmony's system message. It is
     /// captured during validation so queued requests and cache comparisons do
@@ -536,6 +565,8 @@ public struct ValidatedChatRequest: Sendable {
     /// request may carry files from both, so dropping either would delete
     /// files the other path staged before `generate` reads them.
     fileprivate let attachmentLeases: [ServerAttachmentLease]
+    /// See `OpenAIChatRequest.promptCacheKey`.
+    public var promptCacheKey: String?
 
     public init(
         messages: [GFTokenizer.Message],
@@ -548,6 +579,7 @@ public struct ValidatedChatRequest: Sendable {
         generationConfig: GenerationConfig,
         maximumCompletionTokens: Int,
         reasoning: ChatReasoning = .off,
+        preserveThinking: Bool = false,
         reasoningEffort: GPTOSSReasoningEffort? = nil,
         harmonyCurrentDate: String? = nil
     ) {
@@ -561,6 +593,7 @@ public struct ValidatedChatRequest: Sendable {
         self.generationConfig = generationConfig
         self.maximumCompletionTokens = maximumCompletionTokens
         self.reasoning = reasoning
+        self.preserveThinking = preserveThinking
         self.reasoningEffort = reasoningEffort
         self.harmonyCurrentDate = harmonyCurrentDate
         self.attachmentLeases = []
@@ -577,6 +610,7 @@ public struct ValidatedChatRequest: Sendable {
         generationConfig: GenerationConfig,
         maximumCompletionTokens: Int,
         reasoning: ChatReasoning,
+        preserveThinking: Bool,
         reasoningEffort: GPTOSSReasoningEffort?,
         harmonyCurrentDate: String?,
         attachmentLeases: [ServerAttachmentLease]
@@ -591,6 +625,7 @@ public struct ValidatedChatRequest: Sendable {
         self.generationConfig = generationConfig
         self.maximumCompletionTokens = maximumCompletionTokens
         self.reasoning = reasoning
+        self.preserveThinking = preserveThinking
         self.reasoningEffort = reasoningEffort
         self.harmonyCurrentDate = harmonyCurrentDate
         self.attachmentLeases = attachmentLeases
@@ -741,7 +776,7 @@ public enum OpenAIRequestValidator {
                                       repetitionPenalty: repetitionPenalty,
                                       seed: request.seed,
                                       stopStrings: request.stop?.values ?? [])
-        return ValidatedChatRequest(messages: validatedMessages.messages,
+        var validated = ValidatedChatRequest(messages: validatedMessages.messages,
                                     multimodalMessages: validatedMessages.multimodal,
                                     imageFiles: validatedMessages.imageFiles,
                                     imageIdentities: validatedMessages.imageIdentities,
@@ -751,9 +786,12 @@ public enum OpenAIRequestValidator {
                                     generationConfig: config,
                                     maximumCompletionTokens: maximum,
                                     reasoning: reasoning,
+                                    preserveThinking: request.preserveThinking ?? false,
                                     reasoningEffort: reasoningEffort,
                                     harmonyCurrentDate: harmonyCurrentDate,
                                     attachmentLeases: validatedMessages.leases)
+        validated.promptCacheKey = request.promptCacheKey
+        return validated
     }
 
     /// `{"type": "text"}` is what TUFF already produces. Structured output is
@@ -992,8 +1030,13 @@ public enum OpenAIRequestValidator {
                 throw invalid("message content is required",
                               "messages", "invalid_message")
             }
+            guard message.reasoningContent == nil || role == .assistant else {
+                throw invalid("reasoning_content is supported only in assistant messages",
+                              "messages", "invalid_message")
+            }
             result.append(GFTokenizer.Message(role: role,
                                               content: content,
+                                              thinking: message.reasoningContent,
                                               toolCalls: calls,
                                               toolCallID: message.toolCallID,
                                               name: message.name))
@@ -1003,6 +1046,7 @@ public enum OpenAIRequestValidator {
             multimodal.append(MultimodalMessage(
                 role: role,
                 content: orderedContent,
+                thinking: message.reasoningContent,
                 toolCalls: calls,
                 toolCallID: message.toolCallID,
                 name: message.name))

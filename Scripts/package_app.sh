@@ -62,7 +62,7 @@ build_flags=(
 swift build "${build_flags[@]}"
 binary_directory="$(swift build "${build_flags[@]}" --show-bin-path)"
 linked_sdk="$(otool -l "$binary_directory/TUFF" \
-  | awk '/LC_BUILD_VERSION/ { found = 1 } found && $1 == "sdk" { print $2; exit }')"
+  | awk '/LC_BUILD_VERSION/ { found = 1 } found && $1 == "sdk" && !printed { print $2; printed = 1 }')"
 if [[ "${linked_sdk%%.*}" -lt 26 ]]; then
   echo "TUFF was linked against SDK ${linked_sdk:-unknown}; macOS would show the legacy appearance" >&2
   exit 1
@@ -99,13 +99,18 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" \
   "$app/Contents/Frameworks"
 signed_binaries="$temporary_directory/signed-binaries"
 mkdir -p "$signed_binaries"
-for name in "${required_binaries[@]}"; do
+# TUFF is also the decode service, the server and the command-line runner. The
+# bundle links those names to it and it picks a role from the name it was
+# started under, so the engine ships once instead of four times: the archive
+# went from 21.8 MB to 10.4 MB. The separate executables SwiftPM builds are
+# for development builds only.
+shipped_binaries=(TUFF TUFFCommand TUFFRepack)
+for name in "${shipped_binaries[@]}"; do
   install -m 0755 "$binary_directory/$name" "$signed_binaries/$name"
 done
 
-# Drop local symbols before signing. Six executables each link the whole
-# engine statically, and their symbol tables were more than half the bundle:
-# 80 MB of binaries became 42 MB. `-x` keeps external symbols, so dynamic
+# Drop local symbols before signing. The engine is linked statically, and
+# symbol tables were more than half of each binary. `-x` keeps external symbols, so dynamic
 # lookup and Sparkle's framework linkage are untouched; what is lost is
 # function names in a crash report, which an ad-hoc-signed build has no
 # symbol server for anyway. Stripping must happen before codesign — doing it
@@ -117,28 +122,28 @@ done
 symbols_directory="$output_directory/TUFF-v${version}-symbols"
 rm -rf "$symbols_directory"
 mkdir -p "$symbols_directory"
-for name in "${required_binaries[@]}"; do
+for name in "${shipped_binaries[@]}"; do
   install -m 0644 "$signed_binaries/$name" "$symbols_directory/$name"
   strip -x "$signed_binaries/$name"
 done
 if ! otool -l "$signed_binaries/TUFF" \
-  | grep -Fq '@executable_path/../Frameworks'; then
+  | grep -F '@executable_path/../Frameworks' >/dev/null; then
   install_name_tool -add_rpath '@executable_path/../Frameworks' \
     "$signed_binaries/TUFF"
 fi
-for name in "${required_binaries[@]}"; do
+for name in "${shipped_binaries[@]}"; do
   codesign --force --sign - --timestamp=none "$signed_binaries/$name"
   codesign --verify --strict --verbose=2 "$signed_binaries/$name"
 done
 install -m 0755 "$signed_binaries/TUFF" "$app/Contents/MacOS/TUFF"
-install -m 0755 "$signed_binaries/TUFFDecodeService" \
-  "$app/Contents/MacOS/TUFFDecodeService"
+ln -s TUFF "$app/Contents/MacOS/TUFFDecodeService"
 mkdir -p "$app/Contents/Resources/bin"
 install -m 0755 "$signed_binaries/TUFFCommand" \
   "$app/Contents/Resources/bin/tuff"
-for name in TUFFCLI TUFFRepack TUFFServer; do
-  install -m 0755 "$signed_binaries/$name" \
-    "$app/Contents/Resources/bin/$name"
+install -m 0755 "$signed_binaries/TUFFRepack" \
+  "$app/Contents/Resources/bin/TUFFRepack"
+for name in TUFFCLI TUFFServer; do
+  ln -s ../../MacOS/TUFF "$app/Contents/Resources/bin/$name"
 done
 
 # Keep resource bundles in the standard sealed app resource directory. TUFF's
@@ -294,9 +299,16 @@ codesign --verify --deep --strict --verbose=2 "$extracted/TUFF.app"
 test -f "$extracted/TUFF.app/Contents/Frameworks/Sparkle.framework/Sparkle"
 test -x "$extracted/TUFF.app/Contents/Resources/bin/tuff"
 "$extracted/TUFF.app/Contents/Resources/bin/tuff" --help \
-  | grep -Fq 'tuff prompt'
+  | grep -F 'tuff prompt' >/dev/null
+for link in MacOS/TUFFDecodeService Resources/bin/TUFFCLI Resources/bin/TUFFServer; do
+  test -L "$extracted/TUFF.app/Contents/$link"
+done
+"$extracted/TUFF.app/Contents/Resources/bin/TUFFCLI" --help \
+  | grep -F 'usage: TUFFCLI' >/dev/null
+"$extracted/TUFF.app/Contents/Resources/bin/TUFFServer" --help \
+  | grep -F 'usage: TUFFServer' >/dev/null
 otool -L "$extracted/TUFF.app/Contents/MacOS/TUFF" \
-  | grep -Fq '@rpath/Sparkle.framework/Versions/B/Sparkle'
+  | grep -F '@rpath/Sparkle.framework/Versions/B/Sparkle' >/dev/null
 
 echo "created $archive"
 echo "created $checksum"

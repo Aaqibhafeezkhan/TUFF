@@ -376,6 +376,12 @@ final class HarmonyAssistantDecoder: @unchecked Sendable {
         self.idGenerator = idGenerator
     }
 
+    /// Inside an analysis message: Harmony's reasoning channel.
+    var isInAnalysis: Bool {
+        if case .content(let channel, _) = state { return channel == "analysis" }
+        return false
+    }
+
     func consume(tokenID: Int32, delta: String) throws -> [StructuredAssistantEvent] {
         guard !failed else { throw ToolCallParserError.malformed }
         let control = tokens.structuralMarkerIDs.contains(tokenID)

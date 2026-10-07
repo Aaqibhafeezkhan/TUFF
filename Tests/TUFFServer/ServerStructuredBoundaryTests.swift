@@ -179,6 +179,89 @@ struct ServerStructuredBoundaryTests {
             """)
     }
 
+    // MARK: Reasoning output
+
+    private func reasoning(_ log: EventLog) -> String {
+        log.events.reduce(into: "") { text, event in
+            if case .reasoning(let delta) = event { text += delta }
+        }
+    }
+
+    @Test func qwenReasoningIsSeparateFromTheAnswerAndCounted() async throws {
+        let tokenizer = try await Self.qwen()
+        // Reasoning on: the prompt opened the thought channel already.
+        let script = tokenizer.encode("Check the file first.</think>\n\nIt says hello.", addBOS: false)
+            + [tokenizer.endOfTurnID]
+        let log = EventLog()
+        let outcome = try await decode(tokenizer: tokenizer, script: script, tools: [],
+                                       reasoning: .on, log: log)
+        #expect(outcome.reasoning.contains("Check the file first."))
+        #expect(!outcome.reasoning.contains("hello"))
+        #expect(outcome.content.contains("It says hello."))
+        #expect(!outcome.content.contains("Check the file"))
+        #expect(reasoning(log) == outcome.reasoning)
+        #expect(outcome.reasoningTokens > 0)
+        #expect(outcome.reasoningTokens < outcome.result.newTokens)
+    }
+
+    @Test func qwenReasoningBeforeAToolCallKeepsTheArgumentsOut() async throws {
+        let tokenizer = try await Self.qwen()
+        let text = "I need the file.</think>\n\n<tool_call>\n<function=read>\n<parameter=path>\nnotes.txt\n</parameter>\n</function>\n</tool_call>"
+        let script = tokenizer.encode(text, addBOS: false) + [tokenizer.endOfTurnID]
+        let log = EventLog()
+        let outcome = try await decode(tokenizer: tokenizer, script: script, reasoning: .on, log: log)
+        expectSingleReadCall(outcome, log)
+        #expect(outcome.reasoning.contains("I need the file."))
+        #expect(!outcome.reasoning.contains("notes.txt"))
+        // Qwen writes a blank line between its reasoning and the call.
+        #expect(outcome.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+
+    @Test func withReasoningOffNothingIsReported() async throws {
+        let tokenizer = try await Self.qwen()
+        let script = tokenizer.encode("Plain answer.", addBOS: false) + [tokenizer.endOfTurnID]
+        let log = EventLog()
+        let outcome = try await decode(tokenizer: tokenizer, script: script, tools: [], log: log)
+        #expect(outcome.reasoning.isEmpty)
+        #expect(outcome.reasoningTokens == 0)
+        #expect(reasoning(log).isEmpty)
+    }
+
+    @Test func gemmaThoughtChannelIsReasoning() async throws {
+        let tokenizer = try await Self.gemma()
+        let script = tokenizer.encode("<|channel>thought\nWeigh both.<channel|>Final words.", addBOS: false)
+            + [tokenizer.endOfTurnID]
+        let log = EventLog()
+        let outcome = try await decode(tokenizer: tokenizer, script: script, tools: [],
+                                       reasoning: .on, log: log)
+        #expect(outcome.reasoning == "Weigh both.")
+        #expect(outcome.content == "Final words.")
+        #expect(outcome.reasoningTokens > 0)
+    }
+
+    @Test func harmonyAnalysisIsReasoning() async throws {
+        let tokenizer = try await Self.harmony()
+        let script = tokenizer.encode(
+            "<|channel|>analysis<|message|>Think it through.<|end|><|start|>assistant<|channel|>final<|message|>Done.",
+            addBOS: false) + [tokenizer.harmonyTokenIDs!.return]
+        let log = EventLog()
+        let outcome = try await decode(tokenizer: tokenizer, script: script, tools: [], log: log)
+        #expect(outcome.reasoning == "Think it through.")
+        #expect(outcome.content == "Done.")
+        #expect(outcome.reasoningTokens > 0)
+    }
+
+    @Test func aCutOffReasoningStillReportsWhatArrived() async throws {
+        let tokenizer = try await Self.qwen()
+        let script = tokenizer.encode("A long chain of thought that never ends", addBOS: false)
+        let log = EventLog()
+        let outcome = try await decode(tokenizer: tokenizer, script: script, maxNewTokens: 4,
+                                       tools: [], reasoning: .on, log: log)
+        #expect(outcome.result.reason == .maxTokens)
+        #expect(!outcome.reasoning.isEmpty)
+        #expect(outcome.content.isEmpty)
+    }
+
     // MARK: Harmony call boundary
 
     private static let harmonyCall =

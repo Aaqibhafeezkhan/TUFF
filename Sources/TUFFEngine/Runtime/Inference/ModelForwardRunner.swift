@@ -355,3 +355,26 @@ public final class ModelForwardRunner: ChunkedPrefillRunner,
         }
     }
 }
+
+extension ModelForwardRunner: StateSnapshottingRunner {
+    public var stateSnapshotByteEstimate: Int? {
+        switch backend {
+        case .affine(let runner): return runner.stateSnapshotByteEstimate
+        case .gptOss(let runner): return runner.stateSnapshotByteEstimate
+        }
+    }
+
+    public func captureState() throws -> RunnerStateSnapshot {
+        switch backend {
+        case .affine(let runner): return try runner.captureState()
+        case .gptOss(let runner): return try runner.captureState()
+        }
+    }
+
+    public func restoreState(_ snapshot: RunnerStateSnapshot) throws {
+        switch backend {
+        case .affine(let runner): try runner.restoreState(snapshot)
+        case .gptOss(let runner): try runner.restoreState(snapshot)
+        }
+    }
+}

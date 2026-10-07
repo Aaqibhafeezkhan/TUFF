@@ -396,6 +396,11 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                 configured: effectiveSlots,
                 required: config.topKExperts)
         }
+        // Compile the kernel groups this architecture dispatches before any
+        // wrapper asks for a pipeline, so loading reads only what it needs.
+        try context.prepareKernelGroups(MetalKernelGroup.required(
+            for: model.config, sharedExpertWeightBits: model.sharedExpertWeightBits,
+            maxContext: maxContext))
         self.model = model
         self.ctx = context
         self.cfg = config
@@ -823,6 +828,80 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
         }
         speculativeStartPosition = nil
         speculativeProcessedTokens = 0
+        resetTransientState()
+    }
+
+    // MARK: Retained conversation state
+
+    /// Layers whose state a snapshot carries. Layers that read another
+    /// layer's KV write none of their own and are skipped.
+    private func snapshotSkipsLayer(_ layer: Int) -> Bool {
+        cfg.layerSharesKV(layer)
+    }
+
+    private var sparseIndexerLayers: [Int] {
+        guard qwenSparseAttention != nil, let kv else { return [] }
+        return (0..<cfg.numLayers).filter { kv.layerKind($0) != .linear }
+    }
+
+    /// Everything carried from one token to the next: KV rows, Gated-DeltaNet
+    /// recurrent and convolution state, the sparse indexer's keys, the n-gram
+    /// convolution history, and the host-side n-gram context and multimodal
+    /// RoPE offset. Prefill chunk state, read-advice state and expert
+    /// prediction are per-request and rebuilt on resume.
+    private func snapshotBuilder(position: Int) throws -> RunnerStateSnapshotBuilder {
+        var builder = RunnerStateSnapshotBuilder()
+        kv?.addSnapshotRanges(to: &builder, position: position,
+                              skipLayer: snapshotSkipsLayer)
+        gdnState?.addSnapshotRanges(to: &builder)
+        if let qwenSparseAttention {
+            try qwenSparseAttention.addSnapshotRanges(
+                to: &builder, layers: sparseIndexerLayers, position: position)
+        }
+        if let pleConvHistory {
+            builder.add("ngram.conv", pleConvHistory, length: pleConvHistory.length)
+        }
+        return builder
+    }
+
+    // Accessors the snapshot extension needs; the state itself stays private.
+    var speculativeTransactionIsIdle: Bool { speculativeStartPosition == nil }
+    var commandQueueForSnapshots: MTLCommandQueue { ctx.queue }
+    var ngramContextForSnapshot: [Int32] { ngramContext }
+    var ropeDeltaForSnapshot: Int32 { qwenMultimodalRopeDelta }
+    func snapshotSkipsLayerForEstimate(_ layer: Int) -> Bool { snapshotSkipsLayer(layer) }
+    var gdnStateSnapshotBytes: Int { gdnState?.snapshotBytes ?? 0 }
+    var ngramHistorySnapshotBytes: Int {
+        pleConvHistory.map { RunnerStateSnapshotBuilder.aligned($0.length) } ?? 0
+    }
+    func sparseIndexerSnapshotBytes(position: Int) -> Int {
+        qwenSparseAttention?.snapshotBytes(layers: sparseIndexerLayers.count,
+                                           position: position) ?? 0
+    }
+    func snapshotBuilderForCapture(position: Int) throws -> RunnerStateSnapshotBuilder {
+        try snapshotBuilder(position: position)
+    }
+
+    /// Writes a snapshot into a runner that has just been reset.
+    func applySnapshot(_ snapshot: RunnerStateSnapshot) throws {
+        let position = snapshot.host.position
+        if let kv {
+            guard position <= kv.maxContext else {
+                throw RunnerStateSnapshotError.layoutMismatch("position exceeds context")
+            }
+            if position > 0 { try kv.ensureCapacity(through: position, on: ctx.queue) }
+        } else if position != 0 {
+            throw RunnerStateSnapshotError.layoutMismatch("runner has no KV cache")
+        }
+        if ngramRows != nil {
+            guard snapshot.host.ngramContext.count == ngramContext.count else {
+                throw RunnerStateSnapshotError.layoutMismatch("n-gram context length")
+            }
+        }
+        try snapshotBuilder(position: position).restore(snapshot, queue: ctx.queue)
+        kv?.restorePosition(position)
+        if ngramRows != nil { ngramContext = snapshot.host.ngramContext }
+        qwenMultimodalRopeDelta = snapshot.host.ropeDelta
         resetTransientState()
     }
 
@@ -4526,5 +4605,41 @@ extension RealForwardRunner {
             }
         }
         return report
+    }
+}
+
+extension RealForwardRunner: StateSnapshottingRunner {
+    public var stateSnapshotByteEstimate: Int? {
+        guard speculativeTransactionIsIdle else { return nil }
+        let position = continuationPosition
+        var total = kv?.snapshotBytes(position: position, skipLayer: snapshotSkipsLayerForEstimate) ?? 0
+        total += gdnStateSnapshotBytes
+        total += sparseIndexerSnapshotBytes(position: position)
+        total += ngramHistorySnapshotBytes
+        return total
+    }
+
+    public func captureState() throws -> RunnerStateSnapshot {
+        guard speculativeTransactionIsIdle else {
+            throw RunnerStateSnapshotError.unsupported("a speculative verification is in progress")
+        }
+        let position = continuationPosition
+        return try snapshotBuilderForCapture(position: position).capture(
+            owner: self, queue: commandQueueForSnapshots,
+            host: .init(position: position, ngramContext: ngramContextForSnapshot,
+                        ropeDelta: ropeDeltaForSnapshot))
+    }
+
+    public func restoreState(_ snapshot: RunnerStateSnapshot) throws {
+        guard snapshot.owner == ObjectIdentifier(self) else {
+            throw RunnerStateSnapshotError.foreignSnapshot
+        }
+        reset()
+        do {
+            try applySnapshot(snapshot)
+        } catch {
+            reset()
+            throw error
+        }
     }
 }

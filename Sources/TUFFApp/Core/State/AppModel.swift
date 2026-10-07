@@ -14,6 +14,8 @@ public final class AppModel {
     public let modelLibraryStore = AppModelLibraryStore()
     public let settingsStore = AppSettingsStore()
     public let inferenceStore = AppSharedInferenceStore()
+    /// Folders, the local index, provider keys and the tools built from them.
+    public let toolStore: AppToolStore
     public let deviceCapabilities: TUFFDeviceCapabilities
     private var runsAfterCurrentLoad = false
 
@@ -310,6 +312,12 @@ public final class AppModel {
     private let client: any AppInferenceClient
     private let visionInstaller: any AppVisionPackInstallerClient
     private var runTask: Task<Void, Never>?
+    /// Stops the answer in progress, generation and tools alike.
+    private var answerCancellation: AppAnswerCancellation?
+    /// Reasoning from the generation in progress only. `outputThinkingText`
+    /// shows every round's; the turn keeps the final generation's, and each
+    /// round keeps its own.
+    private var currentGenerationThinking = ""
     private var loadTask: Task<Void, Never>?
     private var visionInstallTask: Task<Void, Never>?
     private var unloadTask: Task<Void, Never>?
@@ -365,7 +373,8 @@ public final class AppModel {
                 conversationStore: AppConversationStore = AppConversationStore(),
                 visionRuntimeSupported: Bool = true,
                 settingsPersistenceEnabled: Bool = false,
-                deviceCapabilities: TUFFDeviceCapabilities = .current()) {
+                deviceCapabilities: TUFFDeviceCapabilities = .current(),
+                toolStore: AppToolStore? = nil) {
         let directory = (modelDirectory ?? AppModelLocation.defaultURL()).standardizedFileURL
         let installETAClock = SuspendingClock()
         let settingsProfileKey = installer.descriptor.settingsProfileKey
@@ -386,6 +395,7 @@ public final class AppModel {
         // properties as accesses to self even though each store already has a
         // default value.
         self.conversationStore = conversationStore
+        self.toolStore = toolStore ?? .inMemory()
         self.deviceCapabilities = deviceCapabilities
         self.client = client
         self.visionInstaller = visionInstaller
@@ -430,6 +440,9 @@ public final class AppModel {
         self.customAccentColorHex = settings.customAccentColorHex
         self.settingsStore.zoomLevel = settings.zoomLevel
         self.settingsStore.bypassModelRestrictions = settings.bypassModelRestrictions
+        self.settingsStore.webSearchEnabled = settings.webSearchEnabled
+        self.settingsStore.fileSearchEnabled = settings.fileSearchEnabled
+        self.settingsStore.searchProvider = settings.searchProvider
         self.visionInstallationStatus = AppVisionPackInstallationProbe.status(at: directory)
 
         // The injected installer owns the passed-in directory and becomes the
@@ -2349,6 +2362,9 @@ public final class AppModel {
             customAccentColorHex = settings.customAccentColorHex
             settingsStore.zoomLevel = settings.zoomLevel
             settingsStore.bypassModelRestrictions = settings.bypassModelRestrictions
+            settingsStore.webSearchEnabled = settings.webSearchEnabled
+            settingsStore.fileSearchEnabled = settings.fileSearchEnabled
+            settingsStore.searchProvider = settings.searchProvider
         }
         applySettingsProfile(storedSettingsProfile(for: selectedInstall))
     }
@@ -2455,6 +2471,9 @@ public final class AppModel {
         settings.customAccentColorHex = customAccentColorHex
         settings.zoomLevel = zoomLevel
         settings.bypassModelRestrictions = bypassModelRestrictions
+        settings.webSearchEnabled = settingsStore.webSearchEnabled
+        settings.fileSearchEnabled = settingsStore.fileSearchEnabled
+        settings.searchProvider = settingsStore.searchProvider
         if (try? MacAppSettingsFileStore.save(
             settings,
             forModelDirectory: modelDirectory)) != nil {
@@ -2630,8 +2649,9 @@ public final class AppModel {
     public func run() {
         guard canRun else { return }
         var request: AppGenerationRequest
+        let capabilities = effectiveChatCapabilities
         do {
-            request = try makeRequest()
+            request = try makeRequest(capabilities: capabilities)
         } catch let appError as AppInferenceError {
             pendingAssistantPrefix = nil
             error = appError
@@ -2678,6 +2698,9 @@ public final class AppModel {
         outputDocumentAttachments = documentAttachments
         outputText = ""
         outputThinkingText = ""
+        currentGenerationThinking = ""
+        conversationStore.clearOutputTools()
+        conversationStore.outputCapabilities = capabilities
         diagnostics = nil
         error = nil
         hasHandledTerminalEvent = false
@@ -2704,9 +2727,17 @@ public final class AppModel {
                 response: "",
                 documents: outputDocumentAttachments,
                 images: retained,
-                modelID: selectedDescriptor.settingsProfileKey),
+                modelID: selectedDescriptor.settingsProfileKey,
+                capabilities: capabilities),
             attachments: retained,
             modelID: selectedDescriptor.settingsProfileKey)
+        // The chat exists now, so its identity is known even for a first
+        // message.
+        request.conversationKey = conversationStore.selectedConversationID?.uuidString
+        let firstSourceID = conversationStore.nextSourceID
+        let userText = promptText
+        let hasLocalContext = !outputDocumentAttachments.isEmpty || !retained.isEmpty
+            || conversation.contains { !$0.documents.isEmpty || !$0.images.isEmpty }
         if sentPromptBehavior == .clear {
             promptText = ""
             documentAttachments.removeAll()
@@ -2721,17 +2752,23 @@ public final class AppModel {
             imageAttachmentError = nil
         }
 
-        runTask = Task.detached { [weak self, client, request] in
-            guard let self else { return }
-            do {
-                for try await event in client.generate(request) {
-                    await self.apply(event)
-                }
-            } catch let appError as AppInferenceError {
-                await self.finishStreamFailure(appError)
-            } catch {
-                await self.finishStreamFailure(.unknown("\(error)"))
+        let cancellation = AppAnswerCancellation()
+        answerCancellation = cancellation
+        let runner = AppAnswerRunner(
+            client: client,
+            toolbox: toolStore.makeToolbox(provider: settingsStore.searchProvider))
+        let activity = toolStore.inferenceActivity
+        activity.set(true)
+        let answerRequest = request
+        runTask = Task.detached { [weak self, runner, answerRequest] in
+            let model = self
+            await runner.run(answerRequest, capabilities: capabilities,
+                             firstSourceID: firstSourceID, userText: userText,
+                             hasLocalContext: hasLocalContext, cancellation: cancellation) { [weak model] event in
+                await model?.apply(answer: event)
             }
+            // The terminal event clears activity on the main actor. Clearing
+            // it again here can race with a new answer that has just started.
         }
     }
 
@@ -2748,6 +2785,7 @@ public final class AppModel {
     public func cancel() {
         guard canCancel else { return }
         isCancellationPending = true
+        answerCancellation?.cancel()
         client.cancel()
     }
 
@@ -2961,6 +2999,10 @@ public final class AppModel {
     }
 
     public func makeRequest() throws -> AppGenerationRequest {
+        try makeRequest(capabilities: effectiveChatCapabilities)
+    }
+
+    public func makeRequest(capabilities: AppChatCapabilities) throws -> AppGenerationRequest {
         // A run executes against the session that is actually loaded. Sending
         // the current settings instead meant that changing Context, Slots or
         // image residency and pressing Generate — without reloading first —
@@ -2969,13 +3011,17 @@ public final class AppModel {
         // what the Memory section promises; they simply no longer break the
         // run in the meantime.
         let effective = loadedRuntimeKey ?? currentRuntimeKey
+        let instructions = AppToolCatalog.systemInstructions(
+            for: capabilities, currentDate: Self.toolDate())
+        let systemPrompt = [effectiveSystemPrompt ?? "", instructions]
+            .filter { !$0.isEmpty }.joined(separator: "\n\n")
         let request = AppGenerationRequest(
             modelDirectory: URL(fileURLWithPath: modelPathText),
             // Attached files become prompt text here, at the one point where
             // the model's view of the message is built. Everything above this
             // line keeps them as attachments.
             prompt: composedPromptText,
-            systemPrompt: effectiveSystemPrompt ?? "",
+            systemPrompt: systemPrompt,
             assistantPrefix: pendingAssistantPrefix ?? "",
             history: requestHistory(
                 imageBudget: max(0, maximumImageAttachments - imageAttachments.count)),
@@ -2995,9 +3041,20 @@ public final class AppModel {
             repetitionPenalty: 1.0,
             runtimeOptions: effective.options(
                 prefillEnabled: runtimeOptions.prefillEnabled,
-                prefillChunkTokens: runtimeOptions.prefillChunkTokens))
+                prefillChunkTokens: runtimeOptions.prefillChunkTokens),
+            tools: AppToolCatalog.definitions(for: capabilities),
+            conversationKey: conversationStore.selectedConversationID?.uuidString)
         try request.validate(requireModelDirectory: true)
         return request
+    }
+
+    /// The day, as tool instructions state it. Kept to the day so the system
+    /// prompt, and the cached state built on it, is stable within a day.
+    static func toolDate(_ date: Date = Date()) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "MMMM d, yyyy"
+        return formatter.string(from: date)
     }
 
     func apply(_ event: AppInferenceEvent) {
@@ -3024,7 +3081,11 @@ public final class AppModel {
             sampleLiveMemory()
             if !token.textDelta.isEmpty {
                 outputThinkingText += token.textDelta
+                currentGenerationThinking += token.textDelta
             }
+        case .toolCalls:
+            // Calls reach the app through the answer runner, which runs them.
+            break
         case .finished(let diagnostics):
             visionTowerMappedBytes = diagnostics.visionTowerMappedBytes
             finishSuccessfully(diagnostics)
@@ -3053,9 +3114,13 @@ public final class AppModel {
     /// it — which is what a cancelled run used to do — threw away the whole
     /// exchange, question and all.
     private func recordAnswer() {
+        let thinking = conversationStore.outputToolRounds.isEmpty
+            ? outputThinkingText : currentGenerationThinking
         conversationStore.completeTurn(
             response: outputResponsePlainText,
-            thinking: outputThinkingText.isEmpty ? nil : outputThinkingText)
+            thinking: thinking.isEmpty ? nil : thinking,
+            toolRounds: conversationStore.outputToolRounds,
+            sources: conversationStore.outputSources)
     }
 
     private func finishCancelled(_ diagnostics: AppDiagnostics) {
@@ -3092,6 +3157,109 @@ public final class AppModel {
         isCancellationPending = false
         activeRunRuntimeKey = nil
         runTask = nil
+        answerCancellation = nil
+        toolStore.inferenceActivity.set(false)
+    }
+
+    // MARK: - Answers with tools
+
+    /// What the composer's Web and Files switches allow for the next message,
+    /// limited by the model and by having folders to search.
+    public var effectiveChatCapabilities: AppChatCapabilities {
+        let support = toolSupport
+        guard support.allowsTools else { return .none }
+        return AppChatCapabilities(
+            web: settingsStore.webSearchEnabled,
+            files: settingsStore.fileSearchEnabled && !toolStore.folders.isEmpty)
+    }
+
+    public var toolSupport: AppToolSupport {
+        guard let id = selectedDescriptor.catalogID else { return .untested }
+        return AppToolSupport.forModel(id)
+    }
+
+    public var webSearchEnabled: Bool {
+        get { settingsStore.webSearchEnabled }
+        set {
+            guard settingsStore.webSearchEnabled != newValue else { return }
+            settingsStore.webSearchEnabled = newValue
+            persistSettings()
+        }
+    }
+
+    public var fileSearchEnabled: Bool {
+        get { settingsStore.fileSearchEnabled }
+        set {
+            guard settingsStore.fileSearchEnabled != newValue else { return }
+            settingsStore.fileSearchEnabled = newValue
+            persistSettings()
+            if newValue { toolStore.reindex() }
+        }
+    }
+
+    public var searchProvider: AppSearchProviderKind {
+        get { settingsStore.searchProvider }
+        set {
+            guard settingsStore.searchProvider != newValue else { return }
+            settingsStore.searchProvider = newValue
+            persistSettings()
+        }
+    }
+
+    public var outputToolActivities: [AppToolActivity] { conversationStore.outputToolActivities }
+    public var outputToolRounds: [AppToolRound] { conversationStore.outputToolRounds }
+    public var outputSources: [AppSource] { conversationStore.outputSources }
+
+    func apply(answer event: AppAnswerEvent) {
+        switch event {
+        case .inference(let inference):
+            apply(inference)
+        case .generationStarted(let round):
+            phase = .prefill
+            currentGenerationThinking = ""
+            if round > 0 {
+                // The text before the calls belongs to the round now.
+                outputText = ""
+                generationTranscriptMailbox?.reset()
+            }
+        case .toolActivity(let activity):
+            phase = .tools
+            var activities = conversationStore.outputToolActivities
+            if let index = activities.firstIndex(where: { $0.id == activity.id }) {
+                activities[index] = activity
+            } else {
+                activities.append(activity)
+            }
+            conversationStore.outputToolActivities = activities
+        case .toolRoundFinished(let round, let sources):
+            conversationStore.outputToolRounds.append(round)
+            conversationStore.outputSources = sources
+            outputText = ""
+        case .retryingMalformedToolCall:
+            outputText = ""
+            conversationStore.outputToolActivities.append(AppToolActivity(
+                id: "retry-\(conversationStore.outputToolActivities.count)", name: "",
+                title: "Retrying", detail: "The model wrote a tool call TUFF could not read.",
+                state: .refused, summary: "Generating once more"))
+        case .finished(let diagnostics):
+            apply(.finished(diagnostics))
+        case .cancelled(let diagnostics):
+            if let diagnostics {
+                apply(.cancelled(diagnostics))
+            } else {
+                finishCancelledWithoutDiagnostics()
+            }
+        case .failed(let error, let partial):
+            apply(.failed(error, partial: partial))
+        }
+    }
+
+    private func finishCancelledWithoutDiagnostics() {
+        guard !hasHandledTerminalEvent else { return }
+        hasHandledTerminalEvent = true
+        error = .cancelled
+        recordAnswer()
+        finishTerminalRun()
     }
 
     private func clearLoadTask(generation: UInt64) {

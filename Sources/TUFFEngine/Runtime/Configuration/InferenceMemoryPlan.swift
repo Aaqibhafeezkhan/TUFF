@@ -1,5 +1,6 @@
 import TUFFModelCatalog
 import Darwin
+import Foundation
 
 /// Admission estimate, not resident pages or a measured process footprint.
 /// Adds runtime allocations conservatively to the qualified catalog baseline:
@@ -90,5 +91,34 @@ public extension TUFFModelDescriptor {
         return InferenceMemoryPlan(descriptor: self, config: config,
             contextTokens: contextTokens, expertCacheSlots: expertCacheSlots,
             prefillChunkTokens: prefillChunkTokens).estimatedWorkingSetBytes
+    }
+}
+
+public extension TUFFModelDescriptor {
+    /// Bytes of retained conversation state a loaded session may keep, after
+    /// the working set and, when the image pack is installed, an allowance for
+    /// mapping the image tower and its transient encode work. The figure is
+    /// charged against the same safe budget as the working set, so a session
+    /// reserves it with its model rather than finding it later.
+    func retainedConversationBudgetBytes(contextTokens: Int, expertCacheSlots: Int,
+                                         prefillChunkTokens: Int,
+                                         device: TUFFDeviceCapabilities,
+                                         imagePackInstalled: Bool,
+                                         environment: [String: String]
+                                            = ProcessInfo.processInfo.environment) -> Int {
+        var working = estimatedInferenceWorkingSetBytes(
+            contextTokens: contextTokens, expertCacheSlots: expertCacheSlots,
+            prefillChunkTokens: prefillChunkTokens)
+        if imagePackInstalled,
+           let addon = addons.first(where: { $0.kind == .imageInput }) {
+            let allowance = addon.source.installedBytes
+                .addingReportingOverflow(addon.source.reserveBytes)
+            let total = working.addingReportingOverflow(
+                allowance.overflow ? .max : allowance.partialValue)
+            working = total.overflow ? .max : total.partialValue
+        }
+        return ConversationStateStore.budget(safeBudgetBytes: device.safeAppMemoryBudgetBytes,
+                                             workingSetBytes: working,
+                                             environment: environment)
     }
 }

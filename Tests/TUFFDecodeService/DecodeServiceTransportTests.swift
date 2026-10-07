@@ -2,7 +2,7 @@ import Foundation
 import Testing
 import TUFFEngine
 @testable import TUFFAppCore
-@testable import TUFFDecodeService
+@testable import TUFFDecodeServiceCore
 import TUFFDecodeProtocol
 
 /// Transport loss in the decode service, driven over real pipes with a fake

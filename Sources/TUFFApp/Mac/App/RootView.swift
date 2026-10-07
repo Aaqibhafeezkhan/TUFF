@@ -194,21 +194,15 @@ struct RootView: View {
         // In full screen the content stays inside its safe area, but the
         // sidebar surface itself extends through the top, bottom, and leading
         // safe areas so it becomes a conventional full-height side column.
-        .scrollContentBackground(isFullScreen ? .hidden : .automatic)
+        .scrollContentBackground(.hidden)
         .background {
-            if isFullScreen {
-                Rectangle()
-                    .fill(TUFFMacTheme.surfaceStyle(
-                        reduceTransparency: reduceTransparency,
-                        material: .regular))
-                    .ignoresSafeArea(.container, edges: [.top, .bottom, .leading])
-            } else if !reduceTransparency {
-                // The floating glass sidebar only refracts the window behind
-                // it, which is opaque, so on its own it reads as a solid panel.
-                // A behind-window blur lets the desktop show through it.
-                BehindWindowBlur()
-                    .ignoresSafeArea()
-            }
+            // A stable surface keeps bright wallpaper from washing out the
+            // sidebar. The semantic color also follows light/dark appearance
+            // and works when Reduce Transparency is enabled.
+            Color(nsColor: .windowBackgroundColor)
+                .ignoresSafeArea(
+                    .container,
+                    edges: isFullScreen ? [.top, .bottom, .leading] : [])
         }
         .safeAreaInset(edge: .top, spacing: 0) { brandHeader }
         .safeAreaInset(edge: .bottom, spacing: 0) { selectedModelFooter }
@@ -375,19 +369,6 @@ struct RootView: View {
         .accessibilityHint("Opens Models")
     }
 
-}
-
-/// The desktop behind the window, blurred, with the sidebar material's tint.
-private struct BehindWindowBlur: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = .sidebar
-        view.blendingMode = .behindWindow
-        view.state = .followsWindowActiveState
-        return view
-    }
-
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }
 
 /// Reports whether the hosting window is in full screen.

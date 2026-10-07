@@ -25,6 +25,13 @@ public struct AppChatTurn: Equatable, Sendable, Codable, Identifiable {
     /// `settingsProfileKey` of the model that produced `response`. Nil for turns
     /// saved before chats recorded it, and for a message not yet answered.
     public var modelID: String?
+    /// Generations that ended in tool calls before `response`, with their
+    /// results, in order. Rendered back as the model's native tool turns.
+    public var toolRounds: [AppToolRound]
+    /// Everything retrieved for this answer, numbered across the chat.
+    public var sources: [AppSource]
+    /// What the message was allowed to use.
+    public var capabilities: AppChatCapabilities
 
     public init(
         id: UUID = UUID(),
@@ -33,7 +40,10 @@ public struct AppChatTurn: Equatable, Sendable, Codable, Identifiable {
         thinking: String? = nil,
         documents: [AppDocumentAttachment] = [],
         images: [AppImageAttachment] = [],
-        modelID: String? = nil
+        modelID: String? = nil,
+        toolRounds: [AppToolRound] = [],
+        sources: [AppSource] = [],
+        capabilities: AppChatCapabilities = .none
     ) {
         self.id = id
         self.prompt = prompt
@@ -42,6 +52,26 @@ public struct AppChatTurn: Equatable, Sendable, Codable, Identifiable {
         self.documents = documents
         self.images = images
         self.modelID = modelID
+        self.toolRounds = toolRounds
+        self.sources = sources
+        self.capabilities = capabilities
+    }
+
+    /// Decoded field by field so a turn encoded before tool use existed
+    /// still loads.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        prompt = try container.decode(String.self, forKey: .prompt)
+        response = try container.decode(String.self, forKey: .response)
+        thinking = try container.decodeIfPresent(String.self, forKey: .thinking)
+        documents = try container.decodeIfPresent([AppDocumentAttachment].self, forKey: .documents) ?? []
+        images = try container.decodeIfPresent([AppImageAttachment].self, forKey: .images) ?? []
+        modelID = try container.decodeIfPresent(String.self, forKey: .modelID)
+        toolRounds = try container.decodeIfPresent([AppToolRound].self, forKey: .toolRounds) ?? []
+        sources = try container.decodeIfPresent([AppSource].self, forKey: .sources) ?? []
+        capabilities = try container.decodeIfPresent(AppChatCapabilities.self,
+                                                     forKey: .capabilities) ?? .none
     }
 
     /// The user message as the model sees it: attached documents first, then
@@ -67,7 +97,12 @@ public struct AppChatTurn: Equatable, Sendable, Codable, Identifiable {
             response: response,
             thinking: thinking,
             images: images,
-            modelID: modelID)
+            modelID: modelID,
+            // Only rounds whose every call has a result can be rendered; an
+            // interrupted round would leave a call the model never saw answered.
+            toolRounds: toolRounds.filter(\.isComplete),
+            sources: sources,
+            capabilities: capabilities)
     }
 }
 

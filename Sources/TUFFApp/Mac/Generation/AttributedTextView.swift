@@ -65,14 +65,34 @@ final class MessageTextView: NSTextView {
 struct AttributedTextView: NSViewRepresentable {
     let attributed: NSAttributedString
     @Binding var height: CGFloat
+    /// Handles a click on a link the renderer made clickable: only validated
+    /// citations are. Nil leaves links inert.
+    var onLink: ((URL) -> Void)?
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var onLink: ((URL) -> Void)?
+
+        func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
+            guard let url = link as? URL ?? (link as? String).flatMap(URL.init(string:)) else {
+                return true
+            }
+            onLink?(url)
+            // Handled either way: nothing is passed on to open by default.
+            return true
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> MessageTextView {
         let textView = MessageTextView.make()
+        textView.delegate = context.coordinator
         textView.onHeightChange = { measured in height = measured }
         return textView
     }
 
     func updateNSView(_ textView: MessageTextView, context: Context) {
+        context.coordinator.onLink = onLink
         textView.onHeightChange = { measured in height = measured }
         if textView.textStorage?.isEqual(to: attributed) != true {
             textView.textStorage?.setAttributedString(attributed)

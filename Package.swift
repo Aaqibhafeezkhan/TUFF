@@ -99,10 +99,16 @@ let package = Package(
             dependencies: ["TUFFEngine"],
             path: "Sources/TUFFDecodeProtocol"
         ),
+        .target(
+            name: "TUFFDecodeServiceCore",
+            dependencies: ["TUFFAppCore", "TUFFDecodeProtocol"],
+            path: "Sources/TUFFDecodeService",
+            exclude: ["Command"]
+        ),
         .executableTarget(
             name: "TUFFDecodeService",
-            dependencies: ["TUFFAppCore", "TUFFDecodeProtocol"],
-            path: "Sources/TUFFDecodeService"
+            dependencies: ["TUFFDecodeServiceCore"],
+            path: "Sources/TUFFDecodeService/Command"
         ),
         .target(
             name: "TUFFServerCore",
@@ -142,6 +148,9 @@ let package = Package(
                 "TUFFAppServer",
                 "TUFFAppUpdater",
                 "TUFFMacPresentation",
+                "TUFFCLICore",
+                "TUFFDecodeServiceCore",
+                "TUFFServerCore",
             ],
             path: "Sources/TUFFApp/Mac",
             resources: [
@@ -208,7 +217,7 @@ let package = Package(
         ),
         .testTarget(
             name: "TUFFDecodeServiceTests",
-            dependencies: ["TUFFDecodeService", "TUFFAppCore", "TUFFDecodeProtocol"],
+            dependencies: ["TUFFDecodeServiceCore", "TUFFAppCore", "TUFFDecodeProtocol"],
             path: "Tests/TUFFDecodeService"
         ),
         .testTarget(

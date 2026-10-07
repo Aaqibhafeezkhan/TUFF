@@ -299,6 +299,9 @@ struct HTTPServerTests {
         let choices = try #require(object["choices"] as? [[String: Any]])
         let message = try #require(choices[0]["message"] as? [String: Any])
         #expect(message["content"] as? String == "hello")
+        let timings = try #require(object["tuff_timings_seconds"] as? [String: Double])
+        #expect(timings["time_to_first_event"] != nil)
+        #expect(timings.values.allSatisfy { $0.isFinite && $0 >= 0 })
         let usage = try #require(object["usage"] as? [String: Any])
         let details = try #require(usage["prompt_tokens_details"] as? [String: Any])
         #expect(details["cached_tokens"] as? Int == 0)
@@ -330,6 +333,16 @@ struct HTTPServerTests {
         #expect(text.contains(#""prompt_tokens":3"#))
         #expect(text.contains(#""cached_tokens":0"#))
         #expect(text.hasSuffix("data: [DONE]\n\n"))
+        let chunks = try text.components(separatedBy: "\n\n").compactMap { line -> [String: Any]? in
+            guard line.hasPrefix("data: {"), let data = line.dropFirst(6).data(using: .utf8) else { return nil }
+            return try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        }
+        let timingChunks = chunks.filter { $0["tuff_timings_seconds"] != nil }
+        #expect(timingChunks.count == 1)
+        let timings = try #require(timingChunks.first?["tuff_timings_seconds"] as? [String: Double])
+        #expect(timings["time_to_first_event"] != nil)
+        let choices = try #require(timingChunks.first?["choices"] as? [[String: Any]])
+        #expect(choices.first?["finish_reason"] as? String == "stop")
 
         try await server.shutdown()
     }
@@ -924,7 +937,7 @@ struct HTTPServerTests {
 
 }
 
-private enum RawSocketError: Error {
+enum RawSocketError: Error {
     case systemCall(String, Int32)
     case timeout
 }

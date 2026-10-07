@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 import io
+import hashlib
+import copy
+import zlib
 import contextlib
 import sys
 import json
@@ -16,6 +19,8 @@ import benchmark_inference as bench
 import validate_release_interfaces as interfaces
 import benchmark_reporting as reporting
 import validate_release_models as release_models
+import validate_api_adapters as api_adapters
+import validate_conversation_followups as followups
 
 
 class HarnessTests(unittest.TestCase):
@@ -302,5 +307,145 @@ class HarnessTests(unittest.TestCase):
             row=bench.run(['/bin/sleep','5'],Path(directory)/'timeout',0.02)
         self.assertEqual(row['status'],'failed');self.assertNotEqual(row['exit_code'],0)
 
+
+
+class AdapterAndFollowupHarnessTests(unittest.TestCase):
+    @staticmethod
+    def sse(frames):
+        return ''.join('event: ' + frame['type'] + '\ndata: ' + json.dumps(frame) + '\n\n' for frame in frames).encode()
+
+    @staticmethod
+    def response_frames():
+        item = {'type': 'function_call', 'id': 'fc_fixture', 'call_id': 'call_fixture',
+                'name': 'lookup', 'arguments': '{"query":"swift"}', 'status': 'completed'}
+        return [
+            {'type': 'response.created', 'sequence_number': 0, 'response': {'status': 'in_progress'}},
+            {'type': 'response.function_call_arguments.delta', 'sequence_number': 1,
+             'item_id': item['id'], 'delta': item['arguments']},
+            {'type': 'response.output_item.done', 'sequence_number': 2, 'item': item},
+            {'type': 'response.completed', 'sequence_number': 3,
+             'response': {'object': 'response', 'status': 'completed', 'error': None, 'output': [item]}},
+        ]
+
+    @staticmethod
+    def message_frames():
+        return [
+            {'type': 'message_start', 'message': {'type': 'message', 'role': 'assistant', 'content': [], 'usage': {}}},
+            {'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}},
+            {'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': 'hello'}},
+            {'type': 'content_block_stop', 'index': 0},
+            {'type': 'message_delta', 'delta': {'stop_reason': 'end_turn'}, 'usage': {'input_tokens': 4, 'output_tokens': 1}},
+            {'type': 'message_stop'},
+        ]
+
+    def test_responses_json_accepts_null_error_and_rejects_actual_errors(self):
+        success = {'object': 'response', 'status': 'completed', 'error': None, 'output': []}
+        decoded, frames = api_adapters.decode_result('responses', False, json.dumps(success).encode())
+        self.assertEqual(decoded, success)
+        self.assertEqual(frames, [])
+        for failed in [dict(success, error={'message': 'generation failed'}),
+                       {'type': 'error', 'error': {'message': 'invalid request'}}]:
+            with self.subTest(failed=failed), self.assertRaises(AssertionError):
+                api_adapters.decode_result('responses', False, json.dumps(failed).encode())
+
+    def test_responses_sse_rejects_bad_sequence_terminal_and_argument_deltas(self):
+        good = self.response_frames()
+        decoded, _ = api_adapters.decode_result('responses', True, self.sse(good))
+        self.assertEqual(decoded['output'][0]['name'], 'lookup')
+        wrong_sequence = copy.deepcopy(good); wrong_sequence[1]['sequence_number'] = 9
+        wrong_delta = copy.deepcopy(good); wrong_delta[1]['delta'] = '{"query":"wrong"}'
+        missing_item = copy.deepcopy(good); missing_item[-1]['response']['output'] = []
+        for bad in [wrong_sequence, wrong_delta, missing_item, good[:-1]]:
+            with self.subTest(bad=bad), self.assertRaises(AssertionError):
+                api_adapters.decode_result('responses', True, self.sse(bad))
+        mismatched_event = self.sse(good).replace(b'event: response.created', b'event: response.completed', 1)
+        with self.assertRaises(AssertionError): api_adapters.frames_from(mismatched_event)
+        with self.assertRaises(AssertionError):
+            api_adapters.frames_from(self.sse([{'type': 'error', 'error': {'message': 'failed'}}]))
+
+    def test_responses_sse_rejects_text_that_does_not_match_completed_item(self):
+        item = {'type': 'message', 'id': 'msg_fixture', 'content': [{'type': 'output_text', 'text': 'hello'}]}
+        frames = [
+            {'type': 'response.created', 'sequence_number': 0, 'response': {'status': 'in_progress'}},
+            {'type': 'response.output_text.delta', 'sequence_number': 1, 'item_id': item['id'], 'delta': 'hello'},
+            {'type': 'response.output_item.done', 'sequence_number': 2, 'item': item},
+            {'type': 'response.completed', 'sequence_number': 3, 'response': {'output': [item]}},
+        ]
+        decoded, _ = api_adapters.decode_result('responses', True, self.sse(frames))
+        self.assertEqual(api_adapters.text_and_calls('responses', decoded), ('hello', []))
+        frames[1]['delta'] = 'unrelated'
+        with self.assertRaises(AssertionError):
+            api_adapters.decode_result('responses', True, self.sse(frames))
+
+    def test_messages_sse_rejects_unopened_duplicate_unclosed_and_invalid_json_blocks(self):
+        good = self.message_frames()
+        decoded, _ = api_adapters.decode_result('messages', True, self.sse(good))
+        self.assertEqual(api_adapters.text_and_calls('messages', decoded), ('hello', []))
+        unopened = copy.deepcopy(good); unopened[2]['index'] = 1
+        duplicate = copy.deepcopy(good); duplicate.insert(2, copy.deepcopy(duplicate[1]))
+        unclosed = [copy.deepcopy(frame) for frame in good if frame['type'] != 'content_block_stop']
+        unknown_delta = copy.deepcopy(good); unknown_delta[2]['delta'] = {'type': 'unknown_delta'}
+        for bad in [unopened, duplicate, unclosed, unknown_delta]:
+            with self.subTest(bad=bad), self.assertRaises(AssertionError):
+                api_adapters.decode_result('messages', True, self.sse(bad))
+        invalid_json = copy.deepcopy(good)
+        invalid_json[1]['content_block'] = {'type': 'tool_use', 'id': 'call_fixture', 'name': 'lookup', 'input': {}}
+        invalid_json[2]['delta'] = {'type': 'input_json_delta', 'partial_json': '{broken'}
+        with self.assertRaises(json.JSONDecodeError):
+            api_adapters.decode_result('messages', True, self.sse(invalid_json))
+
+    def test_synthetic_png_has_valid_chunks_and_only_the_expected_square(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'synthetic.png'
+            followups.synthetic_png(path)
+            raw = path.read_bytes()
+        self.assertEqual(raw[:8], b'\x89PNG\r\n\x1a\n')
+        chunks = {}; offset = 8
+        while offset < len(raw):
+            size = struct.unpack('>I', raw[offset:offset + 4])[0]
+            kind = raw[offset + 4:offset + 8]
+            payload = raw[offset + 8:offset + 8 + size]
+            crc = struct.unpack('>I', raw[offset + 8 + size:offset + 12 + size])[0]
+            self.assertEqual(crc, zlib.crc32(kind + payload) & 0xffffffff)
+            self.assertNotIn(kind, chunks)
+            chunks[kind] = payload; offset += size + 12
+        self.assertEqual(offset, len(raw))
+        self.assertEqual(list(chunks), [b'IHDR', b'IDAT', b'IEND'])
+        self.assertEqual(struct.unpack('>IIBBBBB', chunks[b'IHDR']), (256, 256, 8, 2, 0, 0, 0))
+        pixels = zlib.decompress(chunks[b'IDAT'])
+        self.assertEqual(len(pixels), 256 * (1 + 256 * 3))
+        for x, y, expected in [(0, 0, (255, 255, 255)), (47, 48, (255, 255, 255)),
+                                (48, 48, (255, 0, 0)), (207, 207, (255, 0, 0)),
+                                (208, 207, (255, 255, 255)), (255, 255, (255, 255, 255))]:
+            offset = y * (1 + 256 * 3)
+            self.assertEqual(pixels[offset], 0)
+            self.assertEqual(tuple(pixels[offset + 1 + x * 3:offset + 4 + x * 3]), expected)
+
+    def test_image_staging_uses_real_darwin_temp_and_cleans_only_its_unique_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve(); darwin = root / 'darwin'; output = root / 'output'
+            output.mkdir(); shared = darwin / 'TUFF-Attachments'; sibling = shared / 'other-run'
+            sibling.mkdir(parents=True); sentinel = sibling / 'preserve.txt'; sentinel.write_text('preserve')
+            with patch.object(followups.subprocess, 'check_output', return_value=str(darwin) + '\n') as getconf, patch.dict(os.environ, {'TMPDIR': str(root / 'isolated-override')}):
+                with followups.staged_synthetic_image(output) as first:
+                    first_path = Path(first['path'])
+                    self.assertEqual(first_path.parent.parent, shared)
+                    self.assertTrue(first_path.is_file())
+                    self.assertEqual(first['encodedBytes'], first_path.stat().st_size)
+                    self.assertEqual(first['sha256'], hashlib.sha256(first_path.read_bytes()).hexdigest())
+                    self.assertEqual(first_path.read_bytes(), (output / first_path.name).read_bytes())
+                    with followups.staged_synthetic_image(output) as second:
+                        second_path = Path(second['path'])
+                        self.assertNotEqual(first_path.parent, second_path.parent)
+                    self.assertFalse(second_path.parent.exists())
+                    self.assertTrue(first_path.exists())
+                self.assertFalse(first_path.parent.exists())
+                self.assertEqual(sentinel.read_text(), 'preserve')
+                with self.assertRaisesRegex(RuntimeError, 'fixture failure'):
+                    with followups.staged_synthetic_image(output) as failed:
+                        failed_directory = Path(failed['path']).parent
+                        raise RuntimeError('fixture failure')
+                self.assertFalse(failed_directory.exists())
+                getconf.assert_called_with(['getconf', 'DARWIN_USER_TEMP_DIR'], text=True)
 
 if __name__=='__main__': unittest.main()

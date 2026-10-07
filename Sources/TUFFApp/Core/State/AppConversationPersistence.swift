@@ -35,6 +35,12 @@ public struct AppPersistedChatTurn: Codable, Equatable, Sendable, Identifiable {
     /// The model that produced `response`, so a chat that switched models
     /// mid-way still says which answer came from which.
     public var modelID: String?
+    /// Tool calls and results that came before `response`, with the exact
+    /// text the model read, so a continued chat renders the same prompt.
+    public var toolRounds: [AppToolRound]
+    /// What was retrieved, with the excerpts the answer used.
+    public var sources: [AppSource]
+    public var capabilities: AppChatCapabilities
 
     public init(
         id: UUID = UUID(),
@@ -43,7 +49,10 @@ public struct AppPersistedChatTurn: Codable, Equatable, Sendable, Identifiable {
         thinking: String? = nil,
         attachments: [AppConversationAttachment] = [],
         documents: [AppDocumentAttachment] = [],
-        modelID: String? = nil
+        modelID: String? = nil,
+        toolRounds: [AppToolRound] = [],
+        sources: [AppSource] = [],
+        capabilities: AppChatCapabilities = .none
     ) {
         self.id = id
         self.prompt = prompt
@@ -52,6 +61,9 @@ public struct AppPersistedChatTurn: Codable, Equatable, Sendable, Identifiable {
         self.attachments = attachments
         self.documents = documents
         self.modelID = modelID
+        self.toolRounds = toolRounds
+        self.sources = sources
+        self.capabilities = capabilities
     }
 
     /// Decoded field by field so a schema-1 archive — written before turns
@@ -68,6 +80,10 @@ public struct AppPersistedChatTurn: Codable, Equatable, Sendable, Identifiable {
         documents = try container.decodeIfPresent(
             [AppDocumentAttachment].self, forKey: .documents) ?? []
         modelID = try container.decodeIfPresent(String.self, forKey: .modelID)
+        toolRounds = try container.decodeIfPresent([AppToolRound].self, forKey: .toolRounds) ?? []
+        sources = try container.decodeIfPresent([AppSource].self, forKey: .sources) ?? []
+        capabilities = try container.decodeIfPresent(
+            AppChatCapabilities.self, forKey: .capabilities) ?? .none
     }
 
     /// The in-memory turn, without its images: only the store can resolve those
@@ -79,7 +95,10 @@ public struct AppPersistedChatTurn: Codable, Equatable, Sendable, Identifiable {
             response: response,
             thinking: thinking,
             documents: documents,
-            modelID: modelID)
+            modelID: modelID,
+            toolRounds: toolRounds,
+            sources: sources,
+            capabilities: capabilities)
     }
 }
 
@@ -108,10 +127,11 @@ public struct AppConversationRecord: Codable, Equatable, Sendable, Identifiable 
 }
 
 public struct AppConversationArchive: Codable, Equatable, Sendable {
-    /// 2 adds per-turn documents and the answering model to each turn. Both
-    /// decode as absent, so a schema-1 archive loads unchanged and is rewritten
-    /// as schema 2 on the next save.
-    public static let currentSchemaVersion = 2
+    /// 2 adds per-turn documents and the answering model to each turn. 3 adds
+    /// tool rounds, sources and the turn's capabilities. Every addition
+    /// decodes as absent, so older archives load unchanged and are rewritten
+    /// at the current schema on the next save.
+    public static let currentSchemaVersion = 3
 
     public var schemaVersion: Int
     public var selectedConversationID: UUID?
@@ -125,6 +145,19 @@ public struct AppConversationArchive: Codable, Equatable, Sendable {
         self.schemaVersion = schemaVersion
         self.selectedConversationID = selectedConversationID
         self.conversations = conversations
+    }
+
+    /// The oldest schema that holds everything in this archive. Only tool
+    /// rounds, sources and search settings need 3. Without them the archive is
+    /// written as 2, which TUFF 7 still opens, so trying 8.0 does not lock
+    /// ordinary chats away from an earlier version.
+    public var requiredSchemaVersion: Int {
+        let usesTools = conversations.contains { conversation in
+            conversation.turns.contains {
+                !$0.toolRounds.isEmpty || !$0.sources.isEmpty || $0.capabilities != .none
+            }
+        }
+        return usesTools ? 3 : 2
     }
 }
 
@@ -194,6 +227,8 @@ public struct AppConversationRepository: Sendable {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        var archive = archive
+        archive.schemaVersion = archive.requiredSchemaVersion
         let data = try encoder.encode(archive)
         // Foundation's atomic option writes a sibling temporary file and
         // renames it over the archive. A crash therefore leaves either the old

@@ -103,11 +103,40 @@ struct OpenAIRequestFieldTests {
         #expect(omp.preserveThinking == true)
         let validated = try OpenAIRequestValidator.validate(omp, modelID: "m", dialect: .chatml)
         #expect(validated.reasoning == .on)
+        #expect(validated.preserveThinking)
+        #expect(validated.conversationTranscript.preserveThinking)
+        #expect(!validated.allowsTextBridge)
 
         // The template argument alone drives TUFF's own control.
         let nested = try Self.decode(#""chat_template_kwargs":{"enable_thinking":false}"#)
         #expect(nested.enableThinking == false)
         #expect(try Self.decode(#""chat_template_kwargs":{}"#).enableThinking == nil)
+    }
+
+    @Test func assistantReasoningSurvivesValidationAndPreserveThinkingChangesCacheIdentity() throws {
+        let data = Data(#"""
+        {"model":"m","preserve_thinking":true,"messages":[
+          {"role":"user","content":"first"},
+          {"role":"assistant","content":"answer","reasoning_content":"checked carefully"},
+          {"role":"user","content":"next"}]}
+        """#.utf8)
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        let validated = try OpenAIRequestValidator.validate(request, modelID: "m", dialect: .chatml)
+        #expect(validated.messages[1].thinking == "checked carefully")
+        #expect(validated.conversationTranscript.messages[1].thinking == "checked carefully")
+        #expect(validated.preserveThinking)
+        #expect(!validated.allowsTextBridge)
+        let ordinary = try OpenAIRequestValidator.validate(try Self.decode(""), modelID: "m")
+        #expect(!ordinary.preserveThinking)
+        #expect(ordinary.allowsTextBridge)
+    }
+
+    @Test func reasoningOnNonAssistantMessagesIsRefused() throws {
+        let data = Data(#"{"model":"m","messages":[{"role":"user","content":"x","reasoning_content":"y"}]}"#.utf8)
+        let request = try JSONDecoder().decode(OpenAIChatRequest.self, from: data)
+        #expect(throws: ServerRequestError.self) {
+            try OpenAIRequestValidator.validate(request, modelID: "m")
+        }
     }
 
     @Test func chatTemplateKwargsAcceptOnlyTheThinkingSwitches() throws {

@@ -10,6 +10,9 @@ public enum AppInferenceError: Error, Equatable, Sendable, CustomStringConvertib
     case modelNotLoaded
     case reloadRequired
     case cancelled
+    /// The model began a tool call the decoder could not read. Nothing from
+    /// it was executed or shown.
+    case malformedToolCall(String)
     case unknown(String)
 
     public var description: String { userMessage }
@@ -34,6 +37,8 @@ public enum AppInferenceError: Error, Equatable, Sendable, CustomStringConvertib
             return "Model settings changed. Reload the model before generating."
         case .cancelled:
             return "Generation cancelled."
+        case .malformedToolCall:
+            return "The model produced a tool call TUFF could not read, so nothing was run."
         case .unknown(let message):
             return message
         }

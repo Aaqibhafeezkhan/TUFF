@@ -15,8 +15,8 @@ enum DecodeServiceError: Error, CustomStringConvertible {
     }
 }
 
-@main enum TUFFDecodeServiceMain {
-    static func main() async {
+public enum TUFFDecodeServiceMain {
+    public static func main() async {
         // Before anything in this process creates a Metal device.
         MetalContext.relaxInteractivityWatchdog()
         let socketPath = argument(after: "--socket")

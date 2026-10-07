@@ -9,7 +9,7 @@ NAMESPACE = 'https://github.com/rexmhall09/TUFF/appcast'
 SPARKLE = 'http://www.andymatuschak.org/xml-namespaces/sparkle'
 ET.register_namespace('sparkle', SPARKLE)
 ET.register_namespace('tuff', NAMESPACE)
-CURRENT_FORMATS = {'chats': 2, 'app_settings': 7, 'background_settings': 1}
+CURRENT_FORMATS = {'chats': 3, 'app_settings': 7, 'background_settings': 1}
 ELEMENTS = {'chats': 'chatsSchema', 'app_settings': 'appSettingsVersion',
             'background_settings': 'backgroundSettingsVersion'}
 

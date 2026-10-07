@@ -216,7 +216,8 @@ final class DecodeService: @unchecked Sendable {
                             displayName: $0.displayName,
                             encodedBytes: $0.encodedBytes,
                             sha256: $0.sha256)
-                    })
+                    },
+                    toolRounds: (turn.toolRounds ?? []).map(appToolRound))
             },
             imageAttachments: (request.imageAttachments ?? []).map {
                 AppImageAttachment(
@@ -239,7 +240,22 @@ final class DecodeService: @unchecked Sendable {
             topP: request.topP,
             repetitionPenalty: request.repetitionPenalty,
             seed: request.seed,
-            runtimeOptions: options)
+            runtimeOptions: options,
+            tools: request.tools ?? [],
+            currentRounds: (request.currentRounds ?? []).map(appToolRound),
+            conversationKey: request.conversationKey)
+    }
+
+    /// A round as the model reads it. Status and summaries stay in the app;
+    /// the service only renders the calls and the result text.
+    static func appToolRound(_ round: DecodeToolRound) -> AppToolRound {
+        AppToolRound(
+            thinking: round.thinking, content: round.content,
+            calls: round.calls.map { AppToolCall(id: $0.id, name: $0.name, arguments: $0.arguments) },
+            results: round.results.map {
+                AppToolResult(callID: $0.callID, name: $0.name, status: .succeeded,
+                              modelText: $0.content, summary: "")
+            })
     }
 
     private func nextCommand() async -> DecodeServiceCommand? {

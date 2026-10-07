@@ -86,17 +86,128 @@ public struct MetalFunctionConstant: Hashable, Sendable {
     }
 }
 
-/// Single owner of the `MTLDevice`, queue, and the runtime-compiled shader library.
-/// On Mac and iOS we ship `.metal` source files as bundle resources and compile
-/// them into one combined `MTLLibrary` at startup. This keeps the dev loop
-/// fast — edit a shader, rebuild the Swift target, no Xcode metallib step.
-/// `@unchecked Sendable`: device/queue/library are immutable and Metal objects
-/// are thread-safe for encoding; the pipeline cache is the only mutable state
-/// and is lock-guarded.
+/// A set of shader modules compiled into one library. A model loads only the
+/// groups its architecture uses: every model needs `core`, a dense Gemma does
+/// not need the mixture-of-experts, GPT-OSS, Gated-DeltaNet or vision kernels.
+///
+/// Every group is compiled after the shared prelude (`quant_group`, which
+/// declares the function constants, and `activation`), so each group is a
+/// complete translation unit on its own. `supportModules` carries helper source
+/// a group's kernels call; their kernels still belong to their own group.
+public enum MetalKernelGroup: String, CaseIterable, Sendable, Comparable {
+    case core
+    case mixtureOfExperts = "moe"
+    case int8
+    case mxfp4
+    case linearAttention = "gdn"
+    case sparseAttention = "qsa"
+    case residualStreams = "streams"
+    case vision
+
+    /// Modules whose kernels this group provides, in compile order.
+    public var modules: [String] {
+        switch self {
+        case .core:
+            // per_layer_embedding also holds the generic scale and residual
+            // kernels every family uses, so it is core rather than Gemma-only.
+            ["dequant_int4", "rmsnorm", "rope", "attention", "logit", "utility",
+             "per_layer_embedding", "fused", "prefill"]
+        case .mixtureOfExperts: ["moe"]
+        case .int8: ["dequant_int8"]
+        case .mxfp4: ["mxfp4"]
+        case .linearAttention: ["gdn"]
+        case .sparseAttention: ["qsa"]
+        case .residualStreams: ["hyper_connection", "ngram_ple"]
+        case .vision: ["vision"]
+        }
+    }
+
+    /// Modules compiled ahead of `modules` because their helpers are called.
+    var supportModules: [String] {
+        switch self {
+        // gdn's input projection reuses dequant_int4_gemv_simd_body.
+        case .linearAttention: ["dequant_int4"]
+        default: []
+        }
+    }
+
+    public static func < (lhs: Self, rhs: Self) -> Bool {
+        allCases.firstIndex(of: lhs)! < allCases.firstIndex(of: rhs)!
+    }
+
+    /// The groups a model of this architecture dispatches. Selection follows
+    /// the configuration's features rather than model names, so a new
+    /// checkpoint of an existing architecture needs no change here.
+    public static func required(for config: ArchConfig,
+                                sharedExpertWeightBits: Int = 4,
+                                maxContext: Int = .max) -> Set<MetalKernelGroup> {
+        var groups: Set<MetalKernelGroup> = [.core]
+        if config.family == .gptOss {
+            groups.formUnion([.mixtureOfExperts, .mxfp4])
+            return groups
+        }
+        if config.numExperts > 0 { groups.insert(.mixtureOfExperts) }
+        if sharedExpertWeightBits == 8 || config.sharedExpertGated { groups.insert(.int8) }
+        if config.hasLinearAttentionLayers { groups.insert(.linearAttention) }
+        if config.attentionIndexer.isEnabled,
+           maxContext >= config.attentionIndexer.budget + config.attentionIndexer.compressRatio {
+            groups.insert(.sparseAttention)
+        }
+        if config.hyperConnection.isEnabled || config.ngramEmbedding.isEnabled {
+            groups.insert(.residualStreams)
+        }
+        return groups
+    }
+}
+
+/// Single owner of the `MTLDevice`, queue, and the runtime-compiled shader
+/// libraries. We ship `.metal` source files as bundle resources and compile
+/// them at runtime, which keeps the dev loop fast: edit a shader, rebuild the
+/// Swift target, no Xcode metallib step.
+///
+/// Libraries are compiled per `MetalKernelGroup`. A runner prepares the groups
+/// its architecture needs when it is created; a pipeline whose group is not
+/// compiled yet compiles that group on demand and records it as a late load,
+/// so a missing prediction costs time, never correctness. Setting
+/// `TUFF_KERNEL_GROUPS=combined` compiles every module into one library, as
+/// releases before 8.0 did.
+///
+/// `@unchecked Sendable`: device and queue are immutable, Metal objects are
+/// thread-safe for encoding, and the library and pipeline caches are
+/// lock-guarded.
 public final class MetalContext: @unchecked Sendable {
     public let device:  MTLDevice
     public let queue:   MTLCommandQueue
-    public let library: MTLLibrary
+
+    /// Group libraries compiled so far. In combined mode every group maps to
+    /// the same library.
+    private var libraries: [MetalKernelGroup: MTLLibrary] = [:]
+    private var lateGroups: Set<MetalKernelGroup> = []
+    private var compileSeconds: [MetalKernelGroup: Double] = [:]
+    private let libraryLock = NSLock()
+    public let combinesAllGroups: Bool
+    private let logsKernelGroups: Bool
+
+    public var compiledKernelGroups: Set<MetalKernelGroup> {
+        libraryLock.withLock { Set(libraries.keys) }
+    }
+
+    /// Groups compiled because a pipeline asked for them rather than because
+    /// a runner prepared them. Empty when predictions are complete.
+    public var lateKernelGroups: Set<MetalKernelGroup> {
+        libraryLock.withLock { lateGroups }
+    }
+
+    public var kernelGroupCompileSeconds: [MetalKernelGroup: Double] {
+        libraryLock.withLock { compileSeconds }
+    }
+
+    /// Pipelines created and the time spent creating them, for load
+    /// diagnostics and the kernel-loading benchmark.
+    public var pipelineStatistics: (count: Int, seconds: Double) {
+        pipelineCacheLock.withLock { (pipelineCache.count, pipelineSeconds) }
+    }
+    private var pipelineSeconds = 0.0
 
     private struct PipelineCacheKey: Hashable {
         var name: String
@@ -129,12 +240,123 @@ public final class MetalContext: @unchecked Sendable {
         return MTLCreateSystemDefaultDevice()
     }
 
-    public init() throws {
+    /// `kernelGroups` are compiled now; others compile when first used.
+    public init(kernelGroups: Set<MetalKernelGroup> = [.core],
+                environment: [String: String] = ProcessInfo.processInfo.environment) throws {
         guard let dev = Self.makeSystemDefaultDevice() else { throw MetalError.noDevice }
         guard let q   = dev.makeCommandQueue()           else { throw MetalError.noQueue }
         self.device  = dev
         self.queue   = q
-        self.library = try Self.compileShaderLibrary(device: dev)
+        self.combinesAllGroups = environment["TUFF_KERNEL_GROUPS"] == "combined"
+        self.logsKernelGroups = environment["TUFF_LOG_KERNELS"] != nil
+        try prepareKernelGroups(kernelGroups)
+    }
+
+    /// Compiles any of `groups` not compiled yet.
+    public func prepareKernelGroups(_ groups: Set<MetalKernelGroup>) throws {
+        try libraryLock.withLock {
+            for group in groups.sorted() where libraries[group] == nil {
+                try compileLocked(group)
+            }
+        }
+    }
+
+    /// Caller holds `libraryLock`.
+    private func compileLocked(_ group: MetalKernelGroup) throws {
+        let start = ContinuousClock.now
+        if combinesAllGroups {
+            let library = try Self.compileShaderLibrary(device: device, modules: Self.shaderModules)
+            for every in MetalKernelGroup.allCases { libraries[every] = library }
+        } else {
+            libraries[group] = try Self.compileShaderLibrary(
+                device: device,
+                modules: Self.preludeModules + group.supportModules + group.modules)
+        }
+        let elapsed = ContinuousClock.now - start
+        compileSeconds[group] = Double(elapsed.components.seconds)
+            + Double(elapsed.components.attoseconds) / 1e18
+        if logsKernelGroups {
+            FileHandle.standardError.write(Data(String(
+                format: "[kernels] compiled %@%@ in %.3fs\n", group.rawValue,
+                combinesAllGroups ? " (combined)" : "", compileSeconds[group]!).utf8))
+        }
+    }
+
+    /// The library that defines `name`, compiling its group if needed.
+    private func library(containing name: String) throws -> MTLLibrary {
+        try libraryLock.withLock {
+            if let group = Self.functionGroups[name] {
+                if let library = libraries[group] { return library }
+                try compileLocked(group)
+                lateGroups.insert(group)
+                if logsKernelGroups {
+                    FileHandle.standardError.write(Data(
+                        "[kernels] \(group.rawValue) was not prepared; compiled for \(name)\n".utf8))
+                }
+                return libraries[group]!
+            }
+            // Not in the index: look in what is compiled, then compile the
+            // rest before giving up.
+            if let library = libraries.values.first(where: { $0.functionNames.contains(name) }) {
+                return library
+            }
+            for group in MetalKernelGroup.allCases where libraries[group] == nil {
+                try compileLocked(group)
+                if libraries[group]!.functionNames.contains(name) {
+                    lateGroups.insert(group)
+                    return libraries[group]!
+                }
+            }
+            throw MetalError.missingFunction(name)
+        }
+    }
+
+    /// Writes the groups compiled and the pipelines created so far when
+    /// `TUFF_LOG_KERNELS` is set, after a model has loaded.
+    public func logLoadStatistics(_ label: String) {
+        guard logsKernelGroups else { return }
+        let pipelines = pipelineStatistics
+        let groups = compiledKernelGroups.sorted().map(\.rawValue).joined(separator: ",")
+        FileHandle.standardError.write(Data(String(
+            format: "[kernels] %@ loaded: groups=%@ pipelines=%d in %.3fs\n",
+            label, groups, pipelines.count, pipelines.seconds).utf8))
+    }
+
+    /// An unspecialized function, for argument encoders.
+    public func function(named name: String) throws -> MTLFunction {
+        guard let function = try library(containing: name).makeFunction(name: name) else {
+            throw MetalError.missingFunction(name)
+        }
+        return function
+    }
+
+    /// Which group's library defines each kernel, read from the shipped
+    /// sources. A kernel is listed under the group that owns its module, not a
+    /// group that compiles the module only for its helpers.
+    static let functionGroups: [String: MetalKernelGroup] = {
+        var index: [String: MetalKernelGroup] = [:]
+        for group in MetalKernelGroup.allCases {
+            for module in group.modules {
+                guard let url = shaderURL(module: module),
+                      let source = try? String(contentsOf: url, encoding: .utf8) else { continue }
+                for name in kernelNames(in: source) { index[name] = group }
+            }
+        }
+        return index
+    }()
+
+    static func kernelNames(in source: String) -> Set<String> {
+        let patterns = [#"\bkernel\s+void\s+(\w+)"#,
+                        #"\[\[\s*kernel[^\]]*\]\]\s*void\s+(\w+)"#,
+                        #"host_name\(\s*"(\w+)"\s*\)"#]
+        var names = Set<String>()
+        for pattern in patterns {
+            let regex = try! NSRegularExpression(pattern: pattern)
+            for match in regex.matches(in: source, range: NSRange(source.startIndex..., in: source)) {
+                if let range = Range(match.range(at: 1), in: source) { names.insert(String(source[range])) }
+            }
+        }
+        return names
     }
 
     /// Declares the function constants the quantized kernels share. Compiled
@@ -142,11 +364,16 @@ public final class MetalContext: @unchecked Sendable {
     /// whose module reads them.
     private static let quantConstantsModule = "quant_group"
 
+    /// Compiled ahead of every group: the shared function constants and the
+    /// activation math more than one group calls.
+    static let preludeModules = ["quant_group", "activation"]
+
     /// Production shader modules compiled into the shared runtime library.
     private static let shaderModules: [String] = [
         // First: it declares the function constants the quantized kernels
         // share, and the library is one concatenated translation unit.
         "quant_group",
+        "activation",
         "dequant_int4",
         "dequant_int8",
         "mxfp4",
@@ -174,6 +401,7 @@ public final class MetalContext: @unchecked Sendable {
         "dequant_int8": "Metal/Quant",
         "mxfp4": "Metal/Quant",
         "quant_group": "Metal/Quant",
+        "activation": "Metal/Primitives",
         "fused": "Metal/Fusions",
         "gdn": "Metal/GDN",
         "logit": "Metal/Sampling",
@@ -232,9 +460,10 @@ public final class MetalContext: @unchecked Sendable {
                                 subdirectory: subdirectory)
     }
 
-    private static func compileShaderLibrary(device: MTLDevice) throws -> MTLLibrary {
+    private static func compileShaderLibrary(device: MTLDevice,
+                                             modules: [String]) throws -> MTLLibrary {
         var combined = ""
-        for name in shaderModules {
+        for name in modules {
             guard let url = shaderURL(module: name) else {
                 throw MetalError.missingShaderResource(name)
             }
@@ -346,9 +575,11 @@ public final class MetalContext: @unchecked Sendable {
         pipelineCacheLock.unlock()
         if let cached { return cached }
 
+        let library = try library(containing: name)
         guard library.functionNames.contains(name) else {
             throw MetalError.missingFunction(name)
         }
+        let started = ContinuousClock.now
 
         let values = MTLFunctionConstantValues()
         for constant in sortedConstants {
@@ -378,8 +609,11 @@ public final class MetalContext: @unchecked Sendable {
         } else {
             p = try device.makeComputePipelineState(function: fn)
         }
+        let elapsed = ContinuousClock.now - started
         pipelineCacheLock.lock()
         pipelineCache[key] = p
+        pipelineSeconds += Double(elapsed.components.seconds)
+            + Double(elapsed.components.attoseconds) / 1e18
         pipelineCacheLock.unlock()
         return p
     }

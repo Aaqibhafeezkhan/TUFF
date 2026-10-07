@@ -96,7 +96,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                     }
                     let generationID = UUID()
                     generationTranscriptMailbox.reset()
-                    let command = DecodeGenerationRequest(
+                    var command = DecodeGenerationRequest(
                         prompt: request.prompt,
                         systemPrompt: request.systemPrompt.isEmpty
                             ? nil : request.systemPrompt,
@@ -114,7 +114,9 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                                         displayName: $0.displayName,
                                         encodedBytes: $0.encodedBytes,
                                         sha256: $0.sha256)
-                                })
+                                },
+                                toolRounds: turn.toolRounds.isEmpty
+                                    ? nil : turn.toolRounds.map(Self.decodeToolRound))
                         },
                         imageAttachments: request.imageAttachments.map {
                             DecodeImageAttachment(
@@ -139,6 +141,10 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                         seed: request.seed,
                         runtimeOptions: Self.decodeRuntimeOptions(request.runtimeOptions),
                         generationID: generationID)
+                    command.tools = request.tools.isEmpty ? nil : request.tools
+                    command.currentRounds = request.currentRounds.isEmpty
+                        ? nil : request.currentRounds.map(Self.decodeToolRound)
+                    command.conversationKey = request.conversationKey
                     try handles.input.write(contentsOf: DecodeFrameCodec.encode(
                         DecodeServiceCommand.generate(command)))
 
@@ -216,14 +222,20 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                             event, options: request.runtimeOptions)
                         switch event.kind {
                         case .finished:
+                            if let calls = event.toolCalls, !calls.isEmpty {
+                                continuation.yield(.toolCalls(calls.map {
+                                    AppToolCall(id: $0.id, name: $0.name, arguments: $0.arguments)
+                                }))
+                            }
                             continuation.yield(.finished(diagnostics))
                             continuation.finish()
                         case .cancelled:
                             continuation.yield(.cancelled(diagnostics))
                             continuation.finish()
                         case .failed:
-                            let error = AppInferenceError.unknown(
-                                event.error ?? "decode service failed")
+                            let error = event.errorKind == "malformedToolCall"
+                                ? AppInferenceError.malformedToolCall(event.error ?? "")
+                                : AppInferenceError.unknown(event.error ?? "decode service failed")
                             continuation.yield(.failed(error, partial: diagnostics))
                             continuation.finish(throwing: error)
                         default:
@@ -461,7 +473,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
             ?? (event.kind == .cancelled
                 ? .cancelled
                 : event.kind == .failed ? .failed : .maxTokens)
-        return AppDiagnostics(
+        var diagnostics = AppDiagnostics(
             generatedTokens: event.tokenCount,
             stopReason: stop,
             promptTokenCount: event.promptTokenCount,
@@ -475,6 +487,20 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
             prefill: prefillDiagnostics(event.prefill, options: options),
             runner: event.runner.map(runnerDiagnostics),
             droppedTurns: event.droppedTurns ?? 0)
+        diagnostics.cachedPromptTokens = event.cachedPromptTokens
+        diagnostics.conversationCacheSource = event.conversationCacheSource
+        diagnostics.retainedConversations = event.retainedConversations
+        diagnostics.retainedConversationBytes = event.retainedConversationBytes
+        return diagnostics
+    }
+
+    static func decodeToolRound(_ round: AppToolRound) -> DecodeToolRound {
+        DecodeToolRound(
+            thinking: round.thinking, content: round.content,
+            calls: round.calls.map(\.historical),
+            results: round.results.map {
+                DecodeToolResult(callID: $0.callID, name: $0.name, content: $0.modelText)
+            })
     }
 
     private static func prefillDiagnostics(

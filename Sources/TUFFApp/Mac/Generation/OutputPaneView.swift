@@ -119,12 +119,21 @@ struct OutputPaneView: View {
         TranscriptMessageView(
             prompt: turn.prompt,
             response: turn.response,
-            thinking: turn.thinking ?? "",
+            thinking: Self.displayedThinking(turn),
             images: turn.images,
             documents: turn.documents,
             modelName: model.modelShortName(forProfileKey: turn.modelID),
             renderer: Self.renderer(scale: fontScale),
-            actions: actions(for: turn))
+            actions: actions(for: turn),
+            toolEntries: ToolActivityEntry.entries(from: turn.toolRounds),
+            sources: turn.sources)
+    }
+
+    /// Every round's reasoning, then the answer's, in the order produced.
+    private static func displayedThinking(_ turn: AppChatTurn) -> String {
+        (turn.toolRounds.compactMap(\.thinking) + [turn.thinking ?? ""])
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n\n")
     }
 
     /// Rewind controls, offered only while the chat is idle enough to rewind.
@@ -152,7 +161,10 @@ struct OutputPaneView: View {
                     ? model.generationTranscriptMailbox : nil,
                 isTerminal: !model.isRunning,
                 showsPrefillPlaceholder: model.isRunning
-                    && model.outputResponsePlainText.isEmpty))
+                    && model.outputResponsePlainText.isEmpty
+                    && model.phase != .tools),
+            toolEntries: ToolActivityEntry.entries(from: model.outputToolActivities),
+            sources: model.outputSources)
     }
 
     /// One renderer per zoom. The point sizes are baked into the attributed

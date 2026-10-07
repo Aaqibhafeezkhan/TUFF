@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 import TUFFAppCore
 import TUFFMacPresentation
 import SwiftUI
@@ -25,6 +26,9 @@ struct TranscriptMessageView: View {
     /// What this message can be rewound to. Absent while a run is in flight,
     /// and on the live message, which has nothing to rewind yet.
     var actions: MessageActions?
+    /// Tool calls made for this answer, and the sources they found.
+    var toolEntries: [ToolActivityEntry] = []
+    var sources: [AppSource] = []
 
     struct MessageActions {
         let edit: () -> Void
@@ -100,11 +104,45 @@ struct TranscriptMessageView: View {
             if !thinking.isEmpty {
                 ThinkingDisclosure(
                     text: thinking,
-                    isRunning: live?.isTerminal == false && response.isEmpty,
+                    isRunning: live?.isTerminal == false && response.isEmpty
+                        && !toolEntries.contains { $0.state == .running },
                     isExpanded: $thinkingExpanded,
                     reduceTransparency: reduceTransparency)
             }
+            if !toolEntries.isEmpty {
+                ToolActivityView(
+                    entries: toolEntries, sources: sources,
+                    isRunning: toolEntries.contains { $0.state == .running },
+                    reduceTransparency: reduceTransparency)
+            }
             responseBody
+            if let note = citationNote {
+                Label(note, systemImage: "exclamationmark.circle")
+                    .appFont(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// Said when the answer cites a number no retrieved source has. The
+    /// number stays plain text; nothing is made to look like a source.
+    private var citationNote: String? {
+        guard live == nil, !toolEntries.isEmpty, !response.isEmpty else { return nil }
+        let invalid = AppCitations.check(response, sources: sources).invalid
+        guard !invalid.isEmpty else { return nil }
+        let list = invalid.map { "[\($0)]" }.joined(separator: ", ")
+        return invalid.count == 1
+            ? "\(list) does not match a retrieved source."
+            : "\(list) do not match retrieved sources."
+    }
+
+    private func openCitation(_ url: URL) {
+        guard let source = AppCitations.source(for: url, in: sources),
+              let target = source.openURL else { return }
+        if target.isFileURL {
+            NSWorkspace.shared.activateFileViewerSelecting([target])
+        } else {
+            NSWorkspace.shared.open(target)
         }
     }
 
@@ -126,6 +164,10 @@ struct TranscriptMessageView: View {
                     ? "Copied" : "Copy this answer as Markdown",
                 tint: copied == .markdown ? TUFFMacTheme.accentColor : nil,
                 action: { copyResponse(.markdown) })
+            MessageActionButton(
+                symbol: "square.and.arrow.down",
+                help: "Save this answer and its sources as a Markdown file",
+                action: saveResponse)
             if let actions {
                 MessageActionButton(
                     symbol: "arrow.clockwise",
@@ -168,10 +210,29 @@ struct TranscriptMessageView: View {
                 .frame(height: max(liveHeight, 1))
         } else if !response.isEmpty {
             AttributedTextView(
-                attributed: renderer.render(response).attributedString,
-                height: $responseHeight)
+                attributed: sources.isEmpty
+                    ? renderer.render(response).attributedString
+                    : renderer.render(response) { text in
+                        AppCitations.numberRanges(in: text, sources: sources).map {
+                            ($0.range, AppCitations.url(for: $0.number))
+                        }
+                    },
+                height: $responseHeight,
+                onLink: openCitation)
                 .frame(height: max(responseHeight, 1))
         }
+    }
+
+    /// Writes the answer only where the person chooses in the save panel.
+    private func saveResponse() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = AppAnswerExport.suggestedFileName(prompt: prompt)
+        panel.allowedContentTypes = [.init(filenameExtension: "md") ?? .plainText]
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let text = AppAnswerExport.markdown(prompt: prompt, response: response,
+                                            modelName: modelName, sources: sources)
+        try? text.write(to: url, atomically: true, encoding: .utf8)
     }
 
     private func copyResponse(_ format: AnswerCopyFormat) {

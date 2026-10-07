@@ -165,8 +165,8 @@ final class MoE {
         guard let logits = context.device.makeBuffer(
             length: routerLogitCapacity * MemoryLayout<Float>.stride,
             options: .storageModeShared),
-              let phase1Function = context.library.makeFunction(
-                name: "moe_phase1_gate_up_act_u16load") else {
+              let phase1Function = try? context.function(
+                named: "moe_phase1_gate_up_act_u16load") else {
             throw MetalError.noDevice
         }
         self.routerLogits = logits

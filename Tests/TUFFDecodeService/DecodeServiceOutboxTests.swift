@@ -2,7 +2,7 @@ import Foundation
 import Testing
 import TUFFEngine
 @testable import TUFFAppCore
-@testable import TUFFDecodeService
+@testable import TUFFDecodeServiceCore
 import TUFFDecodeProtocol
 
 @Suite struct DecodeServiceOutboxTests {

@@ -51,6 +51,14 @@ cannot revoke a downloaded archive or prevent an already-running old updater
 from completing. Publish a newer recovery promptly and warn affected users.
 Clients with cached updates may need to quit and use the manual path above.
 
+Homebrew uses the version and checksum pinned in `Casks/tuff.rb`, separately
+from GitHub's latest-release flag and the Sparkle feed. Withdrawing a release
+does not change that pin. Update the cask promptly so new installations do not
+fetch the withdrawn build. Prefer publishing a newer, validated recovery and
+pinning its ZIP with `Scripts/update_homebrew.py`; an older app may not read
+newer chats or settings, and a Homebrew downgrade bypasses TUFF's recovery
+gate. Verify both installation routes after a recovery release.
+
 ## Prepare a recovery locally
 
 Start from a clean checkout. Select the explicit ancestor commit whose runtime
@@ -87,7 +95,8 @@ The appcast script embeds notes, adds the `tuff` namespace, and signs the final
 XML after adding metadata. Recovery items carry `tuff:recovery`,
 `tuff:withdrawnVersion`, `tuff:knownGoodCommit`, `tuff:chatsSchema`,
 `tuff:appSettingsVersion` and `tuff:backgroundSettingsVersion`. Current formats
-are chat schema 2, app settings 7 and background settings 1.
+are chat schema 3, app settings 7 and background settings 1. A chat archive
+without tool rounds, sources or search settings is still written as schema 2.
 
 ```sh
 Scripts/package_app.sh 7.0.1 dist/v7.0.1

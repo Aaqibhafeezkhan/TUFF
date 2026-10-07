@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TUFF</title>
-<meta name="description" content="Turbo Ultimate Field Fare is a macOS app for running Qwen, Gemma, and GPT-OSS models locally, with expert streaming so large models fit on Macs without much memory.">
+<meta name="description" content="TUFF runs language models locally on Apple Silicon, with a native chat app, optional web and folder search, and a local API.">
 <link rel="icon" type="image/png" href="assets/tuff-icon.png">
 <style>
   :root {
@@ -79,6 +79,8 @@
   th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); }
   th { color: var(--muted); font-weight: 600; }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  pre { overflow-x: auto; padding: 16px 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+  pre code { white-space: pre; }
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13.5px; color: var(--violet-light); }
   a { color: var(--violet-light); }
   footer { padding: 40px 0 64px; color: var(--muted); font-size: 14px; border-top: 1px solid var(--border); margin-top: 26px; }
@@ -94,9 +96,8 @@
     <img class="icon" src="assets/tuff-icon.png" alt="TUFF app icon">
     <h1>TUFF</h1>
     <p class="tagline">
-      Turbo Ultimate Field Fare is a macOS app that lets you run models like Qwen,
-      Gemma, and GPT-OSS with expert streaming, so large models run on devices
-      without a lot of memory.
+      Run language models locally on Apple Silicon. A native chat app,
+      optional web and folder search, and a local API, powered by Swift and Metal.
     </p>
     <div class="cta">
       <a class="button primary" id="download" href="https://github.com/rexmhall09/TUFF/releases/latest">
@@ -108,45 +109,83 @@
   </header>
 
   <div class="shot">
-    <img src="assets/tuff-chat.png" alt="TUFF generating with Qwen 3.8 Flash Next, a 110 GB model, on a 16 GB Mac">
+    <img src="assets/tuff-chat.png" alt="TUFF chat with optional Web and Files search, tool activity and numbered sources">
   </div>
 
-  <section>
-    <h2>What it does</h2>
+  <section aria-labelledby="features">
+    <h2 id="features">New in 8.0</h2>
     <div class="grid">
       <div class="card">
-        <h3>Runs big models on small Macs</h3>
-        <p>Mixture-of-experts weights stream from SSD through a bounded cache, so a
-           61 GiB checkpoint runs on a 16 GB machine without swap.</p>
+        <h3>Chat with sources</h3>
+        <p>Turn on Web to search with DuckDuckGo, or use Brave or Tavily with your
+           own key. Follow numbered sources and save answers as Markdown.</p>
       </div>
       <div class="card">
-        <h3>Nine models</h3>
-        <p>Gemma 4 E2B, E4B, 12B QAT and 26B-A4B, Qwen3.6 35B-A3B, GPT-OSS 20B and
-           120B, MiniMax M2.7, and Qwen3.8 Flash Next, each downloaded and
-           repacked from a pinned revision.</p>
+        <h3>Search folders you choose</h3>
+        <p>Files searches selected folders with a local text index, without an
+           embedding model. Indexing pauses while the model generates.</p>
       </div>
       <div class="card">
-        <h3>Nothing leaves the Mac</h3>
-        <p>Inference is local. The Background API serves installed models while the
-           app is closed, loading on request and unloading when idle. Its
-           OpenAI-compatible endpoint binds only to <code>127.0.0.1</code>.</p>
+        <h3>Keep the conversation moving</h3>
+        <p>Recent conversations retain model state within a bounded memory
+           budget, so returning to a chat can avoid repeating its prefill.
+           Optional saved states are released under memory pressure.</p>
       </div>
       <div class="card">
-        <h3>Native and self-contained</h3>
-        <p>Swift and Metal throughout. It does not wrap MLX or llama.cpp.</p>
+        <h3>A smaller download</h3>
+        <p>The chat app, decode service and command-line tools share one
+           executable. Model weights are separate downloads.</p>
       </div>
     </div>
   </section>
 
-<!-- release-benchmarks:start -->
-<section class="benchmarks">
-<h2>Version 6.0.0</h2>
-<p>Batched tensor-core prefill with matmul tiles sized to each expert&#x27;s rows, next-layer expert prefetch in decode, and faster GPT-OSS MXFP4 decode.</p>
-<h3>Local model check</h3><p>TUFF 6.0.0, measured 2026-09-29 on a 16 GB M2 MacBook Air. One fresh process per model, answering What is the capital of France? with a 4,096-token context, seed 20260721, and a 128-token output cap (256 for MiniMax M2.7). Decode speed excludes model loading and prefill; prefill includes the first-use weight checks. 9/9 runs named Paris. These short responses are smoke tests, not a sustained-throughput or model-quality comparison. Host load and filesystem caching can affect the timings.</p>
-<div style="overflow-x:auto"><table style="width:100%;text-align:left;border-spacing:0 10px"><thead><tr><th>Model</th><th>Decode</th><th>Prefill</th></tr></thead><tbody><tr><td>Gemma 4 E2B IT</td><td>45.66 tok/s</td><td>0.84 s</td></tr><tr><td>Gemma 4 E4B IT</td><td>27.51 tok/s</td><td>1.11 s</td></tr><tr><td>Gemma 4 12B IT QAT</td><td>6.34 tok/s</td><td>29.49 s</td></tr><tr><td>Gemma 4 26B-A4B IT</td><td>8.38 tok/s</td><td>4.57 s</td></tr><tr><td>Qwen3.6 35B-A3B</td><td>8.13 tok/s</td><td>6.42 s</td></tr><tr><td>GPT-OSS 20B</td><td>2.68 tok/s</td><td>6.82 s</td></tr><tr><td>GPT-OSS 120B</td><td>0.19 tok/s</td><td>29.40 s</td></tr><tr><td>MiniMax M2.7 4-bit</td><td>0.17 tok/s</td><td>51.57 s</td></tr><tr><td>Qwen3.8 Flash Next 4-bit</td><td>1.50 tok/s</td><td>27.03 s</td></tr></tbody></table></div>
-<p><a href="https://github.com/rexmhall09/TUFF/blob/main/docs/MODEL_VALIDATION.md">Validation details and reproduction script</a></p>
-</section>
-<!-- release-benchmarks:end -->
+  <section aria-labelledby="local-models">
+    <h2 id="local-models">An inference engine for your Mac</h2>
+    <p>Choose from nine checkpoints across Gemma 4, Qwen, GPT-OSS and MiniMax.
+       TUFF streams routed experts from SSD through a bounded cache, allowing
+       supported models larger than unified memory to run locally. Model size,
+       available memory and disk speed all affect performance.</p>
+    <p>The Background API serves installed models while the app is closed,
+       with Chat Completions and bounded Messages and Responses adapters.
+       Chat Completions keeps reasoning separate from answers. Your client
+       runs function tools. Request timings help explain where time is
+       spent. TUFF uses its own Swift and Metal inference engine.</p>
+    <p>Inference and folder search stay on your Mac. Optional web search sends
+       queries to your chosen provider, and page reading contacts the selected
+       websites. Web and Files are off until you turn them on.</p>
+    <p>After local documents enter a chat, web searches are limited to terms
+       you write in your current message. File sources reveal their location
+       in Finder. Retrieved pages can still be wrong or misleading, so check
+       the sources behind an answer.</p>
+    <p><a href="https://github.com/rexmhall09/TUFF/blob/main/docs/RELEASE_8.0.0_NOTES.md">8.0 release notes</a>
+       · <a href="https://github.com/rexmhall09/TUFF/blob/main/docs/RELEASE_EVIDENCE.md">Measurements and validation limits</a></p>
+  </section>
+
+  <section aria-labelledby="install">
+    <h2 id="install">Install with Homebrew</h2>
+    <p>Use TUFF's own tap, hosted in the same repository as the app:</p>
+    <pre><code>brew tap rexmhall09/tuff https://github.com/rexmhall09/TUFF.git
+brew install --cask rexmhall09/tuff/tuff</code></pre>
+    <p>This installs the app and the <code>tuff</code> command. To update:</p>
+    <pre><code>brew update
+brew upgrade --cask rexmhall09/tuff/tuff</code></pre>
+    <p>Or download the ZIP above, extract it and move TUFF.app to Applications.
+       You need Apple Silicon and macOS 15 or newer. TUFF is ad-hoc signed and
+       not notarized, so macOS may require first-open approval in Privacy &amp;
+       Security. Homebrew does not bypass that approval.</p>
+    <p><a href="https://github.com/rexmhall09/TUFF#install">Installation details and checksums</a>
+       · <a href="https://docs.brew.sh/Installation">Install Homebrew</a></p>
+  </section>
+
+  <section aria-labelledby="contribute">
+    <h2 id="contribute">Help make TUFF better</h2>
+    <p>Bug reports, documentation, tests, design and code are all welcome.
+       You can contribute without downloading a model. AI tools are welcome
+       too: understand what you change and personally review your work.</p>
+    <p><a href="https://github.com/rexmhall09/TUFF/blob/main/CONTRIBUTING.md">How to contribute</a>
+       · <a href="https://github.com/rexmhall09/TUFF/issues">Report an issue</a>
+       · <a href="https://github.com/rexmhall09/TUFF/discussions">Ask a question</a></p>
+  </section>
 
   <footer>
     <p>
@@ -170,7 +209,7 @@
         { headers: { Accept: "application/vnd.github+json" } });
       if (!response.ok) return;
       const release = await response.json();
-      const zip = (release.assets || []).find(a => a.name.endsWith(".zip"));
+      const zip = (release.assets || []).find(a => /^TUFF-v[0-9]+\.[0-9]+\.[0-9]+-macos-arm64\.zip$/.test(a.name));
       if (zip) {
         button.href = zip.browser_download_url;
         button.textContent = "Download " + release.tag_name + " for macOS";

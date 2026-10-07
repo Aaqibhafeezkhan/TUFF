@@ -11,6 +11,22 @@ struct RunnerDiagnosticsSection: View {
                 groupLabel("Result")
                 DiagnosticRow("Settings", diagnostics.runtimeOptions.resultSummary, multiline: true)
                 DiagnosticRow("Prompt tokens", diagnostics.promptTokenCount.map(String.init) ?? "unknown")
+                if let cached = diagnostics.cachedPromptTokens {
+                    DiagnosticRow(
+                        "Reused tokens",
+                        cached > 0
+                            ? "\(cached) from the \(diagnostics.conversationCacheSource ?? "cached") state"
+                            : "none",
+                        help: "Prompt tokens continued from a conversation state kept in memory instead of being processed again.")
+                }
+                if let retained = diagnostics.retainedConversations, retained > 0 {
+                    DiagnosticRow("Kept conversations",
+                                  "\(retained), \(MetricFormat.memory(diagnostics.retainedConversationBytes.map(UInt64.init)))")
+                }
+                if diagnostics.toolRounds > 0 {
+                    DiagnosticRow("Tool rounds",
+                                  "\(diagnostics.toolRounds), \(MetricFormat.seconds(diagnostics.toolSeconds))")
+                }
                 DiagnosticRow("Output tokens", "\(diagnostics.generatedTokens)")
                 DiagnosticRow("Stop", diagnostics.stopReason.rawValue)
 

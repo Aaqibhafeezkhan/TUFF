@@ -50,4 +50,6 @@ public enum AppGenerationPhase: String, Equatable, Sendable {
     case idle
     case prefill
     case decode
+    /// Running web or file tools between generations.
+    case tools
 }

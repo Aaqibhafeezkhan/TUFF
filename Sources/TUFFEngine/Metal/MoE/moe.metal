@@ -2,8 +2,6 @@
 using namespace metal;
 
 // Group size and streamed-expert count live in quant_group.metal.
-constant constexpr float kGeluSqrt2OverPi = 0.7978845608028654f;
-constant constexpr float kGeluCubicCoeff = 0.044715f;
 
 constant uint FC_ROUTER_NUM_EXPERTS [[function_constant(40)]];
 constant uint FC_ROUTER_D [[function_constant(41)]];
@@ -53,14 +51,7 @@ static inline uint moe_fc_top_k(constant uint& top_k) {
             is_function_constant_defined(FC_MOE_TOP_K)) ? FC_MOE_TOP_K : top_k;
 }
 
-static inline float gelu_pytorch_tanh(float x) {
-    const float x3 = x * x * x;
-    float inner = kGeluSqrt2OverPi * (x + kGeluCubicCoeff * x3);
-    // Clamping avoids Metal tanh producing NaN at large magnitudes while being
-    // equivalent to the saturated result at FP32 precision.
-    inner = clamp(inner, -20.0f, 20.0f);
-    return 0.5f * x * (1.0f + tanh(inner));
-}
+// gelu_pytorch_tanh is in activation.metal, compiled ahead of every module.
 
 static inline float moe_hidden_activation(float x) {
     if (is_function_constant_defined(FC_MOE_ACT_SILU) && FC_MOE_ACT_SILU) {

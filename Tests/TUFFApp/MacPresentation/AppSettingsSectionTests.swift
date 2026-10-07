@@ -5,8 +5,8 @@ import Testing
     @Test func settingsSectionsStayCompactAndDistinct() {
         let sections = AppSettingsSection.allCases
 
-        #expect(sections == [.general, .models, .advanced])
-        #expect(sections.map(\.title) == ["General", "Models", "Advanced"])
+        #expect(sections == [.general, .models, .search, .advanced])
+        #expect(sections.map(\.title) == ["General", "Models", "Search", "Advanced"])
         #expect(Set(sections.map(\.systemImage)).count == sections.count)
     }
 }

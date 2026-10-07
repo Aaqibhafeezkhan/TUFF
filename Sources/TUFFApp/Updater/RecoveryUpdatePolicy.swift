@@ -8,7 +8,7 @@ public struct TUFFDataVersions: Equatable, Sendable {
     public init(chats: Int, appSettings: Int, backgroundSettings: Int) {
         self.chats = chats; self.appSettings = appSettings; self.backgroundSettings = backgroundSettings
     }
-    public static let current = TUFFDataVersions(chats: 2, appSettings: 7, backgroundSettings: 1)
+    public static let current = TUFFDataVersions(chats: 3, appSettings: 7, backgroundSettings: 1)
 }
 
 public struct RecoveryUpdateMetadata: Equatable, Sendable {
@@ -71,8 +71,11 @@ public enum RecoveryUpdatePolicy {
             return number.intValue
         }
         return try TUFFDataVersions(
-            chats: stamp("TUFF/Chats/v1/conversations.json", key: "schemaVersion", fallback: 2),
-            appSettings: stamp("TUFF/Models/mac-app-settings.json", key: "version", fallback: 7),
-            backgroundSettings: stamp("TUFF/Server/background-server.json", key: "version", fallback: 1))
+            chats: stamp("TUFF/Chats/v1/conversations.json", key: "schemaVersion",
+                         fallback: TUFFDataVersions.current.chats),
+            appSettings: stamp("TUFF/Models/mac-app-settings.json", key: "version",
+                               fallback: TUFFDataVersions.current.appSettings),
+            backgroundSettings: stamp("TUFF/Server/background-server.json", key: "version",
+                                      fallback: TUFFDataVersions.current.backgroundSettings))
     }
 }

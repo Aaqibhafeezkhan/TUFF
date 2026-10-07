@@ -56,21 +56,7 @@ final class QwenSparseAttention {
                 positions: MultimodalPositionIDs?, ropeDelta: Int32,
                 q: MTLBuffer, k: MTLBuffer, v: MTLBuffer, out: MTLBuffer) throws {
         let index = config.attentionIndexer
-        let state: State
-        if let existing = states[layer] { state = existing }
-        else {
-            func allocate(_ bytes: Int) throws -> MTLBuffer {
-                guard let b = context.device.makeBuffer(length: max(4, bytes), options: .storageModePrivate) else {
-                    throw MetalError.noDevice
-                }
-                return b
-            }
-            state = try State(
-                rawKeys: allocate(capacity * index.headDim * 2),
-                positions: allocate(capacity * 12),
-                pooled: allocate((capacity / index.compressRatio + 1) * index.headDim * 2))
-            states[layer] = state
-        }
+        let state = try state(layer: layer)
         // Keep position data separate for each encoded call so the host cannot
         // overwrite a previous layer's values while the GPU is still using them.
         var xyz: [Int32] = []
@@ -122,6 +108,47 @@ final class QwenSparseAttention {
         try dispatch("select", [(scores, 0), (selected, 0)], MTLSize(width: tokens, height: 1, depth: 1), width: 256)
         try dispatch("attention_partial", [(q, 0), (k, 0), (v, 0), (selected, 0), (partial, 0)], MTLSize(width: config.numHeads, height: tokens, depth: Int(p.partitions)), width: 32)
         try dispatch("attention_combine", [(partial, 0), (out, 0)], MTLSize(width: config.numHeads, height: tokens, depth: 1), width: 32)
+    }
+
+    private func state(layer: Int) throws -> State {
+        if let existing = states[layer] { return existing }
+        let index = config.attentionIndexer
+        func allocate(_ bytes: Int) throws -> MTLBuffer {
+            guard let b = context.device.makeBuffer(length: max(4, bytes), options: .storageModePrivate) else {
+                throw MetalError.noDevice
+            }
+            return b
+        }
+        let state = try State(
+            rawKeys: allocate(capacity * index.headDim * 2),
+            positions: allocate(capacity * 12),
+            pooled: allocate((capacity / index.compressRatio + 1) * index.headDim * 2))
+        states[layer] = state
+        return state
+    }
+
+    /// Adds the index keys, their positions and the completed pooled blocks
+    /// for the first `position` tokens of each layer. A block still being
+    /// filled is pooled only when it completes, from the raw keys copied here.
+    /// State is created for every layer first, so capture and restore always
+    /// describe the same layout.
+    func addSnapshotRanges(to builder: inout RunnerStateSnapshotBuilder,
+                           layers: [Int], position: Int) throws {
+        let index = config.attentionIndexer
+        for layer in layers {
+            let state = try state(layer: layer)
+            builder.add("qsa.keys.\(layer)", state.rawKeys, length: position * index.headDim * 2)
+            builder.add("qsa.positions.\(layer)", state.positions, length: position * 12)
+            builder.add("qsa.pooled.\(layer)", state.pooled,
+                        length: (position / index.compressRatio) * index.headDim * 2)
+        }
+    }
+
+    func snapshotBytes(layers: Int, position: Int) -> Int {
+        let index = config.attentionIndexer
+        return layers * (RunnerStateSnapshotBuilder.aligned(position * index.headDim * 2)
+            + RunnerStateSnapshotBuilder.aligned(position * 12)
+            + RunnerStateSnapshotBuilder.aligned((position / index.compressRatio) * index.headDim * 2))
     }
 
     func usesSparseAttention(endPosition: Int) -> Bool {

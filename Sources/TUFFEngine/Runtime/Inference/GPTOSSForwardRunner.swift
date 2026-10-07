@@ -118,6 +118,7 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
                 "GPT-OSS maxContext must be positive")
         }
 
+        try context.prepareKernelGroups(MetalKernelGroup.required(for: config))
         self.model = model
         self.context = context
         self.config = config
@@ -228,6 +229,46 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
     }
 
     var continuationPosition: Int { kv.position }
+
+    // MARK: Retained conversation state
+
+    /// GPT-OSS carries only KV rows between tokens; the logits buffer, the
+    /// speculative boundary and expert prediction are per-request.
+    var stateSnapshotByteEstimate: Int? {
+        guard speculativeStartPosition == nil else { return nil }
+        return kv.snapshotBytes(position: kv.position)
+    }
+
+    func captureState() throws -> RunnerStateSnapshot {
+        guard speculativeStartPosition == nil else {
+            throw RunnerStateSnapshotError.unsupported("a speculative verification is in progress")
+        }
+        var builder = RunnerStateSnapshotBuilder()
+        kv.addSnapshotRanges(to: &builder, position: kv.position)
+        return try builder.capture(owner: self, queue: context.queue,
+                                   host: .init(position: kv.position, ngramContext: [], ropeDelta: 0))
+    }
+
+    func restoreState(_ snapshot: RunnerStateSnapshot) throws {
+        guard snapshot.owner == ObjectIdentifier(self) else {
+            throw RunnerStateSnapshotError.foreignSnapshot
+        }
+        reset()
+        do {
+            let position = snapshot.host.position
+            guard position <= kv.maxContext else {
+                throw RunnerStateSnapshotError.layoutMismatch("position exceeds context")
+            }
+            if position > 0 { try kv.ensureCapacity(through: position, on: context.queue) }
+            var builder = RunnerStateSnapshotBuilder()
+            kv.addSnapshotRanges(to: &builder, position: position)
+            try builder.restore(snapshot, queue: context.queue)
+            kv.restorePosition(position)
+        } catch {
+            reset()
+            throw error
+        }
+    }
 
     func prepareForContinuation(expectedPosition: Int) throws {
         guard expectedPosition > 0, kv.position == expectedPosition else {

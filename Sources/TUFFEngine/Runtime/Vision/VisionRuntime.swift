@@ -241,6 +241,8 @@ public final class VisionRuntime {
             // in a file that is not there.
             throw VisionPackError.packNotFound(companion.path)
         }
+        // Only a model with its image pack compiles the vision kernels.
+        try context.prepareKernelGroups([.vision])
         // ... and it has to look like a pack, for the same reason the existence
         // check above exists. A directory that is merely *there* — a `.partial`
         // download, a mistyped path — also got a permanent stray lock file

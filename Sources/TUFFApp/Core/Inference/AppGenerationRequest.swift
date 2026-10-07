@@ -26,6 +26,14 @@ public struct AppGenerationRequest: Equatable, Sendable {
     public var repetitionPenalty: Float
     public var seed: UInt64?
     public var runtimeOptions: AppRuntimeOptions
+    /// Tools declared to the model, in the model's native tool format.
+    public var tools: [GFTokenizer.FunctionDefinition]
+    /// Rounds already run for the message being answered: the model's calls
+    /// and the results that answered them, rendered after `prompt`.
+    public var currentRounds: [AppToolRound]
+    /// The chat this request belongs to. Orders the search among retained
+    /// conversation states; never establishes a match by itself.
+    public var conversationKey: String?
 
     public init(modelDirectory: URL,
                 prompt: String,
@@ -43,7 +51,10 @@ public struct AppGenerationRequest: Equatable, Sendable {
                 topP: Float? = 0.95,
                 repetitionPenalty: Float = 1.0,
                 seed: UInt64? = nil,
-                runtimeOptions: AppRuntimeOptions = AppRuntimeOptions()) {
+                runtimeOptions: AppRuntimeOptions = AppRuntimeOptions(),
+                tools: [GFTokenizer.FunctionDefinition] = [],
+                currentRounds: [AppToolRound] = [],
+                conversationKey: String? = nil) {
         self.modelDirectory = modelDirectory
         self.prompt = prompt
         self.systemPrompt = systemPrompt
@@ -61,6 +72,16 @@ public struct AppGenerationRequest: Equatable, Sendable {
         self.repetitionPenalty = repetitionPenalty
         self.seed = seed
         self.runtimeOptions = runtimeOptions
+        self.tools = tools
+        self.currentRounds = currentRounds
+        self.conversationKey = conversationKey
+    }
+
+    /// Whether the prompt is rendered through the model's tool template:
+    /// tools are declared, or the conversation already contains tool turns.
+    public var usesToolTemplate: Bool {
+        !tools.isEmpty || !currentRounds.isEmpty
+            || history.contains { !$0.toolRounds.isEmpty }
     }
 
     public var isPureGreedy: Bool {
@@ -123,6 +144,13 @@ public struct AppGenerationRequest: Equatable, Sendable {
                 throw AppInferenceError.invalidRequest(
                     "Top-P below 1 requires Top-K to be enabled.")
             }
+        }
+        guard currentRounds.allSatisfy(\.isComplete) else {
+            throw AppInferenceError.invalidRequest(
+                "Every tool call must have a result before the model continues.")
+        }
+        guard Set(tools.map(\.name)).count == tools.count else {
+            throw AppInferenceError.invalidRequest("Tool names must be distinct.")
         }
         guard repetitionPenalty >= 1 else {
             throw AppInferenceError.invalidRequest(

@@ -15,6 +15,59 @@ struct ServerPromptCacheTests {
         fp16RingEnabled: true,
         templateSHA256: "template")
 
+    @Test func generatedReasoningIsRetainedButCompletedThinkingTurnsRequireExactPrefix() async throws {
+        let tokenizer = try await GFTokenizer.load()
+        let initial = request(messages: [.init(role: .user, content: "first")], reasoning: .on)
+        let prompt = tokenizer.encode(try tokenizer.applyChatTemplate(initial.messages, reasoning: .on),
+                                      addBOS: false)
+        let backed = prompt + tokenizer.encode("generated reasoning and answer", addBOS: false)
+        var cache = ServerPromptCache()
+        cache.publish(domain: domain, request: initial, content: "answer", thinking: "checked carefully",
+                      calls: [], result: rawResult(prompt: prompt, kvBacked: backed,
+                                                   boundary: tokenizer.endOfTurnID, reason: .endOfTurn))
+        #expect(cache.entry?.assistantTurn.message.thinking == "checked carefully")
+        let follow = initial.messages + [
+            GFTokenizer.Message(role: .assistant, content: "answer", thinking: "checked carefully"),
+            GFTokenizer.Message(role: .user, content: "next"),
+        ]
+        let continuation = request(messages: follow, reasoning: .on)
+        #expect(cache.match(domain: domain, request: continuation, renderedPromptIDs: nil,
+                            tokenizer: tokenizer).missReason == .unsupportedContinuation)
+        // The same policy applies when the new user turn contains an image.
+        let withImage = request(messages: follow, imageIdentities: [[], [], ["new-image"]], reasoning: .on)
+        #expect(cache.match(domain: domain, request: withImage, renderedPromptIDs: nil,
+                            tokenizer: tokenizer).missReason == .unsupportedContinuation)
+    }
+
+    @Test func canonicallyEquivalentUnicodeEditsCannotReuseDifferentTokenHistory() async throws {
+        let tokenizer = try await GFTokenizer.load()
+        let composed = "café"
+        let decomposed = "cafe\u{301}"
+        #expect(composed == decomposed) // The ordinary Swift equality trap.
+        let initial = request(messages: [.init(role: .user, content: composed)])
+        let prompt = tokenizer.encode(try tokenizer.applyChatTemplate(initial.messages), addBOS: false)
+        let backed = prompt + tokenizer.encode(composed, addBOS: false)
+        var cache = ServerPromptCache()
+        cache.publish(domain: domain, request: initial, content: composed, calls: [],
+                      result: rawResult(prompt: prompt, kvBacked: backed,
+                                        boundary: tokenizer.endOfTurnID, reason: .endOfTurn))
+        for (user, assistant) in [(decomposed, composed), (composed, decomposed)] {
+            let follow = request(messages: [.init(role: .user, content: user),
+                                            .init(role: .assistant, content: assistant),
+                                            .init(role: .user, content: "next")])
+            #expect(cache.match(domain: domain, request: follow, renderedPromptIDs: nil,
+                                tokenizer: tokenizer).missReason == .historyDiverged)
+        }
+        let left = GFTokenizer.FunctionDefinition(name: "search", description: composed,
+                                                  parameters: .object(["key": .string(composed)]))
+        let right = GFTokenizer.FunctionDefinition(name: "search", description: decomposed,
+                                                   parameters: .object(["key": .string(decomposed)]))
+        #expect(left == right)
+        #expect(!ConversationCacheIdentity.tools([left], [right]))
+        #expect(!ConversationCacheIdentity.json(.object([composed: .integer(1)]),
+                                               .object([decomposed: .integer(1)])))
+    }
+
     @Test func textContinuationUsesActualGeneratedHistoryAndOnlyPrefillsSuffix() async throws {
         let tokenizer = try await GFTokenizer.load()
         let initial = request(messages: [
@@ -842,6 +895,10 @@ struct ServerPromptCacheTests {
         #expect(cache.entryMissReason(domain: domain, request: thinking)
             .contains("reasoning mode changed"))
 
+        let preserved = request(messages: initial.messages, preserveThinking: true)
+        #expect(cache.entryMissReason(domain: domain, request: preserved)
+            .contains("preserved-thinking setting changed"))
+
         let effort = request(
             messages: initial.messages, reasoningEffort: .high)
         #expect(cache.entryMissReason(domain: domain, request: effort)
@@ -869,6 +926,7 @@ struct ServerPromptCacheTests {
         tools: [GFTokenizer.FunctionDefinition] = [],
         imageIdentities: [[String]] = [],
         reasoning: ChatReasoning = .off,
+        preserveThinking: Bool = false,
         reasoningEffort: GPTOSSReasoningEffort? = nil,
         harmonyCurrentDate: String? = nil
     ) -> ValidatedChatRequest {
@@ -881,6 +939,7 @@ struct ServerPromptCacheTests {
             generationConfig: GenerationConfig(maxNewTokens: 16, temperature: 0),
             maximumCompletionTokens: 16,
             reasoning: reasoning,
+            preserveThinking: preserveThinking,
             reasoningEffort: reasoningEffort,
             harmonyCurrentDate: harmonyCurrentDate)
     }

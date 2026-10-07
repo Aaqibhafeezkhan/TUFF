@@ -25,7 +25,10 @@ import Testing
 
         try repository.save(archive)
 
-        #expect(try repository.load() == archive)
+        // Without tool data the file is written at schema 2, which TUFF 7 reads.
+        var written = archive
+        written.schemaVersion = 2
+        #expect(try repository.load() == written)
         let siblings = try FileManager.default.contentsOfDirectory(
             at: root, includingPropertiesForKeys: nil)
         #expect(siblings.map(\.lastPathComponent) == ["conversations.json"])

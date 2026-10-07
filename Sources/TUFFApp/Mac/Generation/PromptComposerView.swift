@@ -169,6 +169,7 @@ struct PromptComposerView: View {
             // Model and reasoning belong with the prompt they apply to, rather
             // than in a separate strip above the composer.
             ChatControlsView(model: model)
+            ToolToggleControls(model: model)
             Spacer(minLength: 8)
             contextMeter
             clearAction

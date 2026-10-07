@@ -5,7 +5,7 @@ import Testing
 
 @Suite struct RecoveryUpdatePolicyTests {
     private var valid: [AnyHashable: Any] {
-        ["tuff:recovery": "true", "tuff:chatsSchema": "2", "tuff:appSettingsVersion": "7",
+        ["tuff:recovery": "true", "tuff:chatsSchema": "3", "tuff:appSettingsVersion": "7",
          "tuff:backgroundSettingsVersion": "1", "tuff:withdrawnVersion": "7.0.0"]
     }
     @MainActor @Test func resumedAndReadyChoicesRecheckDataWithoutChangingPreferences() {
@@ -50,9 +50,9 @@ import Testing
         #expect(throws: RecoveryUpdatePolicy.CompatibilityError.missingMetadata) {
             try RecoveryUpdatePolicy.check(.init(properties: ["tuff:recovery": "true"]), local: .current)
         }
-        for local in [TUFFDataVersions(chats: 3, appSettings: 7, backgroundSettings: 1),
-                      .init(chats: 2, appSettings: 8, backgroundSettings: 1),
-                      .init(chats: 2, appSettings: 7, backgroundSettings: 2)] {
+        for local in [TUFFDataVersions(chats: 4, appSettings: 7, backgroundSettings: 1),
+                      .init(chats: 3, appSettings: 8, backgroundSettings: 1),
+                      .init(chats: 3, appSettings: 7, backgroundSettings: 2)] {
             #expect(throws: RecoveryUpdatePolicy.CompatibilityError.newerData) {
                 try RecoveryUpdatePolicy.check(.init(properties: valid), local: local)
             }
