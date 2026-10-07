@@ -13,6 +13,40 @@ answer quality or sustained speed. Timing on this fanless Mac varies widely
 between identical runs, and filesystem caches, swap and host activity were
 not controlled.
 
+## 8.0.1 (October 7, 2026)
+
+Web connection diagnostics, retries across checked DNS addresses and an
+opt-in offline pause for subsequent chat messages. No inference kernels,
+model packs, API adapters or chat archive formats changed.
+
+- Regression fixtures cover opt-in defaults and settings migration, persistence
+  across app relaunch, offline/online/manual-off transitions, omission of web
+  tools while offline, address deduplication, connection-only retries, last
+  failure propagation, provider refusals and non-curl or signalled helper exits.
+- The explicit `dist/v8.0.1` package passed signature, version, architecture,
+  CLI role, resource, agent and signed-feed-policy checks. Isolated updater
+  fixtures passed valid and tampered signatures, version ordering, offline and
+  missing feeds, interrupted archives and cancelled staged installation.
+- The Search settings UI was inspected in a separately identified app copy
+  with an isolated home. The new switch was off by default, rendered without
+  clipping, could be enabled and was saved on quit. No model was downloaded or
+  loaded. The installed `/Applications/TUFF.app` executable stayed byte-identical.
+- Live DuckDuckGo requests still failed during TLS negotiation from this
+  connection. Both system curl backends, native URLSession and Chrome failed;
+  Chrome reported `ERR_CONNECTION_RESET`. The patched production transport
+  reported the new provider-specific TLS explanation, while a request through
+  that transport to `https://example.com` returned HTTP 200. This release does
+  not claim to fix a provider or network refusal, bypass verification or switch
+  providers automatically. Brave and Tavily were not queried without keys.
+- Archive: `TUFF-v8.0.1-macos-arm64.zip`, 10,542,449 bytes, SHA-256
+  `2466e48115fc0ce4ff23e371e69eef1f73b0394a3f538f4c753783aa36d75b91`.
+  The same archive and checksum are pinned in the Homebrew cask.
+
+Final canonical-suite and exact-commit hosted-check results accompany the
+[published release](https://github.com/rexmhall09/TUFF/releases/tag/v8.0.1).
+Real-model performance measurements remain those of 8.0.0; no new speed or
+model-qualification claim is made for this patch.
+
 ## 8.0.0 (October 7, 2026)
 
 Web and folder search in chat, retained conversation states, reasoning through the API, per-architecture shader groups and one shared executable.

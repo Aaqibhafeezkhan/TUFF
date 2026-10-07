@@ -113,6 +113,16 @@ embedded EdDSA public key. Update preferences are in Settings.
 The **Web** and **Files** buttons beside the model picker let the model search
 for the next message. Both are off until you turn them on.
 
+Settings > Search offers **Automatically pause web search while offline**.
+It is off by default. When enabled, the composer shows **Web · Offline** and
+subsequent messages omit web tools until the connection returns. Your Web
+choice is preserved; a manually disabled Web switch stays off. File search
+is unaffected. A connected network does not guarantee provider availability.
+TLS handshake failures (code 35) can require trying another network or search
+provider. TUFF tries other checked DNS addresses only for pre-request
+connection failures, within the original timeout; it does not retry provider
+blocks or challenges.
+
 - **Web** searches with DuckDuckGo by default, which needs no key. Brave
   Search and Tavily work with your own API key, stored in your Keychain and
   never shown to the model, saved in chats or written to logs. Searches send
@@ -361,7 +371,7 @@ swift build -c release
 Build the complete arm64 app, ZIP and checksum with:
 
 ```sh
-Scripts/package_app.sh 8.0.0 dist/v8.0.0
+Scripts/package_app.sh 8.0.1 dist/v8.0.1
 ```
 
 The version must match `Sources/TUFFModelCatalog/TUFFVersion.swift`.

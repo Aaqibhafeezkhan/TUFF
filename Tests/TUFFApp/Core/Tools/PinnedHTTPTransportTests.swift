@@ -11,6 +11,18 @@ import Testing
         Data("HTTP/1.1 \(status) Test\r\n\(headers)\r\n\(body)".utf8)
     }
 
+    @Test func onlyCurlExitCodesPermitConnectionRetries() {
+        let curl = URL(fileURLWithPath: "/usr/bin/curl")
+        #expect(BoundedWebProcess.connectionFailure(executable: curl, reason: .exit, status: 35)
+            == .connectionFailed(code: 35))
+        #expect(BoundedWebProcess.connectionFailure(executable: curl, reason: .exit, status: 7)
+            == .connectionFailed(code: 7))
+        #expect(BoundedWebProcess.connectionFailure(executable: curl, reason: .uncaughtSignal, status: 7) == nil)
+        #expect(BoundedWebProcess.connectionFailure(executable: curl, reason: .exit, status: 60) == nil)
+        #expect(BoundedWebProcess.connectionFailure(executable: URL(fileURLWithPath: "/tmp/pdf-helper"),
+            reason: .exit, status: 35) == nil)
+    }
+
     @Test func connectsOnlyToAnAddressFromTheCheckedSet() async throws {
         let observed = Mutex<[String]>([])
         let transport = PinnedHTTPTransport(resolve: { _ in ["93.184.216.34"] },
@@ -20,6 +32,51 @@ import Testing
             })
         #expect(try await transport.perform(request).text == "ok")
         #expect(observed.withLock { $0 } == ["93.184.216.34"])
+    }
+
+    @Test(arguments: [Int32(7), Int32(35)])
+    func retriesOnlyPreRequestFailuresAcrossUniqueCheckedAddresses(code: Int32) async throws {
+        let observed = Mutex<[String]>([])
+        let transport = PinnedHTTPTransport(resolve: { _ in
+            ["93.184.216.34", "93.184.216.34", "93.184.216.35"]
+        }, exchange: { _, address, _ in
+            observed.withLock { $0.append(address) }
+            if address == "93.184.216.34" { throw AppHTTPError.connectionFailed(code: code) }
+            return raw()
+        })
+        #expect(try await transport.perform(request).text == "ok")
+        #expect(observed.withLock { $0 } == ["93.184.216.34", "93.184.216.35"])
+    }
+
+    @Test(arguments: [AppHTTPError.timedOut, .cancelled, .network("transfer failed"),
+                     .connectionFailed(code: 60)])
+    func doesNotReplayAmbiguousFailuresOrCertificateErrors(error: AppHTTPError) async {
+        let calls = Mutex(0)
+        let transport = PinnedHTTPTransport(resolve: { _ in ["93.184.216.34", "93.184.216.35"] },
+            exchange: { _, _, _ in calls.withLock { $0 += 1 }; throw error })
+        await #expect(throws: error) { _ = try await transport.perform(request) }
+        #expect(calls.withLock { $0 } == 1)
+    }
+
+    @Test func allAddressesFailWithTheLastConnectionError() async {
+        let observed = Mutex<[String]>([])
+        let transport = PinnedHTTPTransport(resolve: { _ in ["93.184.216.34", "93.184.216.35"] },
+            exchange: { _, address, _ in
+                observed.withLock { $0.append(address) }
+                throw AppHTTPError.connectionFailed(code: address.hasSuffix("34") ? 7 : 35)
+            })
+        await #expect(throws: AppHTTPError.connectionFailed(code: 35)) {
+            _ = try await transport.perform(request)
+        }
+        #expect(observed.withLock { $0 }.count == 2)
+    }
+
+    @Test func providerRefusalIsNotRetriedAgainstAnotherAddress() async throws {
+        let calls = Mutex(0)
+        let transport = PinnedHTTPTransport(resolve: { _ in ["93.184.216.34", "93.184.216.35"] },
+            exchange: { _, _, _ in calls.withLock { $0 += 1 }; return raw(403) })
+        #expect(try await transport.perform(request).statusCode == 403)
+        #expect(calls.withLock { $0 } == 1)
     }
 
     @Test(.enabled(if: ProcessInfo.processInfo.environment["TUFF_TEST_LIVE_WEB"] == "1"))

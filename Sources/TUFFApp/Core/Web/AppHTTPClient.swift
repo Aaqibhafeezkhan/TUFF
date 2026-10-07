@@ -65,6 +65,8 @@ public enum AppHTTPError: Error, Equatable, Sendable, CustomStringConvertible {
     case timedOut
     case oversized(limit: Int)
     case cancelled
+    /// curl failures before an HTTP request can be sent. Safe to try another checked address.
+    case connectionFailed(code: Int32)
     case network(String)
 
     public var description: String {
@@ -78,6 +80,10 @@ public enum AppHTTPError: Error, Equatable, Sendable, CustomStringConvertible {
         case .oversized(let limit):
             "The response was larger than \(limit / 1_024) KB, so reading stopped."
         case .cancelled: "Stopped."
+        case .connectionFailed(let code):
+            code == 35
+                ? "The secure connection failed during the TLS handshake (code 35). The site or network may be refusing the connection. Try again on another network."
+                : "The connection to the site could not be established (code \(code)). Check your connection and try again."
         case .network(let message): "The request failed: \(message)"
         }
     }

@@ -15,12 +15,12 @@ struct ToolToggleControls: View {
             Button {
                 model.webSearchEnabled.toggle()
             } label: {
-                pill("Web", symbol: "globe", isOn: webOn)
+                pill(model.isWebSearchPaused ? "Web · Offline" : "Web", symbol: "globe", isOn: webOn)
             }
             .buttonStyle(.plain)
             .help(webHelp)
             .accessibilityLabel("Web search")
-            .accessibilityValue(webOn ? "On" : "Off")
+            .accessibilityValue(model.isWebSearchPaused ? "Paused while offline" : (webOn ? "On" : "Off"))
 
             Button {
                 showingFolders.toggle()
@@ -41,7 +41,7 @@ struct ToolToggleControls: View {
         .disabled(!model.toolSupport.allowsTools || model.isRunning)
     }
 
-    private var webOn: Bool { model.webSearchEnabled && model.toolSupport.allowsTools }
+    private var webOn: Bool { model.webSearchEnabled && !model.isWebSearchPaused && model.toolSupport.allowsTools }
 
     private var filesOn: Bool {
         model.fileSearchEnabled && model.toolSupport.allowsTools && !model.toolStore.folders.isEmpty
@@ -54,6 +54,7 @@ struct ToolToggleControls: View {
 
     private var webHelp: String {
         if let note = unavailableNote { return note }
+        if model.isWebSearchPaused { return "Web search is paused while offline. It will resume when your connection returns. Click to turn Web off." }
         return (webOn ? "Web search is on. " : "Web search is off. ")
             + model.searchProvider.privacyNote
             + (model.toolSupport.note.map { " " + $0 } ?? "")

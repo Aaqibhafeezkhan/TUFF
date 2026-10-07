@@ -106,6 +106,48 @@ import TUFFEngine
     }
 
     @MainActor
+    @Test func offlinePausePreservesIntent() throws {
+        let model = readyModel(client: ScriptedInferenceClient([]),
+            transport: FixtureHTTPTransport { _ in .html(DuckDuckGoFixtures.ordinary) })
+        model.webSearchEnabled = true
+        model.networkStatus.isOffline = true
+        // Opt-in: existing settings continue to permit web tools.
+        #expect(model.effectiveChatCapabilities.web)
+        model.pauseWebSearchWhenOffline = true
+        #expect(model.isWebSearchPaused)
+        #expect(!model.effectiveChatCapabilities.web)
+        #expect(model.webSearchEnabled)
+        model.networkStatus.isOffline = false
+        #expect(model.effectiveChatCapabilities.web)
+        model.networkStatus.isOffline = true
+        model.webSearchEnabled = false
+        model.networkStatus.isOffline = false
+        #expect(!model.effectiveChatCapabilities.web)
+        #expect(!model.webSearchEnabled)
+        model.webSearchEnabled = true
+        model.networkStatus.isOffline = true
+        model.pauseWebSearchWhenOffline = false
+        #expect(model.effectiveChatCapabilities.web)
+    }
+
+    @MainActor
+    @Test func offlineMessageDoesNotDeclareOrExecuteWebTools() async throws {
+        let transport = FixtureHTTPTransport { _ in .html(DuckDuckGoFixtures.ordinary) }
+        let client = ScriptedInferenceClient([ToolLoopFixtures.answer("Offline answer.")])
+        let model = readyModel(client: client, transport: transport)
+        model.webSearchEnabled = true
+        model.pauseWebSearchWhenOffline = true
+        model.networkStatus.isOffline = true
+        model.promptText = "Hello"
+        model.run()
+        try await waitUntilIdle(model)
+        #expect(client.requests.first?.tools.isEmpty == true)
+        #expect(transport.requests.isEmpty)
+        #expect(model.conversation.first?.capabilities.web == false)
+        #expect(model.webSearchEnabled)
+    }
+
+    @MainActor
     @Test func uncheckedModelsSaySo() {
         #expect(AppToolSupport.forModel(.gemma4_26B_A4B) == .validated)
         #expect(AppToolSupport.forModel(.qwen38FlashNext) == .validated)

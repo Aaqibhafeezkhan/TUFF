@@ -170,6 +170,7 @@ struct MacAppSettings: Codable, Equatable, Sendable {
     /// Composer switches for web search and local file search. Off until the
     /// person turns them on; they stay as last set.
     var webSearchEnabled: Bool = false
+    var pauseWebSearchWhenOffline: Bool = false
     var fileSearchEnabled: Bool = false
     var searchProvider: AppSearchProviderKind = .duckDuckGo
 
@@ -228,6 +229,7 @@ struct MacAppSettings: Codable, Equatable, Sendable {
         case bypassModelRestrictions
         case zoomLevel
         case webSearchEnabled
+        case pauseWebSearchWhenOffline
         case fileSearchEnabled
         case searchProvider
     }
@@ -322,6 +324,8 @@ struct MacAppSettings: Codable, Equatable, Sendable {
                 Bool.self, forKey: .bypassModelRestrictions) ?? false
             zoomLevel = try container.decodeIfPresent(
                 AppZoomLevel.self, forKey: .zoomLevel) ?? .default
+            pauseWebSearchWhenOffline = try container.decodeIfPresent(
+                Bool.self, forKey: .pauseWebSearchWhenOffline) ?? false
             webSearchEnabled = try container.decodeIfPresent(
                 Bool.self, forKey: .webSearchEnabled) ?? false
             fileSearchEnabled = try container.decodeIfPresent(

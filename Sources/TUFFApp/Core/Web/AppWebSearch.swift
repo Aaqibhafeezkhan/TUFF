@@ -78,6 +78,8 @@ public enum AppWebSearchError: Error, Equatable, Sendable, CustomStringConvertib
             "\(provider.displayName) found no results."
         case .http(let provider, let status):
             "\(provider.displayName) returned HTTP \(status)."
+        case .transport(let provider, .connectionFailed(code: 35)):
+            "\(provider.displayName): \(AppHTTPError.connectionFailed(code: 35).description) You can also choose another search provider in Settings."
         case .transport(let provider, let error):
             "\(provider.displayName): \(error.description)"
         }

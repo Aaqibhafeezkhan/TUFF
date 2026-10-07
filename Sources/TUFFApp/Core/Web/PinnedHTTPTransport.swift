@@ -34,11 +34,27 @@ struct PinnedHTTPTransport: AppHTTPTransport {
                       addresses.allSatisfy({ AppNetworkPolicy.IPAddress($0)?.isPublic == true }) else {
                     throw AppHTTPError.privateAddress(host)
                 }
-                let remaining = ContinuousClock.now.duration(to: deadline)
-                let seconds = Double(remaining.components.seconds)
-                    + Double(remaining.components.attoseconds) / 1e18
-                guard seconds > 0 else { throw AppHTTPError.timedOut }
-                let raw = try await exchange(current, addresses[0], seconds)
+                // Try each checked address once, within the same absolute deadline.
+                // Only pre-request connect/TLS failures are retryable: never replay
+                // a POST after a response, timeout or ambiguous transfer failure.
+                var seen = Set<String>()
+                let candidates = addresses.filter { seen.insert($0).inserted }
+                var raw: Data?
+                for (index, address) in candidates.enumerated() {
+                    try Task.checkCancellation()
+                    let remaining = ContinuousClock.now.duration(to: deadline)
+                    let seconds = Double(remaining.components.seconds)
+                        + Double(remaining.components.attoseconds) / 1e18
+                    guard seconds > 0 else { throw AppHTTPError.timedOut }
+                    do {
+                        raw = try await exchange(current, address, seconds)
+                        break
+                    } catch AppHTTPError.connectionFailed(let code)
+                        where (code == 7 || code == 35) && index + 1 < candidates.count {
+                        continue
+                    }
+                }
+                guard let raw else { throw AppHTTPError.network("The host returned no usable address.") }
                 let parsed = try Self.parse(raw, request: current)
                 guard [301, 302, 303, 307, 308].contains(parsed.response.statusCode),
                       let location = parsed.headers["location"] else { return parsed.response }
@@ -284,6 +300,14 @@ private final class WebProcessControl: @unchecked Sendable {
 }
 
 enum BoundedWebProcess {
+    /// Signals and non-curl helper failures never permit replaying a request.
+    static func connectionFailure(executable: URL, reason: Process.TerminationReason,
+                                  status: Int32) -> AppHTTPError? {
+        guard executable.path == "/usr/bin/curl", reason == .exit,
+              [7, 35].contains(status) else { return nil }
+        return .connectionFailed(code: status)
+    }
+
     static func run(executable: URL, arguments: [String], input: Data,
                     outputLimit: Int, bodyLimit: Int) async throws -> Data {
         let control = WebProcessControl()
@@ -337,6 +361,10 @@ enum BoundedWebProcess {
         drains.wait()
         try Task.checkCancellation()
         if stdout.exceeded { throw AppHTTPError.oversized(limit: bodyLimit) }
+        if let failure = connectionFailure(executable: executable,
+            reason: process.terminationReason, status: process.terminationStatus) {
+            throw failure
+        }
         switch process.terminationStatus {
         case 0: return stdout.data
         case 28: throw AppHTTPError.timedOut

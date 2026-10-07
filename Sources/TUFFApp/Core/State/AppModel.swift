@@ -14,6 +14,7 @@ public final class AppModel {
     public let modelLibraryStore = AppModelLibraryStore()
     public let settingsStore = AppSettingsStore()
     public let inferenceStore = AppSharedInferenceStore()
+    public let networkStatus: AppNetworkStatus
     /// Folders, the local index, provider keys and the tools built from them.
     public let toolStore: AppToolStore
     public let deviceCapabilities: TUFFDeviceCapabilities
@@ -374,7 +375,8 @@ public final class AppModel {
                 visionRuntimeSupported: Bool = true,
                 settingsPersistenceEnabled: Bool = false,
                 deviceCapabilities: TUFFDeviceCapabilities = .current(),
-                toolStore: AppToolStore? = nil) {
+                toolStore: AppToolStore? = nil,
+                networkStatus: AppNetworkStatus? = nil) {
         let directory = (modelDirectory ?? AppModelLocation.defaultURL()).standardizedFileURL
         let installETAClock = SuspendingClock()
         let settingsProfileKey = installer.descriptor.settingsProfileKey
@@ -396,6 +398,7 @@ public final class AppModel {
         // default value.
         self.conversationStore = conversationStore
         self.toolStore = toolStore ?? .inMemory()
+        self.networkStatus = networkStatus ?? AppNetworkStatus(monitorsConnectivity: settingsPersistenceEnabled)
         self.deviceCapabilities = deviceCapabilities
         self.client = client
         self.visionInstaller = visionInstaller
@@ -441,6 +444,7 @@ public final class AppModel {
         self.settingsStore.zoomLevel = settings.zoomLevel
         self.settingsStore.bypassModelRestrictions = settings.bypassModelRestrictions
         self.settingsStore.webSearchEnabled = settings.webSearchEnabled
+        self.settingsStore.pauseWebSearchWhenOffline = settings.pauseWebSearchWhenOffline
         self.settingsStore.fileSearchEnabled = settings.fileSearchEnabled
         self.settingsStore.searchProvider = settings.searchProvider
         self.visionInstallationStatus = AppVisionPackInstallationProbe.status(at: directory)
@@ -2363,6 +2367,7 @@ public final class AppModel {
             settingsStore.zoomLevel = settings.zoomLevel
             settingsStore.bypassModelRestrictions = settings.bypassModelRestrictions
             settingsStore.webSearchEnabled = settings.webSearchEnabled
+            settingsStore.pauseWebSearchWhenOffline = settings.pauseWebSearchWhenOffline
             settingsStore.fileSearchEnabled = settings.fileSearchEnabled
             settingsStore.searchProvider = settings.searchProvider
         }
@@ -2472,6 +2477,7 @@ public final class AppModel {
         settings.zoomLevel = zoomLevel
         settings.bypassModelRestrictions = bypassModelRestrictions
         settings.webSearchEnabled = settingsStore.webSearchEnabled
+        settings.pauseWebSearchWhenOffline = settingsStore.pauseWebSearchWhenOffline
         settings.fileSearchEnabled = settingsStore.fileSearchEnabled
         settings.searchProvider = settingsStore.searchProvider
         if (try? MacAppSettingsFileStore.save(
@@ -3169,13 +3175,26 @@ public final class AppModel {
         let support = toolSupport
         guard support.allowsTools else { return .none }
         return AppChatCapabilities(
-            web: settingsStore.webSearchEnabled,
+            web: settingsStore.webSearchEnabled && !isWebSearchPaused,
             files: settingsStore.fileSearchEnabled && !toolStore.folders.isEmpty)
     }
 
     public var toolSupport: AppToolSupport {
         guard let id = selectedDescriptor.catalogID else { return .untested }
         return AppToolSupport.forModel(id)
+    }
+
+    public var isWebSearchPaused: Bool {
+        settingsStore.webSearchEnabled && pauseWebSearchWhenOffline && networkStatus.isOffline
+    }
+
+    public var pauseWebSearchWhenOffline: Bool {
+        get { settingsStore.pauseWebSearchWhenOffline }
+        set {
+            guard settingsStore.pauseWebSearchWhenOffline != newValue else { return }
+            settingsStore.pauseWebSearchWhenOffline = newValue
+            persistSettings()
+        }
     }
 
     public var webSearchEnabled: Bool {

@@ -71,6 +71,18 @@ enum DuckDuckGoFixtures {
 }
 
 @Suite struct WebSearchProviderTests {
+    @Test func tlsFailureNamesTheProviderAndExplainsRecovery() async {
+        let transport = FixtureHTTPTransport { _ in throw AppHTTPError.connectionFailed(code: 35) }
+        await #expect(throws: AppWebSearchError.transport(.duckDuckGo, .connectionFailed(code: 35))) {
+            _ = try await DuckDuckGoSearchProvider(transport: transport).search("example", count: 1)
+        }
+        let message = AppWebSearchError.transport(.duckDuckGo, .connectionFailed(code: 35)).description
+        #expect(message.contains("DuckDuckGo"))
+        #expect(message.contains("TLS handshake"))
+        #expect(message.contains("another search provider in Settings"))
+        #expect(transport.requests.count == 1)
+    }
+
     @Test func duckDuckGoParsesResultsSkipsAdsAndResolvesRedirects() async throws {
         let transport = FixtureHTTPTransport { _ in .html(DuckDuckGoFixtures.ordinary) }
         let response = try await DuckDuckGoSearchProvider(transport: transport)

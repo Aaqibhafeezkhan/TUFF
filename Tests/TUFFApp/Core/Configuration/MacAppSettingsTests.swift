@@ -6,6 +6,37 @@ import TUFFModelCatalog
 @testable import TUFFAppCore
 
 @Suite struct MacAppSettingsTests {
+    @Test func offlinePauseMigratesAndRoundTripsWithoutChangingWebIntent() throws {
+        let original = MacAppSettings()
+        let data = try JSONEncoder().encode(original)
+        var legacy = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        legacy.removeValue(forKey: "pauseWebSearchWhenOffline")
+        legacy["webSearchEnabled"] = true
+        let migrated = try JSONDecoder().decode(MacAppSettings.self,
+            from: JSONSerialization.data(withJSONObject: legacy))
+        #expect(migrated.webSearchEnabled)
+        #expect(!migrated.pauseWebSearchWhenOffline)
+        var updated = migrated
+        updated.pauseWebSearchWhenOffline = true
+        let decoded = try JSONDecoder().decode(MacAppSettings.self,
+            from: JSONEncoder().encode(updated))
+        #expect(decoded == updated)
+    }
+
+    @MainActor
+    @Test func offlinePausePersistsAcrossAppRelaunch() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = root.appendingPathComponent("gemma4.gturbo", isDirectory: true)
+        let model = makeAppModel(modelDirectory: directory, settingsPersistenceEnabled: true)
+        model.webSearchEnabled = true
+        model.pauseWebSearchWhenOffline = true
+        model.flushPendingSettings()
+        let relaunched = makeAppModel(modelDirectory: directory, settingsPersistenceEnabled: true)
+        #expect(relaunched.webSearchEnabled)
+        #expect(relaunched.pauseWebSearchWhenOffline)
+    }
+
     @Test func settingsFileLivesBesideModelDirectory() {
         let model = URL(fileURLWithPath: "/tmp/TUFF/gemma4.gturbo",
                         isDirectory: true)

@@ -12,6 +12,11 @@ struct SearchSettingsView: View {
     var body: some View {
         Form {
             Section("Web search") {
+                Toggle("Automatically pause web search while offline", isOn: $model.pauseWebSearchWhenOffline)
+                Text("When your connection returns, web search resumes only if you left Web on. A connection does not guarantee that the search provider is available.")
+                    .appFont(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Picker("Provider", selection: $model.searchProvider) {
                     ForEach(AppSearchProviderKind.allCases) { provider in
                         Text(provider.displayName).tag(provider)
