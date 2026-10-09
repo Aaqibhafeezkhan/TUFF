@@ -16,7 +16,7 @@
   <a href="https://github.com/rexmhall09/TUFF/discussions">Discussions</a>
 </p>
 
-![TUFF chat with optional Web and Files search](docs/assets/tuff-chat.png)
+![TUFF chatting with Qwen3.8 Flash Next on a 16 GB MacBook Air](docs/assets/tuff-chat.png)
 
 TUFF runs language models locally on Apple Silicon. The app is native
 SwiftUI and the inference engine is written from scratch in Swift and Metal,

@@ -9,6 +9,8 @@ benchmark is built in, takes a few clicks, and the results go on the
 **In the app:** open **Benchmarks**, tick the models you want, and press
 **Run Benchmark**. When it's done, press **Share on GitHub**.
 
+![The Benchmarks screen](assets/tuff-benchmarks.png)
+
 **From the terminal:**
 
 ```sh
