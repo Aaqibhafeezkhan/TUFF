@@ -141,6 +141,35 @@ import TUFFModelCatalog
         #expect(longest.contextTokens > speed.contextTokens)
     }
 
+    /// Gemma 4 12B reads all 11 GB of weights for every token. On 16 GB, Auto
+    /// used to pick 131K of context for it, and the KV cache on top pushed
+    /// the Mac into swapping. It now stops where the weights and KV fit.
+    @Test func aDenseModelThatFillsMemoryKeepsAModestContext() throws {
+        let plan = try #require(AppAutomaticMemoryPlanner.plan(
+            for: AppModelInstallDescriptor(catalog: TUFFModelCatalog.gemma4_12B_QAT),
+            on: device(16), profile: .balanced))
+        #expect(plan.contextTokens
+            >= TUFFModelCatalog.gemma4_12B_QAT.runtimeDefaults.contextTokens)
+        #expect(plan.contextTokens <= 16_384)
+        #expect(AppAutomaticMemoryPlanner.denseResidentBytes(
+            TUFFModelCatalog.gemma4_12B_QAT, context: plan.contextTokens) <= plan.safeBudgetBytes
+            || plan.contextTokens == TUFFModelCatalog.gemma4_12B_QAT.runtimeDefaults.contextTokens)
+    }
+
+    @Test func theSameDenseModelGetsLongContextWithRoomToSpare() throws {
+        let plan = try #require(AppAutomaticMemoryPlanner.plan(
+            for: AppModelInstallDescriptor(catalog: TUFFModelCatalog.gemma4_12B_QAT),
+            on: device(64), profile: .balanced))
+        #expect(plan.contextTokens >= 65_536)
+    }
+
+    /// Streamed models are not affected: their experts are read on demand.
+    @Test func streamedModelsAreNotHeldBackByTheirFileSize() throws {
+        let plan = try #require(AppAutomaticMemoryPlanner.plan(
+            for: .qwen38FlashNext, on: device(16), profile: .balanced))
+        #expect(plan.contextTokens >= 16_384)
+    }
+
     // MARK: - Applying
 
     @Test func turningAutoOffPreservesManualMemorySettings() {

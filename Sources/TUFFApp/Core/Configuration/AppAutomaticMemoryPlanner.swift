@@ -38,9 +38,12 @@ public enum AppAutomaticMemoryPlanner {
         let chunk = catalog.recommendedPrefillChunkTokens(on: device)
         let qualifiedContext = catalog.runtimeDefaults.contextTokens
         func fits(context: Int, slots: Int) -> Bool {
-            catalog.estimatedInferenceWorkingSetBytes(contextTokens: context,
+            guard catalog.estimatedInferenceWorkingSetBytes(contextTokens: context,
                                             expertCacheSlots: slots,
                                             prefillChunkTokens: chunk) <= budget
+            else { return false }
+            return descriptor.usesExpertCache
+                || denseResidentBytes(catalog, context: context) <= budget
         }
 
         // The qualified slot count, clamped to what this model can use, then
@@ -93,6 +96,27 @@ public enum AppAutomaticMemoryPlanner {
                 prefillChunkTokens: chunk),
             safeBudgetBytes: budget)
     }
+
+    /// What a dense model really keeps resident: every weight, because every
+    /// token reads all of them, plus its KV cache and a runtime allowance.
+    /// The qualified working set leaves file-backed weights out, which is
+    /// right for streamed experts but not here. Measured on a 16 GB M2,
+    /// Gemma 4 12B decoded at 6.3 tok/s with 8K of context and 3.0 with the
+    /// 131K Auto used to choose, and as low as 0.34 once a long run added
+    /// more state. Only extra context is refused this way; a model's
+    /// qualified context is always kept.
+    static func denseResidentBytes(_ catalog: TUFFModelDescriptor, context: Int) -> UInt64 {
+        let kv = catalog.memory.kvCache.estimatedBytes(contextTokens: context)
+        guard kv != .max else { return .max }
+        let total = catalog.source.installedBytes.addingReportingOverflow(kv)
+        guard !total.overflow else { return .max }
+        let withRuntime = total.partialValue.addingReportingOverflow(denseRuntimeAllowanceBytes)
+        return withRuntime.overflow ? .max : withRuntime.partialValue
+    }
+
+    /// Scratch, tokenizer, sampling and the app itself, beside the weights
+    /// and KV cache.
+    static let denseRuntimeAllowanceBytes: UInt64 = TUFFModelCatalog.oneGiB
 
     public static func applying(
         _ profile: AppModelSettingsProfile,

@@ -28,7 +28,7 @@ public enum AppBenchmarkShare {
         let data = try AppBenchmarkResult.encoder().encode(result)
         let json = String(decoding: data, as: UTF8.self)
         var lines = [
-            "Benchmarked with TUFF \(result.app.version) on a \(machineLine(result.machine)).",
+            "Benchmarked with TUFF \(result.app.version) on \(machineLine(result.machine)).",
             "Suite: \(result.suite.name) v\(result.suite.version), \(result.suite.mode.rawValue).",
             "",
             table(for: result),

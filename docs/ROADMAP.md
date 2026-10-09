@@ -7,10 +7,6 @@ change what I work on next.
 
 ## Known limits
 
-- **Auto can pick too much context for Gemma 4 12B on 16 GB.** It chose
-  131K tokens, and decode dropped to about 0.3 tok/s under memory pressure,
-  far below what the same model does at 4K. Auto's estimate needs to account
-  for this.
 - **Flash Next's first prompt got a bit slower in 8.0** (about 0.3 s), after
   shader compilation was split by model. Cause unknown.
 - **GPT-OSS rereads the whole conversation on every turn.** Gemma, Qwen and
