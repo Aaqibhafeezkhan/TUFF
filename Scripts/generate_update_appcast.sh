@@ -42,9 +42,15 @@ staging="$(mktemp -d "${TMPDIR:-/tmp}/tuff-appcast.XXXXXX")"
 trap 'rm -rf "$staging"' EXIT
 cp "$archive_directory/$archive" "$staging/$archive"
 
-notes="$repository_root/docs/RELEASE_${version}_NOTES.md"
+# Release notes live with the release, not in docs/: RELEASE_NOTES.md beside
+# the archive. A prepared recovery writes docs/RELEASE_VERSION_NOTES.md, which
+# is still accepted.
+notes="$archive_directory/RELEASE_NOTES.md"
 if [[ ! -f "$notes" ]]; then
-  echo "missing release notes: $notes" >&2
+  notes="$repository_root/docs/RELEASE_${version}_NOTES.md"
+fi
+if [[ ! -f "$notes" ]]; then
+  echo "missing release notes: $archive_directory/RELEASE_NOTES.md" >&2
   exit 1
 fi
 cp "$notes" "$staging/${archive%.zip}.md"

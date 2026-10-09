@@ -1,0 +1,15 @@
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Show off something you built with TUFF, a setup you like, or how you use it.
+        For speed results, run the benchmark in TUFF and press Share on GitHub
+        instead; those go in [Benchmarks](https://github.com/rexmhall09/TUFF/discussions/categories/benchmarks)
+        and on the leaderboard.
+  - type: textarea
+    id: post
+    attributes:
+      label: What you made or found
+      description: Screenshots welcome. Leave out private chats.
+    validations:
+      required: true

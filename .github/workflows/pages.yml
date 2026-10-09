@@ -1,30 +1,77 @@
 name: Pages
 
+# Deploys the website, including the benchmark leaderboard. The leaderboard
+# is built from posts in the Benchmarks discussion category at deploy time;
+# no results are stored in the repository. A new or edited benchmark post is
+# reviewed first: its JSON is read as data by Scripts/benchmark_discussions.py,
+# which labels the post and comments with the outcome. Nothing in a post is
+# ever executed.
 on:
   push:
     branches: [main]
     paths:
       - "site/**"
       - ".github/workflows/pages.yml"
+      - ".github/benchmark-suite.json"
+      - "Scripts/benchmark_discussions.py"
+  discussion:
+    types: [created, edited, deleted, labeled, unlabeled, category_changed]
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: true
 
 jobs:
-  deploy:
+  review:
+    if: >-
+      github.event_name == 'discussion'
+      && github.event.discussion.category.slug == 'benchmarks'
+      && contains(fromJSON('["created", "edited", "category_changed"]'), github.event.action)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      discussions: write
+      issues: write
+    concurrency:
+      group: benchmark-review-${{ github.event.discussion.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/benchmark-suite.json
+            Scripts/benchmark_discussions.py
+          sparse-checkout-cone-mode: false
+      - name: Review the post
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISCUSSION_NUMBER: ${{ github.event.discussion.number }}
+        run: python3 Scripts/benchmark_discussions.py review --discussion "$DISCUSSION_NUMBER"
+
+  deploy:
+    needs: review
+    if: >-
+      always()
+      && needs.review.result != 'failure'
+      && (github.event_name != 'discussion' || github.event.discussion.category.slug == 'benchmarks')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      discussions: read
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: true
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - name: Build the leaderboard data
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 Scripts/benchmark_discussions.py build --output site/benchmarks/data.json
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

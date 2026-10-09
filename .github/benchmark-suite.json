@@ -1,0 +1,18 @@
+{
+  "category": "benchmarks",
+  "minimum_app_version": "8.1.0",
+  "suites": {
+    "tuff-bench/1": "610808a3c16ab35f09388fb46bb9b8f099ee6bef5811a5ef1d9b6e6b8a76f341"
+  },
+  "models": {
+    "gemma4-e2b": { "name": "Gemma 4 E2B", "max_decode_tokens_per_second": 400 },
+    "gemma4-e4b": { "name": "Gemma 4 E4B", "max_decode_tokens_per_second": 300 },
+    "gemma4-12b-qat": { "name": "Gemma 4 12B QAT", "max_decode_tokens_per_second": 150 },
+    "gemma4-26b-a4b": { "name": "Gemma 4 26B-A4B", "max_decode_tokens_per_second": 200 },
+    "qwen36-35b-a3b": { "name": "Qwen3.6 35B-A3B", "max_decode_tokens_per_second": 200 },
+    "gpt-oss-20b": { "name": "GPT-OSS 20B", "max_decode_tokens_per_second": 200 },
+    "gpt-oss-120b": { "name": "GPT-OSS 120B", "max_decode_tokens_per_second": 100 },
+    "minimax-m2.7": { "name": "MiniMax M2.7", "max_decode_tokens_per_second": 60 },
+    "qwen3.8-flash-next": { "name": "Qwen3.8 Flash Next", "max_decode_tokens_per_second": 100 }
+  }
+}

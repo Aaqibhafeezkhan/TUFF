@@ -1,5 +1,5 @@
 name: Performance report
-description: TUFF is slower than expected, got slower after an update, or you have a measurement to share.
+description: TUFF got slower after an update, or is much slower than similar Macs on the leaderboard.
 title: "[Performance]: "
 labels:
   - performance
@@ -8,13 +8,13 @@ body:
   - type: markdown
     attributes:
       value: |
-        Timing on a Mac varies a lot between runs, especially for models that
-        stream experts from the SSD. Repeated runs with the same settings are far
-        more useful than one number. `Scripts/benchmark_inference.py` runs and
-        records repeated, paired comparisons; see CONTRIBUTING.md.
+        Just want to share how fast TUFF is on your Mac? Run **Benchmarks** in
+        TUFF and press **Share on GitHub** instead. It goes on the
+        [leaderboard](https://rexmhall09.github.io/TUFF/benchmarks/).
 
-        Please leave out private prompts and file paths. The built-in benchmark
-        prompts are fine to name.
+        This form is for problems: something got slower, or is far off what
+        similar Macs get. Repeated runs help a lot more than one number, and a
+        link to your benchmark post is ideal. Leave out private prompts.
   - type: dropdown
     id: kind
     attributes:
@@ -30,8 +30,8 @@ body:
     id: version
     attributes:
       label: TUFF version or commit
-      description: For a comparison, give both, for example "6.1.0 vs 7.0.0".
-      placeholder: 7.0.0
+      description: For a comparison, give both, for example "8.0.1 vs 8.0.2".
+      placeholder: 8.0.2
     validations:
       required: true
   - type: input

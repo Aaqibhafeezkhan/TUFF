@@ -1,13 +1,9 @@
 # OMP with TUFF
 
-These settings were tested with TUFF 7.2.0 and OMP 18.4.12. Enable **Background API** in
-TUFF, then add the provider below to `~/.omp/agent/models.yml`. Preserve any
-other providers and your existing default model.
-
-The server discovers completed installations and chooses their serving context
-within the Mac's memory budget. The output overrides cap responses in older
-OMP releases that do not use the server's advertised output limits. The thinking transport is
-binary for Gemma/Qwen, graded for GPT-OSS, and always enabled for MiniMax.
+This setup was tested with TUFF 7.2.0 and OMP 18.4.12. Turn on **Background
+API** in TUFF, then add this provider to `~/.omp/agent/models.yml`, keeping
+any providers you already have. The output limits are there for older OMP
+versions that ignore the limits the server advertises.
 
 ```yaml
 providers:
@@ -85,22 +81,13 @@ providers:
           supportsReasoningEffort: false
 ```
 
-Restart OMP after changing the configuration. Check discovery and select a model:
+Restart OMP, then check it found the models and pick one:
 
 ```sh
 omp models tuff
 omp --model tuff/qwen3.6-35b-a3b
 ```
 
-Use `/model` to choose another `tuff/` model. Large streamed models can spend
-many minutes processing OMP's instructions and tool inventory before the
-first response. The longer idle timeout allows that work to complete; cancel
-normally if you want to stop it. The API still processes one model request at a
-time, and a smaller context may be selected on a Mac with less memory.
-
-OMP executes tools and controls their approval. TUFF returns structured calls;
-no server-side shell or agent execution is enabled by this setup.
-
-See [OMP model configuration](https://github.com/can1357/oh-my-pi/blob/main/docs/models.md)
-and [OpenAI Harmony](https://developers.openai.com/cookbook/articles/openai-harmony)
-for the client settings and GPT-OSS message format.
+Big streamed models can take minutes to read OMP's instructions before the
+first reply, which is why the idle timeout is long. OMP runs the tools;
+TUFF only returns the calls.

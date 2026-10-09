@@ -1,11 +1,17 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Question
+    url: https://github.com/rexmhall09/TUFF/discussions/categories/q-a
+    about: Ask how something works. No question is too basic.
+  - name: Idea
+    url: https://github.com/rexmhall09/TUFF/discussions/categories/ideas
+    about: Float an idea before it is ready to be a feature request.
+  - name: Share how fast TUFF runs on your Mac
+    url: https://rexmhall09.github.io/TUFF/benchmarks/
+    about: Run Benchmarks in TUFF and press Share on GitHub. Results go on the leaderboard.
+  - name: An update broke TUFF or it will not open
+    url: https://github.com/rexmhall09/TUFF/blob/main/docs/RELEASE_RECOVERY.md#if-tuff-wont-open
+    about: Recovery steps that keep your chats, settings and models. Then open a bug report.
   - name: Security vulnerability
     url: https://github.com/rexmhall09/TUFF/security/advisories/new
     about: Report suspected security vulnerabilities privately.
-  - name: An update broke TUFF or it will not open
-    url: https://github.com/rexmhall09/TUFF/blob/main/docs/RELEASE_RECOVERY.md#if-tuff-will-not-open
-    about: Recovery steps that keep your chats, settings and models. Then open a bug report.
-  - name: Question or idea
-    url: https://github.com/rexmhall09/TUFF/discussions
-    about: Ask how something works or float an idea before filing a request.

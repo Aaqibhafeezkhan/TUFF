@@ -3,9 +3,9 @@ import Testing
 
 @Suite struct AppDestinationTests {
     @Test func navigationOrderAndLabelsStayStable() {
-        #expect(AppDestination.allCases == [.chat, .models, .server, .settings])
+        #expect(AppDestination.allCases == [.chat, .models, .benchmarks, .server, .settings])
         #expect(AppDestination.allCases.map(\.title)
-            == ["Chat", "Models", "Server", "Settings"])
+            == ["Chat", "Models", "Benchmarks", "Server", "Settings"])
     }
 
     @Test func everyDestinationHasAUniqueSymbolAndIdentifier() {
@@ -13,7 +13,7 @@ import Testing
 
         #expect(Set(destinations.map(\.id)).count == destinations.count)
         #expect(Set(destinations.map(\.systemImage)).count == destinations.count)
-        #expect(destinations.map(\.keyboardShortcut) == ["1", "2", "3", "4"])
+        #expect(destinations.map(\.keyboardShortcut) == ["1", "2", "3", "4", "5"])
         #expect(Set(destinations.map(\.keyboardShortcut)).count == destinations.count)
     }
 

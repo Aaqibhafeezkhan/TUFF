@@ -1,39 +1,17 @@
-# Security policy
+# Security
 
-## Supported versions
+Please don't open a public issue for a security problem. Report it privately
+through [GitHub's vulnerability reporting](https://github.com/rexmhall09/TUFF/security/advisories/new).
 
-Security fixes are applied to the latest version of the `main` branch. Older
-commits, forks, experimental branches, and modified model packages are not
-supported.
+Tell me what's affected (version or commit), how to reproduce it, and what
+an attacker could do. Leave out personal data, keys and model weights.
 
-TUFF is a research project. It is not intended for production,
-multi-user, or security-critical deployments.
+The most useful reports involve model files or downloads that aren't
+validated properly, path traversal, unsafe offsets, web search reaching
+places it shouldn't, leaked API keys, or the local server being reachable
+from outside your Mac. Wrong answers, high memory use and slow models aren't
+security issues on their own.
 
-## Reporting a vulnerability
-
-Do not open a public issue for a suspected security vulnerability. Use
-[GitHub private vulnerability reporting](https://github.com/rexmhall09/TUFF/security/advisories/new)
-instead.
-
-Include:
-
-- a description of the vulnerability;
-- the affected commit or version;
-- reproduction steps or a minimal proof of concept;
-- the expected and observed behavior;
-- the potential security impact; and
-- a suggested mitigation, if known.
-
-Do not include personal data, credentials, access tokens, or copyrighted model
-weights in the report.
-
-Reports are especially useful when they involve unsafe model-package handling,
-path traversal, buffer or offset safety, malformed remote data, verification
-bypasses, command-line injection, credential exposure, or unexpected file
-access. Model quality problems, incorrect generated text, expected high
-resource use, and performance regressions are not normally security
-vulnerabilities.
-
-Please allow the issue to be investigated and a fix to be prepared before
-publishing vulnerability details. Credit can be included in the eventual
-advisory unless the reporter prefers to remain anonymous.
+Fixes go into the latest release. TUFF is a personal project, not built for
+multi-user or security-critical use. Give me a chance to ship a fix before
+publishing details; I'm happy to credit you in the advisory.

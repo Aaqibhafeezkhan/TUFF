@@ -56,6 +56,7 @@ public enum TUFFCommand {
       tuff prompt <text> [--model <name|path>] [generation options]
       tuff load [model]
       tuff serve [--default-model <name>] [--unload-after <seconds>] [--port <port>]
+      tuff bench (--models <name,...> | --all) [--quick] [--share]
       tuff --version
 
     commands:
@@ -64,11 +65,14 @@ public enum TUFFCommand {
       serve    Start the local OpenAI-compatible server in the foreground. Every
                installed model is served and loads when a request names it;
                `default` means the selected app model.
+      bench    Benchmark installed models and optionally share the result on
+               GitHub Discussions.
 
     model names include gemma4-e2b, gemma4-e4b, gemma4-12b-qat, gemma4,
     qwen36, qwen38-flash-next, gpt-oss-20b, gpt-oss-120b, and minimax-m2.7.
 
-    Run `tuff prompt --help` or `tuff serve --help` for command-specific options.
+    Run `tuff prompt --help`, `tuff serve --help` or `tuff bench --help` for
+    command-specific options.
     """
 
     public static func plan(
@@ -110,6 +114,9 @@ public enum TUFFCommand {
                 environment: environment,
                 selectedModel: selectedModel,
                 fileExists: fileExists)
+        case "bench", "benchmark":
+            return try benchPlan(
+                remaining, executableURL: executableURL, fileExists: fileExists)
         case "serve":
             return try servePlan(
                 remaining,
@@ -186,6 +193,25 @@ public enum TUFFCommand {
         return .run(
             executableURL: child,
             arguments: ["--model", model.url.path] + forwarded)
+    }
+
+    /// The benchmark runs inside the app executable, which links the same
+    /// inference client chat uses.
+    private static func benchPlan(
+        _ arguments: [String],
+        executableURL: URL,
+        fileExists: (String) -> Bool
+    ) throws -> TUFFCommandPlan {
+        let resolved = executableURL.resolvingSymlinksInPath().standardizedFileURL
+        let bundle = resolved.deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let bundled = bundle.appendingPathComponent("Contents/MacOS/TUFF", isDirectory: false)
+        let app = bundle.pathExtension == "app" && fileExists(bundled.path)
+            ? bundled
+            : try bundledExecutable(named: "TUFF", beside: resolved, fileExists: fileExists)
+        return .run(executableURL: app, arguments: ["--benchmark"] + arguments)
     }
 
     private static func servePlan(

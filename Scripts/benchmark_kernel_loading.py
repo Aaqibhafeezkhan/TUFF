@@ -12,7 +12,7 @@ generation, prefill and decode time, and the output text. Variants:
 
 Shader compiles hit the system Metal cache after the first run of a source,
 so these are warm-cache loads. Cold front-end compile time is measured
-separately; see docs/RELEASE_EVIDENCE.md.
+separately; see the 8.0.0 release notes.
 """
 import argparse
 import json

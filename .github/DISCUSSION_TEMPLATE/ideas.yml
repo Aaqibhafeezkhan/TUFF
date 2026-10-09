@@ -1,0 +1,22 @@
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ideas at any stage are welcome here. Once an idea is concrete enough
+        to build, it can move to a
+        [feature request](https://github.com/rexmhall09/TUFF/issues/new?template=feature.yml).
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: What would you like TUFF to do, and what would it let you do that you cannot today?
+    validations:
+      required: true
+  - type: dropdown
+    id: help
+    attributes:
+      label: Would you like to help build it?
+      options:
+        - "Yes"
+        - Maybe, with some guidance
+        - "No, just suggesting"

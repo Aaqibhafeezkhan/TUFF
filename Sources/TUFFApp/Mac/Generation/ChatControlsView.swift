@@ -3,99 +3,146 @@ import TUFFAppCore
 import TUFFMacPresentation
 import SwiftUI
 
-/// Model and reasoning pickers, sized to sit inside the prompt bar.
-///
-/// These read as quiet capsules rather than system pop-up buttons: they are part
-/// of the composer, and the send button is the only emphasized control there.
+/// The composer's model and thinking controls, as quiet icons. The model's
+/// name is already in the message placeholder, so the bar itself stays small;
+/// thinking opens its choices in place and folds back once one is picked.
 struct ChatControlsView: View {
     @Bindable var model: AppModel
+    @State private var showsReasoningChoices = false
 
     var body: some View {
         HStack(spacing: 6) {
-            // Only what is on this Mac. Offering the rest of the catalogue here
-            // meant picking one replaced the conversation with the downloader,
-            // which is not what choosing a model inside a chat should do — the
-            // Models screen is where downloads live.
-            Picker("Model", selection: modelSelection) {
-                ForEach(model.installedInstalls) { install in
-                    Text(install.descriptor.shortName).tag(install.id)
-                }
-            }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .fixedSize()
-            .buttonStyle(.borderless)
-            .padding(.horizontal, 8)
-            .frame(height: 28)
-            .background(pillBackground)
-            .help("Model for this chat")
-            .accessibilityLabel("Chat model")
-
+            modelMenu
             reasoningControl
         }
         .appFont(.callout)
         .disabled(model.isRunning || model.loadState.isLoading)
+        .animation(.smooth(duration: 0.18), value: showsReasoningChoices)
     }
 
-    private var pillBackground: some View {
-        Capsule()
-            .fill(Color.primary.opacity(0.06))
-            .overlay {
-                Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 0.5)
+    // Only what is on this Mac. Offering the rest of the catalogue here meant
+    // picking one replaced the conversation with the downloader; the Models
+    // screen is where downloads live.
+    private var modelMenu: some View {
+        Menu {
+            ForEach(model.installedInstalls) { install in
+                Button {
+                    model.selectModel(install)
+                } label: {
+                    if install.id == model.selectedModelID {
+                        Label(install.descriptor.shortName, systemImage: "checkmark")
+                    } else {
+                        Text(install.descriptor.shortName)
+                    }
+                }
             }
+        } label: {
+            ComposerIcon(systemImage: "shippingbox", isOn: false)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Model: \(model.selectedDescriptor.shortName)")
+        .accessibilityLabel("Chat model")
+        .accessibilityValue(model.selectedDescriptor.shortName)
     }
 
     @ViewBuilder
     private var reasoningControl: some View {
         switch model.selectedDescriptor.reasoningControl {
         case .toggle, .toggleWithPreservation:
-            Picker("Thinking", selection: $model.reasoning) {
-                Text("Thinking Off").tag(ChatReasoning.off)
-                Text("Thinking On").tag(ChatReasoning.on)
+            brain(isOn: model.reasoning == .on, help: "Thinking: \(model.reasoning == .on ? "on" : "off")")
+            if showsReasoningChoices {
+                choices([("Off", ChatReasoning.off), ("On", ChatReasoning.on)],
+                        selection: $model.reasoning)
             }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .fixedSize()
-            .buttonStyle(.borderless)
-            .padding(.horizontal, 8)
-            .frame(height: 28)
-            .background(pillBackground)
-            .accessibilityLabel("Thinking")
         case .graded:
-            Picker("Reasoning", selection: $model.reasoningEffort) {
-                Text("Reasoning Low").tag(GPTOSSReasoningEffort.low)
-                Text("Reasoning Medium").tag(GPTOSSReasoningEffort.medium)
-                Text("Reasoning High").tag(GPTOSSReasoningEffort.high)
+            brain(isOn: true, help: "Reasoning: \(model.reasoningEffort.rawValue)")
+            if showsReasoningChoices {
+                choices([("Low", GPTOSSReasoningEffort.low), ("Medium", .medium), ("High", .high)],
+                        selection: $model.reasoningEffort)
             }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .fixedSize()
-            .buttonStyle(.borderless)
-            .padding(.horizontal, 8)
-            .frame(height: 28)
-            .background(pillBackground)
-            .accessibilityLabel("Reasoning effort")
         case .alwaysOn:
-            Text("Thinking On")
-                .foregroundStyle(TUFFMacTheme.accentColor)
-                .padding(.horizontal, 10)
-                .frame(height: 28)
-                .background(pillBackground)
-                .help("This model always reasons before answering")
+            ComposerIcon(systemImage: "brain", isOn: true)
+                .help("This model always thinks before answering")
                 .accessibilityLabel("Thinking always on")
         case nil:
             EmptyView()
         }
     }
 
-    /// Route picker changes through model-switch validation.
-    private var modelSelection: Binding<String> {
-        Binding {
-            model.selectedModelID
-        } set: { id in
-            guard let install = model.installedInstalls.first(where: { $0.id == id })
-            else { return }
-            model.selectModel(install)
+    private func brain(isOn: Bool, help: String) -> some View {
+        Button {
+            showsReasoningChoices.toggle()
+        } label: {
+            ComposerIcon(systemImage: "brain", isOn: isOn)
         }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel("Thinking")
+        .accessibilityValue(help)
+    }
+
+    private func choices<Value: Hashable>(_ options: [(String, Value)],
+                                          selection: Binding<Value>) -> some View {
+        HStack(spacing: 2) {
+            ForEach(options, id: \.0) { title, value in
+                let isSelected = selection.wrappedValue == value
+                Button {
+                    selection.wrappedValue = value
+                    showsReasoningChoices = false
+                } label: {
+                    Text(title)
+                        .foregroundStyle(isSelected
+                                         ? AnyShapeStyle(TUFFMacTheme.accentColor)
+                                         : AnyShapeStyle(.secondary))
+                        .padding(.horizontal, 9)
+                        .frame(height: 24)
+                        .background {
+                            if isSelected {
+                                Capsule().fill(TUFFMacTheme.accentColor.opacity(0.14))
+                            }
+                        }
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+            }
+        }
+        .padding(2)
+        .background(ComposerIcon.background(isOn: false))
+        .fixedSize()
+        .transition(.opacity.combined(with: .move(edge: .leading)))
+    }
+}
+
+/// A round icon control for the composer, tinted while its option is on.
+struct ComposerIcon: View {
+    let systemImage: String
+    let isOn: Bool
+    var badge: Color?
+
+    var body: some View {
+        Image(systemName: systemImage)
+            .appFont(.body)
+            .foregroundStyle(isOn ? AnyShapeStyle(TUFFMacTheme.accentColor) : AnyShapeStyle(.secondary))
+            .frame(width: 28, height: 28)
+            .background(Self.background(isOn: isOn))
+            .overlay(alignment: .topTrailing) {
+                if let badge {
+                    Circle().fill(badge).frame(width: 7, height: 7).offset(x: -2, y: 2)
+                }
+            }
+            .contentShape(Circle())
+    }
+
+    static func background(isOn: Bool) -> some View {
+        Capsule()
+            .fill(isOn ? TUFFMacTheme.accentColor.opacity(0.14) : Color.primary.opacity(0.06))
+            .overlay {
+                Capsule().stroke(isOn ? TUFFMacTheme.accentColor.opacity(0.35)
+                                 : Color.primary.opacity(0.08), lineWidth: 0.5)
+            }
     }
 }

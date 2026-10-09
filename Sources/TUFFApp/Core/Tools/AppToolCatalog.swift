@@ -1,8 +1,8 @@
 import Foundation
 import TUFFEngine
 
-/// Bounds on one answer's tool use. Every figure is documented in the README
-/// and in docs/RELEASE_8.0.0_NOTES.md; change them there too.
+/// Bounds on one answer's tool use. Every figure is documented in
+/// docs/SEARCH.md; change it there too.
 public struct AppToolLimits: Equatable, Sendable {
     /// Generations that may end in tool calls before the model must answer.
     public var maximumToolRounds: Int

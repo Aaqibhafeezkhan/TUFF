@@ -78,7 +78,7 @@ public enum AppHTTPError: Error, Equatable, Sendable, CustomStringConvertible {
         case .insecureRedirect: "The address redirected from https to an insecure http address."
         case .timedOut: "The request timed out."
         case .oversized(let limit):
-            "The response was larger than \(limit / 1_024) KB, so reading stopped."
+            "The response was larger than \(Self.sizeDescription(limit)), so reading stopped."
         case .cancelled: "Stopped."
         case .connectionFailed(let code):
             code == 35
@@ -86,6 +86,14 @@ public enum AppHTTPError: Error, Equatable, Sendable, CustomStringConvertible {
                 : "The connection to the site could not be established (code \(code)). Check your connection and try again."
         case .network(let message): "The request failed: \(message)"
         }
+    }
+
+    /// Whole mebibytes read as "2 MB", matching how the limits are documented;
+    /// anything else falls back to kibibytes.
+    static func sizeDescription(_ bytes: Int) -> String {
+        let mebibyte = 1_024 * 1_024
+        if bytes >= mebibyte, bytes % mebibyte == 0 { return "\(bytes / mebibyte) MB" }
+        return "\(bytes / 1_024) KB"
     }
 }
 

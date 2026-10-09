@@ -3,9 +3,9 @@ import TUFFAppCore
 import TUFFMacPresentation
 import SwiftUI
 
-/// The composer's Web and Files switches: small capsules beside the model
-/// picker, tinted when on, so what the next message may use is visible
-/// before it is sent.
+/// The composer's Web and Files switches: two icons, tinted while on, so what
+/// the next message may use is visible before it is sent. Files opens its
+/// folder list when there is nothing to search yet, and from its context menu.
 struct ToolToggleControls: View {
     @Bindable var model: AppModel
     @State private var showingFolders = false
@@ -15,22 +15,32 @@ struct ToolToggleControls: View {
             Button {
                 model.webSearchEnabled.toggle()
             } label: {
-                pill(model.isWebSearchPaused ? "Web · Offline" : "Web", symbol: "globe", isOn: webOn)
+                ComposerIcon(systemImage: "globe", isOn: webOn,
+                             badge: model.webSearchEnabled && model.isWebSearchPaused ? .orange : nil)
             }
             .buttonStyle(.plain)
             .help(webHelp)
             .accessibilityLabel("Web search")
-            .accessibilityValue(model.isWebSearchPaused ? "Paused while offline" : (webOn ? "On" : "Off"))
+            .accessibilityValue(model.isWebSearchPaused && model.webSearchEnabled
+                                ? "Paused while offline" : (webOn ? "On" : "Off"))
 
             Button {
-                showingFolders.toggle()
+                if model.toolStore.folders.isEmpty {
+                    showingFolders = true
+                } else {
+                    model.fileSearchEnabled.toggle()
+                }
             } label: {
-                pill(filesLabel, symbol: "folder", isOn: filesOn)
+                ComposerIcon(systemImage: "folder", isOn: filesOn)
             }
             .buttonStyle(.plain)
             .help(filesHelp)
+            .contextMenu {
+                Button("Choose Folders…") { showingFolders = true }
+            }
             .accessibilityLabel("File search")
             .accessibilityValue(filesOn ? "On, \(model.toolStore.folders.count) folders" : "Off")
+            .accessibilityAction(named: "Choose folders") { showingFolders = true }
             .popover(isPresented: $showingFolders, arrowEdge: .bottom) {
                 FolderAccessPanel(model: model)
                     .frame(width: 360)
@@ -47,45 +57,29 @@ struct ToolToggleControls: View {
         model.fileSearchEnabled && model.toolSupport.allowsTools && !model.toolStore.folders.isEmpty
     }
 
-    private var filesLabel: String {
-        let count = model.toolStore.folders.count
-        return filesOn && count > 0 ? "Files · \(count)" : "Files"
-    }
-
     private var webHelp: String {
         if let note = unavailableNote { return note }
-        if model.isWebSearchPaused { return "Web search is paused while offline. It will resume when your connection returns. Click to turn Web off." }
-        return (webOn ? "Web search is on. " : "Web search is off. ")
+        if model.isWebSearchPaused && model.webSearchEnabled {
+            return "Web: paused while offline. It resumes when your connection returns."
+        }
+        return (webOn ? "Web: on. " : "Web: off. ")
             + model.searchProvider.privacyNote
             + (model.toolSupport.note.map { " " + $0 } ?? "")
     }
 
     private var filesHelp: String {
         if let note = unavailableNote { return note }
-        return "Search folders you choose. Their contents stay on this Mac."
+        if model.toolStore.folders.isEmpty {
+            return "Files: choose folders for the model to search. Their contents stay on this Mac."
+        }
+        let count = model.toolStore.folders.count
+        return "Files: \(filesOn ? "on" : "off"), \(count) folder\(count == 1 ? "" : "s"). "
+            + "Right-click to choose folders."
     }
 
     private var unavailableNote: String? {
         if case .unavailable(let reason) = model.toolSupport { return reason }
         return nil
-    }
-
-    private func pill(_ title: String, symbol: String, isOn: Bool) -> some View {
-        Label(title, systemImage: symbol)
-            .labelStyle(.titleAndIcon)
-            .foregroundStyle(isOn ? AnyShapeStyle(TUFFMacTheme.accentColor) : AnyShapeStyle(.secondary))
-            .padding(.horizontal, 9)
-            .frame(height: 28)
-            .background {
-                Capsule()
-                    .fill(isOn ? TUFFMacTheme.accentColor.opacity(0.14) : Color.primary.opacity(0.06))
-                    .overlay {
-                        Capsule().stroke(isOn ? TUFFMacTheme.accentColor.opacity(0.35)
-                                         : Color.primary.opacity(0.08), lineWidth: 0.5)
-                    }
-            }
-            .contentShape(Capsule())
-            .fixedSize()
     }
 }
 

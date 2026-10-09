@@ -157,6 +157,30 @@ struct TUFFCommandTests {
         #expect(parts.count == 3 && parts.allSatisfy { Int($0) != nil })
     }
 
+    @Test func benchRunsTheAppExecutable() throws {
+        // Packaged: `tuff` lives in Resources/bin, the runner in MacOS/TUFF.
+        let packaged = try TUFFCommand.plan(
+            arguments: ["bench", "--models", "gemma4", "--quick"],
+            executableURL: URL(fileURLWithPath: "/Applications/TUFF.app/Contents/Resources/bin/tuff"),
+            currentDirectoryURL: URL(fileURLWithPath: "/tmp", isDirectory: true),
+            applicationSupportURL: appSupport,
+            fileExists: { $0 == "/Applications/TUFF.app/Contents/MacOS/TUFF" })
+        #expect(packaged == .run(
+            executableURL: URL(fileURLWithPath: "/Applications/TUFF.app/Contents/MacOS/TUFF"),
+            arguments: ["--benchmark", "--models", "gemma4", "--quick"]))
+
+        // A clone build runs the TUFF executable beside TUFFCommand.
+        let clone = try TUFFCommand.plan(
+            arguments: ["bench", "--list"],
+            executableURL: repository.appendingPathComponent(".build/debug/TUFFCommand"),
+            currentDirectoryURL: repository,
+            applicationSupportURL: appSupport,
+            fileExists: { $0 == "/repo/.build/debug/TUFF" })
+        #expect(clone == .run(
+            executableURL: URL(fileURLWithPath: "/repo/.build/debug/TUFF"),
+            arguments: ["--benchmark", "--list"]))
+    }
+
     @Test func serveRoutesEveryInstalledModel() throws {
         // A packaged app serves the models Application Support holds, and
         // `default` follows the model selected in the app.

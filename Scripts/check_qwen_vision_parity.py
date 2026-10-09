@@ -15,7 +15,7 @@ the ordinary suite skips:
       /tmp/qwen-vision-capture /absolute/path/config.json
 
 The comparison fails if relative error reaches 0.08 or cosine similarity
-falls to 0.995. Recorded results are in docs/RELEASE_EVIDENCE.md.
+falls to 0.995. Recorded results are in the 6.x release notes.
 """
 import argparse
 import json

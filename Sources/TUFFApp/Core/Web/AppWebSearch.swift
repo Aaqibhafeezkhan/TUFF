@@ -226,7 +226,7 @@ public struct DuckDuckGoSearchProvider: AppWebSearchProvider {
         if text.hasPrefix("//") { text = "https:" + text }
         guard var url = URL(string: text) else { return nil }
         // `URL.path` drops a trailing slash, so the redirect path reads "/l".
-        if let host = url.host?.lowercased(), host.hasSuffix("duckduckgo.com"),
+        if let host = url.host, isDuckDuckGoHost(host),
            url.path == "/l" || url.path.hasPrefix("/l/") {
             guard let target = URLComponents(url: url, resolvingAgainstBaseURL: false)?
                 .queryItems?.first(where: { $0.name == "uddg" })?.value,
@@ -235,8 +235,15 @@ public struct DuckDuckGoSearchProvider: AppWebSearchProvider {
         }
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
               url.host != nil else { return nil }
-        if let host = url.host?.lowercased(), host.hasSuffix("duckduckgo.com") { return nil }
+        if let host = url.host, isDuckDuckGoHost(host) { return nil }
         return url
+    }
+
+    /// DuckDuckGo itself or one of its subdomains. A plain suffix match would
+    /// also catch unrelated sites such as `notduckduckgo.com` and drop them.
+    static func isDuckDuckGoHost(_ host: String) -> Bool {
+        let host = host.lowercased()
+        return host == "duckduckgo.com" || host.hasSuffix(".duckduckgo.com")
     }
 }
 

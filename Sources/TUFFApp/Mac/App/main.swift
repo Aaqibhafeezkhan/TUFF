@@ -10,6 +10,11 @@ import TUFFServerCore
 if let status = AppWebPDFWorker.runIfRequested(arguments: CommandLine.arguments) {
     exit(status)
 }
+// `tuff bench` and the Benchmarks screen run the app executable this way.
+if let status = AppBenchmarkCommand.runIfRequested(
+    arguments: Array(CommandLine.arguments.dropFirst())) {
+    exit(status)
+}
 
 switch ProcessRole(invokedAs: CommandLine.arguments[0]) {
 case .decodeService:

@@ -1,10 +1,10 @@
 cask "tuff" do
-  version "8.0.1"
-  sha256 "2466e48115fc0ce4ff23e371e69eef1f73b0394a3f538f4c753783aa36d75b91"
+  version "8.1.0"
+  sha256 "99626af2586944ef82ccd3c1c8917ea26a9c1f64253cb15c7e957ad8b85d7774"
 
   url "https://github.com/rexmhall09/TUFF/releases/download/v#{version}/TUFF-v#{version}-macos-arm64.zip"
   name "TUFF"
-  desc "Local language models with a native Mac chat app and API"
+  desc "Run local language models, including ones bigger than your memory"
   homepage "https://rexmhall09.github.io/TUFF/"
 
   auto_updates true

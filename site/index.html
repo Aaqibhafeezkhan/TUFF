@@ -3,8 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TUFF</title>
-<meta name="description" content="TUFF runs language models locally on Apple Silicon, with a native chat app, optional web and folder search, and a local API.">
+<title>TUFF: the local AI app built for the Mac</title>
+<meta name="description" content="TUFF runs language models locally on Apple Silicon, including mixture-of-experts models larger than your Mac's memory, with a native chat app and a local API.">
+<meta property="og:title" content="TUFF: the local AI app built for the Mac">
+<meta property="og:description" content="An open-source Mac app and Swift/Metal engine that streams model experts from the SSD, so the 111 GB Qwen3.8 Flash Next runs on a 16 GB MacBook Air.">
+<meta property="og:image" content="https://rexmhall09.github.io/TUFF/assets/tuff-chat.png">
+<meta property="og:url" content="https://rexmhall09.github.io/TUFF/">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="icon" type="image/png" href="assets/tuff-icon.png">
 <style>
   :root {
@@ -96,14 +101,16 @@
     <img class="icon" src="assets/tuff-icon.png" alt="TUFF app icon">
     <h1>TUFF</h1>
     <p class="tagline">
-      Run language models locally on Apple Silicon. A native chat app,
-      optional web and folder search, and a local API, powered by Swift and Metal.
+      The local AI app built for the Mac. A native chat app and local API,
+      with its own Swift and Metal engine that runs models far bigger than
+      your Mac's memory.
     </p>
     <div class="cta">
       <a class="button primary" id="download" href="https://github.com/rexmhall09/TUFF/releases/latest">
         Download for macOS
       </a>
-      <a class="button secondary" href="https://github.com/rexmhall09/TUFF">View on GitHub</a>
+      <a class="button secondary" href="benchmarks/">Benchmarks</a>
+      <a class="button secondary" href="https://github.com/rexmhall09/TUFF">GitHub</a>
     </div>
     <p class="meta" id="release-meta">Apple Silicon, macOS 15 or newer</p>
   </header>
@@ -112,79 +119,73 @@
     <img src="assets/tuff-chat.png" alt="TUFF chat with optional Web and Files search, tool activity and numbered sources">
   </div>
 
+  <section aria-labelledby="big-models">
+    <h2 id="big-models">A 111 GB model on a 16 GB MacBook Air</h2>
+    <p>Most apps need the whole model in memory. TUFF keeps a
+       mixture-of-experts model's experts on the SSD and loads only the few
+       each token needs. That's how Qwen3.8 Flash Next runs on a 16 GB
+       MacBook Air, along with GPT-OSS 120B and MiniMax M2.7.</p>
+    <p>It has a cost: on that Air, Flash Next writes about 1.7 tokens a
+       second. Smaller models are quick, and bigger Macs do better.
+       <a href="benchmarks/">See how every model runs on real Macs</a>
+       · <a href="https://github.com/rexmhall09/TUFF/blob/main/docs/HOW_TUFF_WORKS.md">How it works</a></p>
+  </section>
   <section aria-labelledby="features">
-    <h2 id="features">New in 8.0</h2>
+    <h2 id="features">What's in it</h2>
     <div class="grid">
       <div class="card">
         <h3>Chat with sources</h3>
-        <p>Turn on Web to search with DuckDuckGo, or use Brave or Tavily with your
-           own key. Follow numbered sources and save answers as Markdown.</p>
+        <p>Turn on Web or Files and the model searches the web or folders you
+           pick, with numbered sources. Both are off until you want them.</p>
       </div>
       <div class="card">
-        <h3>Search folders you choose</h3>
-        <p>Files searches selected folders with a local text index, without an
-           embedding model. Indexing pauses while the model generates.</p>
+        <h3>Benchmarks</h3>
+        <p>Measure any installed model on your Mac and share it on the
+           <a href="benchmarks/">leaderboard</a> in a couple of clicks.</p>
       </div>
       <div class="card">
-        <h3>Keep the conversation moving</h3>
-        <p>Recent conversations retain model state within a bounded memory
-           budget, so returning to a chat can avoid repeating its prefill.
-           Optional saved states are released under memory pressure.</p>
+        <h3>Picks up where you left off</h3>
+        <p>Going back to a recent chat continues from the model's saved state
+           instead of reading the whole conversation again.</p>
       </div>
       <div class="card">
-        <h3>A smaller download</h3>
-        <p>The chat app, decode service and command-line tools share one
-           executable. Model weights are separate downloads.</p>
+        <h3>A local API</h3>
+        <p>The Background API serves your models to agents and other apps over
+           an OpenAI-compatible endpoint, even with TUFF closed.</p>
       </div>
     </div>
   </section>
 
   <section aria-labelledby="local-models">
-    <h2 id="local-models">An inference engine for your Mac</h2>
-    <p>Choose from nine checkpoints across Gemma 4, Qwen, GPT-OSS and MiniMax.
-       TUFF streams routed experts from SSD through a bounded cache, allowing
-       supported models larger than unified memory to run locally. Model size,
-       available memory and disk speed all affect performance.</p>
-    <p>The Background API serves installed models while the app is closed,
-       with Chat Completions and bounded Messages and Responses adapters.
-       Chat Completions keeps reasoning separate from answers. Your client
-       runs function tools. Request timings help explain where time is
-       spent. TUFF uses its own Swift and Metal inference engine.</p>
-    <p>Inference and folder search stay on your Mac. Optional web search sends
-       queries to your chosen provider, and page reading contacts the selected
-       websites. Web and Files are off until you turn them on.</p>
-    <p>After local documents enter a chat, web searches are limited to terms
-       you write in your current message. File sources reveal their location
-       in Finder. Retrieved pages can still be wrong or misleading, so check
-       the sources behind an answer.</p>
-    <p><a href="https://github.com/rexmhall09/TUFF/blob/main/docs/RELEASE_8.0.0_NOTES.md">8.0 release notes</a>
-       · <a href="https://github.com/rexmhall09/TUFF/blob/main/docs/RELEASE_EVIDENCE.md">Measurements and validation limits</a></p>
+    <h2 id="local-models">Private, and built for the Mac</h2>
+    <p>Nine models across Gemma 4, Qwen, GPT-OSS and MiniMax, each with its
+       own tested runtime in an engine written in Swift and Metal for Apple
+       Silicon only. Everything runs on your Mac. Web search, when you turn it
+       on, sends only the query to the provider you choose.</p>
+    <p><a href="https://github.com/rexmhall09/TUFF/releases">Release notes</a>
+       · <a href="https://github.com/rexmhall09/TUFF#how-tuff-compares">How TUFF compares</a></p>
   </section>
 
   <section aria-labelledby="install">
     <h2 id="install">Install with Homebrew</h2>
-    <p>Use TUFF's own tap, hosted in the same repository as the app:</p>
     <pre><code>brew tap rexmhall09/tuff https://github.com/rexmhall09/TUFF.git
 brew install --cask rexmhall09/tuff/tuff</code></pre>
-    <p>This installs the app and the <code>tuff</code> command. To update:</p>
-    <pre><code>brew update
-brew upgrade --cask rexmhall09/tuff/tuff</code></pre>
-    <p>Or download the ZIP above, extract it and move TUFF.app to Applications.
-       You need Apple Silicon and macOS 15 or newer. TUFF is ad-hoc signed and
-       not notarized, so macOS may require first-open approval in Privacy &amp;
-       Security. Homebrew does not bypass that approval.</p>
-    <p><a href="https://github.com/rexmhall09/TUFF#install">Installation details and checksums</a>
-       · <a href="https://docs.brew.sh/Installation">Install Homebrew</a></p>
+    <p>That installs the app and the <code>tuff</code> command. Or download the
+       ZIP above and move TUFF.app to Applications. You need Apple Silicon and
+       macOS 15 or newer. TUFF isn't notarized, so the first time, Control-click
+       it and choose Open.</p>
   </section>
 
   <section aria-labelledby="contribute">
-    <h2 id="contribute">Help make TUFF better</h2>
-    <p>Bug reports, documentation, tests, design and code are all welcome.
-       You can contribute without downloading a model. AI tools are welcome
-       too: understand what you change and personally review your work.</p>
-    <p><a href="https://github.com/rexmhall09/TUFF/blob/main/CONTRIBUTING.md">How to contribute</a>
-       · <a href="https://github.com/rexmhall09/TUFF/issues">Report an issue</a>
-       · <a href="https://github.com/rexmhall09/TUFF/discussions">Ask a question</a></p>
+    <h2 id="contribute">Help out</h2>
+    <p>TUFF is a small open-source project, so help really counts. The easiest
+       thing: run the benchmark on your Mac and share it. I only have one Mac
+       to test on. Bug reports, docs, design and code are all welcome too, and
+       AI-assisted PRs are fine as long as you've checked them yourself.</p>
+    <p><a href="benchmarks/">Leaderboard</a>
+       · <a href="https://github.com/rexmhall09/TUFF/blob/main/CONTRIBUTING.md">How to contribute</a>
+       · <a href="https://github.com/rexmhall09/TUFF/blob/main/docs/ROADMAP.md">Roadmap</a>
+       · <a href="https://github.com/rexmhall09/TUFF/discussions">Discussions</a></p>
   </section>
 
   <footer>

@@ -34,7 +34,8 @@ import SwiftUI
                 destination: destination,
                 model: model,
                 backgroundAPI: backgroundAPI,
-                updateController: updateController)
+                updateController: updateController,
+                benchmarks: BenchmarkController())
                 .frame(
                     width: AppWindowLayout.detailMinimumWidth,
                     height: AppWindowLayout.minimumHeight)
@@ -77,7 +78,8 @@ extension AppWorkspaceSmokeTests {
             destination: .server,
             model: model,
             backgroundAPI: backgroundAPI,
-            updateController: AppUpdateController(infoDictionary: nil))
+            updateController: AppUpdateController(infoDictionary: nil),
+            benchmarks: BenchmarkController())
             .frame(
                 width: AppWindowLayout.detailMinimumWidth,
                 height: AppWindowLayout.minimumHeight)

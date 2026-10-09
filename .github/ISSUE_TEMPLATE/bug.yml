@@ -22,7 +22,7 @@ body:
     attributes:
       label: TUFF version
       description: Shown in TUFF > About TUFF, or run `tuff --version`. For a source build, add the commit (`git rev-parse --short HEAD`).
-      placeholder: 7.3.0, or 7.3.0 at commit abc1234
+      placeholder: 8.0.2, or 8.0.2 at commit abc1234
     validations:
       required: true
   - type: dropdown

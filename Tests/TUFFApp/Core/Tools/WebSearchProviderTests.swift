@@ -101,6 +101,23 @@ enum DuckDuckGoFixtures {
         #expect(request.maximumBytes == AppWebSearchLimits.maximumResponseBytes)
     }
 
+    @Test func duckDuckGoKeepsSitesWhoseNamesOnlyEndLikeItsOwn() {
+        #expect(DuckDuckGoSearchProvider.resolve("https://notduckduckgo.com/page")?.absoluteString
+            == "https://notduckduckgo.com/page")
+        #expect(DuckDuckGoSearchProvider.resolve(
+            "//duckduckgo.com/l/?uddg=https%3A%2F%2Fdocs.example.org%2Factors")?.absoluteString
+            == "https://docs.example.org/actors")
+        #expect(DuckDuckGoSearchProvider.resolve("https://html.DuckDuckGo.com/y.js?ad=1") == nil)
+        #expect(DuckDuckGoSearchProvider.resolve("https://duckduckgo.com/about") == nil)
+    }
+
+    @Test(arguments: [(2 * 1_048_576, "2 MB"), (1_048_576, "1 MB"),
+                      (50_000, "48 KB"), (1_024, "1 KB")])
+    func sizeLimitsReadTheWayTheyAreDocumented(limit: Int, text: String) {
+        #expect(AppHTTPError.oversized(limit: limit).description
+            == "The response was larger than \(text), so reading stopped.")
+    }
+
     @Test func duckDuckGoHonoursTheResultCount() async throws {
         let transport = FixtureHTTPTransport { _ in .html(DuckDuckGoFixtures.ordinary) }
         let response = try await DuckDuckGoSearchProvider(transport: transport).search("x", count: 1)

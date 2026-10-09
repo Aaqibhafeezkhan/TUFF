@@ -161,14 +161,17 @@ def main():
     parser.add_argument('--results', type=Path, required=True)
     parser.add_argument('--version', required=True)
     parser.add_argument('--summary', help='accepted for existing release callers')
+    parser.add_argument('--output', type=Path, default=ROOT / 'scratch/model-validation.md',
+                        help='where to write the report (kept out of the repository)')
     args = parser.parse_args()
     if not re.fullmatch(r'\d+\.\d+\.\d+', args.version):
         parser.error('version must be major.minor.patch')
     report = json.loads(args.results.read_text())
     if not report.get('finished') or not report['results']:
         parser.error('the sweep must finish before rendering its summary')
-    (ROOT / 'docs/MODEL_VALIDATION.md').write_text(render(report, args.version))
-    print('Updated sanitized model validation report')
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text(render(report, args.version))
+    print(f'Wrote the sanitized model validation report to {args.output}')
 
 
 if __name__ == '__main__':

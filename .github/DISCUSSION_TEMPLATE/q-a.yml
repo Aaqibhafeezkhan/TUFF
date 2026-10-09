@@ -1,0 +1,18 @@
+body:
+  - type: markdown
+    attributes:
+      value: |
+        No question is too basic. If something is broken rather than unclear,
+        a [bug report](https://github.com/rexmhall09/TUFF/issues/new?template=bug.yml)
+        gets it fixed faster.
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+    validations:
+      required: true
+  - type: input
+    id: setup
+    attributes:
+      label: TUFF version, Mac and memory (if relevant)
+      placeholder: 8.0.2, MacBook Pro M3, 18 GB
