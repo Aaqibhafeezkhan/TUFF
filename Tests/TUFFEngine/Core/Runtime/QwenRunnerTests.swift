@@ -85,6 +85,32 @@ import Metal
         #expect(runner.lastGreedyToken == first)
     }
 
+    /// The server loads every runner for the fused head and switches to the
+    /// logits head for a sampled request. That request must get real logits
+    /// whose argmax is the fused head's token, and the next greedy request
+    /// must go back to the fused head.
+    @Test func fusedRunnerWritesLogitsForASampledRequest() async throws {
+        let (dir, ctx, runner) = try makeRunner()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let logits = try makeLogits(ctx, vocab: 1024)
+
+        try await runner.produce(token: 1, position: 0, into: logits)
+        let greedy = Int(runner.lastGreedyToken)
+
+        runner.reset()
+        runner.selectHead(pureGreedy: false)
+        #expect(!runner.usesFusedGreedyHead)
+        let values = logits.contents().bindMemory(to: Float16.self, capacity: 1024)
+        for index in 0..<1024 { values[index] = .nan }
+        try await runner.produce(token: 1, position: 0, into: logits)
+        let written = (0..<1024).map { values[$0] }
+        #expect(written.allSatisfy { !$0.isNaN })
+        #expect(written[greedy] == written.max())
+
+        runner.selectHead(pureGreedy: true)
+        #expect(runner.usesFusedGreedyHead)
+    }
+
     /// Chunked prefill smoke: one chunk through the qwen prefill path
     /// (batched GDN projections + conv tail carry, packed q_proj split,
     /// sub-dim RoPE, no V norm, ones router scales, residual-add tail),

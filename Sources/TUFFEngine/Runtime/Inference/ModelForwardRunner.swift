@@ -226,6 +226,10 @@ public final class ModelForwardRunner: ChunkedPrefillRunner,
         }
     }
 
+    func selectHead(pureGreedy: Bool) {
+        if case .affine(let runner) = backend { runner.selectHead(pureGreedy: pureGreedy) }
+    }
+
     public var totalIoNanos: UInt64 {
         switch backend {
         case .affine(let runner): return runner.totalIoNanos

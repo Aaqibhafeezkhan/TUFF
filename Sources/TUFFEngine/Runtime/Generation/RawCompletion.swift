@@ -132,6 +132,9 @@ extension GenerationConfig {
 protocol GreedyHeadReporting: Sendable {
     var usesFusedGreedyHead: Bool { get }
     var lastGreedyToken: UInt32 { get }
+    /// Chooses the head for the next request. A runner loaded for the fused
+    /// head writes logits while `pureGreedy` is false.
+    func selectHead(pureGreedy: Bool)
 }
 
 extension RealForwardRunner: GreedyHeadReporting {}
@@ -142,9 +145,8 @@ extension RealForwardRunner: GreedyHeadReporting {}
 /// ordering are shared by both front ends.
 ///
 /// When the producer runs the fused lm_head (`RealForwardRunner` default) the
-/// logits buffer is never written; the loop then requires a pure-greedy config
-/// and reads `lastGreedyToken`. Callers with sampling configs must construct
-/// the runner with `forceLogitsHead: true`.
+/// logits buffer is never written and the loop reads `lastGreedyToken`. A
+/// sampling config switches that runner to its logits head for the request.
 public func runRawCompletion(producer: any LogitProducer,
                              tokenizer: GFTokenizer,
                              promptIds: [Int32],
@@ -173,6 +175,7 @@ public func runRawCompletion(producer: any LogitProducer,
     #endif
 
     let fusedRunner = producer as? any GreedyHeadReporting
+    fusedRunner?.selectHead(pureGreedy: config.isPureGreedy)
     let fusedGreedy = fusedRunner?.usesFusedGreedyHead == true
     guard !fusedGreedy || config.isPureGreedy else {
         throw PrefillError.unsupportedPrefillSeed(

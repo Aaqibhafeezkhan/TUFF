@@ -123,7 +123,9 @@ public struct ServerInstalledModels: Sendable {
             prefillEnabled: descriptor.family == .gptOss
                 || slots >= RuntimeConfiguration.minimumExpertCacheSlotsForChunkedPrefill,
             prefillChunkTokens: descriptor.recommendedPrefillChunkTokens(on: device),
-            forceLogitsHead: true)
+            // The fused greedy head; a sampled request switches the runner to
+            // its logits head for that request.
+            forceLogitsHead: false)
     }
 
     public static func dialect(for descriptor: TUFFModelDescriptor) -> ChatDialect {

@@ -358,9 +358,16 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
 
     /// Per-instance head and RDADVISE modes. The fused head (default) skips the
     /// 512 KB logits write and leaves a greedy argmax in `lastGreedyToken`;
-    /// callers that sample from the logits buffer (non-greedy configs) must pass
-    /// `forceLogitsHead: true` or they read a never-written buffer.
-    private let useFusedGreedyHead: Bool
+    /// callers that sample from the logits buffer (non-greedy configs) must
+    /// either pass `forceLogitsHead: true` or turn the fused head off for the
+    /// request with `selectHead(pureGreedy:)`, or they read a never-written
+    /// buffer.
+    private let fusedGreedyHeadAvailable: Bool
+    /// Both heads are built at load, so one runner can serve a greedy request
+    /// and then a sampled one. The head writes no KV, so saved state carries
+    /// over between them.
+    private var fusedGreedyHeadSelected = true
+    private var useFusedGreedyHead: Bool { fusedGreedyHeadAvailable && fusedGreedyHeadSelected }
     private let prefillAttentionPath: RuntimePrefillAttentionPath
     public let rdadviseEnabled: Bool
     public let rdadvisePolicyMode: RDAdvicePolicyMode
@@ -412,7 +419,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
         // architecture whose "final norm" is a whole hyper-connection mixer —
         // two projections and a gated collapse over four streams — has nothing
         // to fold, so it takes the unfused path.
-        self.useFusedGreedyHead = runtimeConfiguration.headPath == .fusedRows
+        self.fusedGreedyHeadAvailable = runtimeConfiguration.headPath == .fusedRows
             && !config.hyperConnection.isEnabled
         self.prefillAttentionPath = runtimeConfiguration.prefillAttentionPath
         let useFP16Ring = runtimeConfiguration.fp16RingEnabled
@@ -934,6 +941,10 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
     public private(set) var totalRoutedExpertCacheMisses: UInt64 = 0
     public private(set) var lastGreedyToken: UInt32 = 0
     public var usesFusedGreedyHead: Bool { useFusedGreedyHead }
+
+    public func selectHead(pureGreedy: Bool) {
+        fusedGreedyHeadSelected = pureGreedy
+    }
 
     /// Projections encoded through the small-block prefill path since the
     /// runner was created. Zero whenever the policy is off.
