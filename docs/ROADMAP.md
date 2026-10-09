@@ -7,13 +7,16 @@ change what I work on next.
 
 ## Known limits
 
-- **Flash Next is capped at 2,048 tokens of context.** Past that, the model
-  uses a sparse attention indexer (QSA) that TUFF doesn't implement yet.
+- **Auto can pick too much context for Gemma 4 12B on 16 GB.** It chose
+  131K tokens, and decode dropped to about 0.3 tok/s under memory pressure,
+  far below what the same model does at 4K. Auto's estimate needs to account
+  for this.
 - **Flash Next's first prompt got a bit slower in 8.0** (about 0.3 s), after
   shader compilation was split by model. Cause unknown.
-- **GPT-OSS rereads the whole prompt after a tool call.** Gemma and Flash
-  Next continue from saved state; GPT-OSS's Harmony format doesn't yet, which
-  makes agent loops slow.
+- **GPT-OSS rereads the whole conversation on every turn.** Gemma, Qwen and
+  Flash Next continue from saved state; GPT-OSS's Harmony format doesn't yet.
+  On GPT-OSS 120B with a 16 GB Mac, a 1,400-token follow-up takes about 15
+  minutes to start, which makes long chats and agents impractical.
 - **Search is untested on GPT-OSS 120B and MiniMax M2.7.**
 - **Small-block prefill is off by default** until it's shown to speed up real
   requests.
@@ -39,5 +42,5 @@ change what I work on next.
 2. **Pick up a [good first issue](https://github.com/rexmhall09/TUFF/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22).**
 3. **Try search** on GPT-OSS 120B or MiniMax if your Mac can run them.
 4. **Polish the app.** Accessibility and small UI fixes are easy to review.
-5. **Help with a model or the QSA indexer** if you like GPU work. Open an
-   issue first so we can plan it.
+5. **Help with a model or GPT-OSS prompt reuse** if you like engine work.
+   Open an issue first so we can plan it.
