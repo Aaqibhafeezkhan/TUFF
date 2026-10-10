@@ -36,9 +36,9 @@ public struct RawDecodeResult: Sendable {
     /// this list, or the decoder consumes the same token twice.
     public let undeliveredBoundaryTokenIDs: [Int32]
     public let speculative: SpeculativeDecodeMetrics
-    /// The runner's checkpoint at the end of the prompt, when the caller
-    /// asked for one and the runner can take it.
-    public var prefixCheckpoint: RunnerStateSnapshot?
+    /// The runner's checkpoints at the prompt positions the caller asked
+    /// for, in order, when the runner can take them.
+    public var prefixCheckpoints: [RunnerStateSnapshot] = []
 
     public init(prefillTokens: Int,
                 cachedPromptTokens: Int,
@@ -160,7 +160,7 @@ public func runRawCompletion(producer: any LogitProducer,
                              prefillConfig: PrefillRuntimeConfig = .defaultChunked,
                              start: RawCompletionStart = .reset,
                              draftProducer: (any DraftTokenProducer)? = nil,
-                             capturePrefixCheckpoint: Bool = false,
+                             prefixCheckpointPositions: [Int] = [],
                              shouldStop: () -> Bool = { false },
                              onProgress: (RawDecodeProgress) -> Void) async throws -> RawDecodeResult {
     try config.validate()
@@ -241,6 +241,20 @@ public func runRawCompletion(producer: any LogitProducer,
     var position = cachedPromptTokens
     var prefillSeed: PrefillSeed?
     let prefillTokens = promptIds[cachedPromptTokens...]
+
+    // Checkpoints are taken as the prefill passes each requested position. A
+    // checkpoint that cannot be taken only costs a later request its reuse.
+    let checkpointing = (producer as? any PrefixCheckpointingRunner)
+        .flatMap { $0.supportsPrefixCheckpoints ? $0 : nil }
+    let checkpointPositions = checkpointing == nil || multimodalInput != nil ? [] : Array(Set(
+        prefixCheckpointPositions.filter { $0 > cachedPromptTokens && $0 <= promptIds.count }
+    )).sorted()
+    var prefixCheckpoints: [RunnerStateSnapshot] = []
+    func takeCheckpoint() {
+        if let snapshot = try? checkpointing?.capturePrefixCheckpoint() {
+            prefixCheckpoints.append(snapshot)
+        }
+    }
     switch (multimodalInput, prefillConfig.mode) {
     case (.some(let input), .chunked) where producer is any MultimodalPrefillRunner:
         let multimodal = producer as! any MultimodalPrefillRunner
@@ -279,13 +293,24 @@ public func runRawCompletion(producer: any LogitProducer,
         .supportsChunkedPrefill == true:
         let chunked = producer as! any ChunkedPrefillRunner
         let mode: PrefillOutputMode = fusedGreedy ? .greedyIfAvailable : .logits
-        let result = try await chunked.prefillChunked(tokens: prefillTokens,
-                                                      startPosition: position,
-                                                      outputMode: mode,
-                                                      config: prefillConfig,
-                                                      into: scratch.logits) { done in
-            onProgress(.prefill(done: cachedPromptTokens + done, total: promptIds.count))
+        // A checkpoint inside the prompt splits the prefill there, so the
+        // runner is exactly at that position when it is taken.
+        var segmentStart = cachedPromptTokens
+        var segmentResult: PrefillResult?
+        for segmentEnd in checkpointPositions.filter({ $0 < promptIds.count }) + [promptIds.count] {
+            let offset = segmentStart
+            segmentResult = try await chunked.prefillChunked(
+                tokens: promptIds[segmentStart..<segmentEnd],
+                startPosition: segmentStart,
+                outputMode: mode,
+                config: prefillConfig,
+                into: scratch.logits) { done in
+                onProgress(.prefill(done: offset + done, total: promptIds.count))
+            }
+            segmentStart = segmentEnd
+            if segmentEnd < promptIds.count { takeCheckpoint() }
         }
+        let result = segmentResult!
         if mode == .logits, result.seed != .logitsWritten {
             throw PrefillError.unsupportedPrefillSeed(
                 "RawCompletion chunked prefill requested logits but producer returned \(result.seed)")
@@ -309,6 +334,9 @@ public func runRawCompletion(producer: any LogitProducer,
             position += 1
             history.append(t)
             onProgress(.prefill(done: position, total: promptIds.count))
+            if position < promptIds.count, checkpointPositions.contains(position) {
+                takeCheckpoint()
+            }
         }
     }
 
@@ -337,14 +365,8 @@ public func runRawCompletion(producer: any LogitProducer,
         draftProducer?.reset()
     }
 
-    // Taken before the first generated token touches the KV. A checkpoint
-    // that cannot be taken only costs a later request its reuse.
-    var prefixCheckpoint: RunnerStateSnapshot?
-    if capturePrefixCheckpoint,
-       let checkpointing = producer as? any PrefixCheckpointingRunner,
-       checkpointing.supportsPrefixCheckpoints {
-        prefixCheckpoint = try? checkpointing.capturePrefixCheckpoint()
-    }
+    // The end of the prompt, before the first generated token touches the KV.
+    if checkpointPositions.last == promptIds.count { takeCheckpoint() }
 
     let decodeStart = Date()
     let prefillSeconds = decodeStart.timeIntervalSince(prefillStart)
@@ -688,7 +710,7 @@ public func runRawCompletion(producer: any LogitProducer,
                                normalFallbackDecodes: speculativeFallbackDecodes,
                                adaptiveDisabled: speculativeUnavailableForAuto
                                    || speculativeController.disabled))
-    result.prefixCheckpoint = prefixCheckpoint
+    result.prefixCheckpoints = prefixCheckpoints
     return result
 }
 

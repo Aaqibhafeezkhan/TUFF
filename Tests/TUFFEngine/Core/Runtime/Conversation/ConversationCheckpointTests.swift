@@ -99,10 +99,10 @@ import Metal
         return ConversationCache.entry(
             domain: domain, transcript: transcript(firstTurn), content: "Paris.",
             thinking: "Easy one.", calls: [], result: result,
-            prefixCheckpoint: checkpoint
-                ? ConversationPrefixCheckpoint(tokenIDs: prompt,
-                                               snapshot: runner.snapshot(at: prompt.count))
-                : nil)
+            prefixCheckpoints: checkpoint
+                ? [ConversationPrefixCheckpoint(tokenIDs: prompt,
+                                                snapshot: runner.snapshot(at: prompt.count))!]
+                : [])
     }
 
     @Test func aFollowUpAfterAFinalAnswerResumesWhereTheTurnBegan() async throws {
@@ -157,10 +157,10 @@ import Metal
             calls: [ParsedToolCall(id: "c", name: "f", arguments: .object([:]),
                                    argumentsJSON: "{}")],
             result: result,
-            prefixCheckpoint: ConversationPrefixCheckpoint(
-                tokenIDs: other, snapshot: runner.snapshot(at: other.count)))
+            prefixCheckpoints: [ConversationPrefixCheckpoint(
+                tokenIDs: other, snapshot: runner.snapshot(at: other.count))!])
         #expect(entry != nil)
-        #expect(entry?.prefixCheckpoint == nil)
+        #expect(entry?.prefixCheckpoints.isEmpty == true)
     }
 
     @Test func theStoreRewindsTheRunnerBeforeResuming() async throws {
@@ -224,5 +224,104 @@ import Metal
         #expect(plan.start == .resume(cachedPromptTokens: prompt.count))
         #expect(runner.tag == "A")
         #expect(runner.position == prompt.count)
+    }
+
+    // MARK: Shared instructions
+
+    static let agentInstructions = String(repeating: "Follow the project's conventions. ", count: 60)
+    static let readTool = GFTokenizer.FunctionDefinition(
+        name: "read_file", description: "Read a file",
+        parameters: .object(["type": .string("object"),
+                             "properties": .object(["path": .object(["type": .string("string")])])]))
+
+    static func agentTranscript(_ messages: [GFTokenizer.Message]) -> ConversationTranscript {
+        ConversationTranscript(messages: messages, imageIdentities: messages.map { _ in [] },
+                               tools: [readTool], reasoningEffort: .low, harmonyCurrentDate: date)
+    }
+
+    static func agentRender(_ tokenizer: GFTokenizer, _ messages: [GFTokenizer.Message]) throws -> [Int32] {
+        try tokenizer.encodeHarmonyChat(messages: messages, tools: [readTool],
+                                        reasoningEffort: .low, currentDate: date)
+    }
+
+    static func session(_ question: String) -> [GFTokenizer.Message] {
+        [.init(role: .system, content: agentInstructions), .init(role: .user, content: question)]
+    }
+
+    /// A finished agent session with checkpoints where its instructions end
+    /// and where its turn began, published as the runner's active state.
+    static func finishSession(_ store: ConversationStateStore, runner: CheckpointRunner,
+                              tokenizer: GFTokenizer, question: String, tag: String) throws -> Int {
+        let messages = session(question)
+        let prompt = try agentRender(tokenizer, messages)
+        let instructions = try tokenizer.harmonyInstructionPrefix(
+            messages: messages, tools: [readTool], reasoningEffort: .low, currentDate: date)
+        #expect(prompt.starts(with: instructions))
+        let kv = prompt + tokenizer.encode("<|channel|>final<|message|>Done.", addBOS: false)
+        runner.position = kv.count
+        runner.tag = tag
+        let result = RawDecodeResult(
+            prefillTokens: prompt.count, cachedPromptTokens: 0,
+            computedPrefillTokens: prompt.count, prefillSeconds: 0, newTokens: 5,
+            decodeSeconds: 0, reason: .eos, kvPosition: kv.count, kvBackedTokenIDs: kv,
+            uncommittedBoundaryTokenIDs: [try #require(tokenizer.harmonyTokenIDs?.return)])
+        store.publish(ConversationCache.entry(
+            domain: domain, transcript: agentTranscript(messages), content: "Done.",
+            calls: [], result: result,
+            prefixCheckpoints: [instructions, prompt].map {
+                ConversationPrefixCheckpoint(tokenIDs: $0, snapshot: runner.snapshot(at: $0.count))!
+            }))
+        return instructions.count
+    }
+
+    @Test func aNewSessionWithTheSameInstructionsSkipsThem() async throws {
+        let tokenizer = try await Self.harmony()
+        let store = ConversationStateStore(budgetBytes: 1 << 20, memoryIsPressured: { false })
+        let runner = CheckpointRunner()
+        let shared = try Self.finishSession(store, runner: runner, tokenizer: tokenizer,
+                                            question: "Fix the build.", tag: "first")
+        let second = Self.session("Add a test.")
+        let rendered = try Self.agentRender(tokenizer, second)
+        let plan = store.plan(
+            domain: Self.domain, transcript: Self.agentTranscript(second),
+            renderedPromptIDs: rendered, tokenizer: tokenizer, modelVariant: nil,
+            conversationKey: nil, runner: runner, allowsTextBridge: false)
+        #expect(plan.match == .hit(effectivePromptIDs: rendered, cachedPromptTokens: shared))
+        #expect(runner.position == shared)
+        // The first session was copied out, not overwritten.
+        #expect(store.retainedEntries.count == 1)
+        #expect(store.active == nil)
+    }
+
+    @Test func theFirstSessionStillContinuesAfterASecondOneShared() async throws {
+        let tokenizer = try await Self.harmony()
+        let store = ConversationStateStore(budgetBytes: 1 << 20, memoryIsPressured: { false })
+        let runner = CheckpointRunner()
+        _ = try Self.finishSession(store, runner: runner, tokenizer: tokenizer,
+                                   question: "Fix the build.", tag: "first")
+        let second = Self.session("Add a test.")
+        _ = store.plan(
+            domain: Self.domain, transcript: Self.agentTranscript(second),
+            renderedPromptIDs: try Self.agentRender(tokenizer, second), tokenizer: tokenizer,
+            modelVariant: nil, conversationKey: nil, runner: runner, allowsTextBridge: false)
+        _ = try Self.finishSession(store, runner: runner, tokenizer: tokenizer,
+                                   question: "Add a test.", tag: "second")
+
+        let followUp = Self.session("Fix the build.")
+            + [.init(role: .assistant, content: "Done."), .init(role: .user, content: "Thanks.")]
+        let firstPrompt = try Self.agentRender(tokenizer, Self.session("Fix the build."))
+        let plan = store.plan(
+            domain: Self.domain, transcript: Self.agentTranscript(followUp),
+            renderedPromptIDs: try Self.agentRender(tokenizer, followUp), tokenizer: tokenizer,
+            modelVariant: nil, conversationKey: nil, runner: runner, allowsTextBridge: false)
+        // The first session's own state beats the prefix it shares with the
+        // second: here its answer has no reasoning, so all of it is reused.
+        #expect(plan.source == .retained)
+        guard case .resume(let cached) = plan.start else {
+            Issue.record("expected a resume, got \(plan.start)")
+            return
+        }
+        #expect(cached >= firstPrompt.count)
+        #expect(runner.tag == "first")
     }
 }

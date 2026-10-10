@@ -103,11 +103,12 @@ public struct ConversationCacheEntry: Sendable, Equatable {
     /// orders the search and decides which entry a new one replaces; a match
     /// is always established from tokens and messages.
     public let conversationKey: String?
-    /// Where this conversation's current user turn began, for a runner that
-    /// can return there. A later request whose fresh render starts with
-    /// exactly these tokens resumes from the checkpoint instead of from
-    /// scratch, even when the template rewrites what came after it.
-    public var prefixCheckpoint: ConversationPrefixCheckpoint? = nil
+    /// Points inside this KV a runner can return to, shortest first: where
+    /// the system prompt and tools end, and where the current user turn
+    /// began. A later request whose fresh render starts with exactly one of
+    /// these token runs resumes there instead of from scratch, even when the
+    /// template rewrites what came after it or it is another conversation.
+    public var prefixCheckpoints: [ConversationPrefixCheckpoint] = []
 
     public var inputMessages: [GFTokenizer.Message] { transcript.messages }
     public var tools: [GFTokenizer.FunctionDefinition] { transcript.tools }
@@ -184,7 +185,7 @@ public enum ConversationCache {
         result: RawDecodeResult,
         stopStringFiltered: Bool = false,
         conversationKey: String? = nil,
-        prefixCheckpoint: ConversationPrefixCheckpoint? = nil
+        prefixCheckpoints: [ConversationPrefixCheckpoint] = []
     ) -> ConversationCacheEntry? {
         guard result.kvPosition == result.kvBackedTokenIDs.count,
               !result.kvBackedTokenIDs.isEmpty,
@@ -196,7 +197,7 @@ public enum ConversationCache {
                 // Harmony's `<|return|>` ends a turn as an EOS. Only a
                 // checkpoint can continue past it, and it never reads the
                 // generated tokens, so such an entry is kept only with one.
-                || (result.reason == .eos && prefixCheckpoint != nil) else {
+                || (result.reason == .eos && !prefixCheckpoints.isEmpty) else {
             // A rejected publish leaves nothing for the next request to match,
             // so a single event reads as a permanently dead cache.
             logConversationCacheMiss(
@@ -225,11 +226,20 @@ public enum ConversationCache {
             uncommittedBoundaryTokenIDs: result.uncommittedBoundaryTokenIDs,
             kvPosition: result.kvPosition,
             conversationKey: conversationKey,
-            prefixCheckpoint: prefixCheckpoint.flatMap {
-                // A checkpoint must lie inside the KV this entry describes.
-                $0.position < result.kvPosition
-                    && result.kvBackedTokenIDs.starts(with: $0.tokenIDs) ? $0 : nil
-            })
+            prefixCheckpoints: validCheckpoints(prefixCheckpoints, result: result))
+    }
+
+    /// The checkpoints that lie inside the KV this result describes, one per
+    /// position, shortest first.
+    static func validCheckpoints(_ checkpoints: [ConversationPrefixCheckpoint],
+                                 result: RawDecodeResult) -> [ConversationPrefixCheckpoint] {
+        var byPosition: [Int: ConversationPrefixCheckpoint] = [:]
+        for checkpoint in checkpoints
+        where checkpoint.position < result.kvPosition
+            && result.kvBackedTokenIDs.starts(with: checkpoint.tokenIDs) {
+            byPosition[checkpoint.position] = byPosition[checkpoint.position] ?? checkpoint
+        }
+        return byPosition.values.sorted { $0.position < $1.position }
     }
 
     /// Whether `transcript` continues `entry`, and with which prompt.
@@ -271,8 +281,7 @@ public enum ConversationCache {
         transcript: ConversationTranscript,
         renderedPromptIDs: [Int32]?
     ) -> ConversationCacheMatch? {
-        guard let entry, let checkpoint = entry.prefixCheckpoint,
-              let renderedPromptIDs,
+        guard let entry, let renderedPromptIDs,
               entry.domain == domain,
               ConversationCacheIdentity.tools(entry.transcript.tools, transcript.tools),
               entry.transcript.reasoning == transcript.reasoning,
@@ -282,9 +291,11 @@ public enum ConversationCache {
               let requestIdentities = transcript.imageIdentities,
               requestIdentities.allSatisfy(\.isEmpty),
               entry.transcript.imageIdentities?.allSatisfy(\.isEmpty) == true,
-              checkpoint.position < entry.kvPosition,
-              renderedPromptIDs.count > checkpoint.position,
-              renderedPromptIDs.starts(with: checkpoint.tokenIDs) else {
+              let checkpoint = entry.prefixCheckpoints.last(where: {
+                  $0.position < entry.kvPosition
+                      && renderedPromptIDs.count > $0.position
+                      && renderedPromptIDs.starts(with: $0.tokenIDs)
+              }) else {
             return nil
         }
         return .hit(effectivePromptIDs: renderedPromptIDs,

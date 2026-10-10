@@ -770,7 +770,7 @@ actor RealInferenceSession {
                 multimodalInput: multimodalInput,
                 config: config, context: ctx, scratch: scratch,
                 prefillConfig: prefillConfig, start: completionStart,
-                capturePrefixCheckpoint: capturesTurnCheckpoint) { @Sendable event in
+                prefixCheckpointPositions: capturesTurnCheckpoint ? [promptIds.count] : []) { @Sendable event in
                 switch event {
                 case .prefill(let done, let total):
                     if done == total {
@@ -843,9 +843,10 @@ actor RealInferenceSession {
                         },
                         result: result,
                         conversationKey: request.conversationKey,
-                        prefixCheckpoint: result.prefixCheckpoint.flatMap {
-                            ConversationPrefixCheckpoint(tokenIDs: promptIds, snapshot: $0)
-                        } ?? plannedEntry?.prefixCheckpoint)
+                        prefixCheckpoints: result.prefixCheckpoints.compactMap {
+                            ConversationPrefixCheckpoint(
+                                tokenIDs: Array(promptIds.prefix($0.position)), snapshot: $0)
+                        } + (plannedEntry?.prefixCheckpoints ?? []))
                     : nil)
             }
             progress.cachedPromptTokens = result.cachedPromptTokens

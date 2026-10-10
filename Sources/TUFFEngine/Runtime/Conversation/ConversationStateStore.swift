@@ -101,7 +101,8 @@ public final class ConversationStateStore {
 
     public var retainedBytes: Int {
         retained.reduce(0) {
-            $0 + $1.snapshot.byteCount + ($1.entry.prefixCheckpoint?.snapshot.byteCount ?? 0)
+            $0 + $1.snapshot.byteCount
+                + $1.entry.prefixCheckpoints.reduce(0) { $0 + $1.snapshot.byteCount }
         }
     }
     public var retainedEntries: [ConversationCacheEntry] { retained.map(\.entry) }
@@ -139,20 +140,20 @@ public final class ConversationStateStore {
             entry: active, domain: domain, transcript: transcript,
             renderedPromptIDs: renderedPromptIDs, tokenizer: tokenizer,
             modelVariant: modelVariant, allowsTextBridge: allowsTextBridge)
-        if activeMatch.isHit, let entry = active {
+        // Continuing the active conversation where it stopped beats anything.
+        if activeMatch.isHit, let entry = active,
+           Self.cachedTokens(activeMatch) == entry.kvPosition {
             counters.lastLookupSeconds = Self.seconds(since: lookupStarted)
-            guard rewindIfNeeded(entry: entry, match: activeMatch, runner: runner) else {
-                active = nil
-                counters.misses += 1
-                counters.lastMissReason = .unusableEntry
-                return Plan(match: .miss(.unusableEntry), source: .cold)
-            }
             counters.activeHits += 1
             log(.active, activeMatch)
             return Plan(match: activeMatch, source: .active)
         }
 
-        var chosen: (index: Int, match: ConversationCacheMatch)?
+        // Otherwise take whichever conversation lets the most tokens be
+        // reused. A checkpoint can come from another conversation that shares
+        // only a system prompt, so the search does not stop at the first hit.
+        var best: (index: Int?, match: ConversationCacheMatch)?
+        if activeMatch.isHit { best = (nil, activeMatch) }
         let order = retained.indices.sorted { lhs, rhs in
             let left = retained[lhs], right = retained[rhs]
             let leftKey = conversationKey != nil && left.entry.conversationKey == conversationKey
@@ -165,15 +166,41 @@ public final class ConversationStateStore {
                 entry: retained[index].entry, domain: domain, transcript: transcript,
                 renderedPromptIDs: renderedPromptIDs, tokenizer: tokenizer,
                 modelVariant: modelVariant, allowsTextBridge: allowsTextBridge)
-            if match.isHit {
-                chosen = (index, match)
-                break
+            if match.isHit, Self.cachedTokens(match) > best.map({ Self.cachedTokens($0.match) }) ?? 0 {
+                best = (index, match)
             }
         }
         counters.lastLookupSeconds = Self.seconds(since: lookupStarted)
 
-        let restoring = chosen.map { retained.remove(at: $0.index) }
-        displaceActive(runner: runner, reservedBytes: restoring?.snapshot.byteCount ?? 0)
+        if let best, best.index == nil, let entry = active {
+            // A checkpoint in the active conversation. Another conversation
+            // that only shares its system prompt is copied out first, so it
+            // can still continue later.
+            if !Self.continues(transcript, entry) {
+                displaceActive(runner: runner, reservedBytes: 0)
+            }
+            active = nil
+            guard rewindIfNeeded(entry: entry, match: best.match, runner: runner) else {
+                counters.misses += 1
+                counters.lastMissReason = .unusableEntry
+                return Plan(match: .miss(.unusableEntry), source: .cold)
+            }
+            active = Self.continues(transcript, entry) ? entry : nil
+            counters.activeHits += 1
+            log(.active, best.match)
+            return Plan(match: best.match, source: .active)
+        }
+
+        // A retained conversation is consumed when this request continues it,
+        // and only copied from when it shares a prefix with a new one.
+        let chosen = best.flatMap { candidate in candidate.index.map { (index: $0, match: candidate.match) } }
+        let keepsRetained = chosen.map {
+            let entry = retained[$0.index].entry
+            return Self.cachedTokens($0.match) < entry.kvPosition && !Self.continues(transcript, entry)
+        } ?? false
+        let restoring = chosen.map { keepsRetained ? retained[$0.index] : retained.remove(at: $0.index) }
+        displaceActive(runner: runner,
+                       reservedBytes: keepsRetained ? 0 : restoring?.snapshot.byteCount ?? 0)
 
         guard let restoring, let match = chosen?.match else {
             counters.misses += 1
@@ -192,7 +219,7 @@ public final class ConversationStateStore {
                 return Plan(match: .miss(.unusableEntry), source: .cold)
             }
             counters.lastRestoreSeconds = Self.seconds(since: started)
-            active = restoring.entry
+            active = keepsRetained ? nil : restoring.entry
             counters.retainedHits += 1
             log(.retained, match)
             return Plan(match: match, source: .retained)
@@ -235,6 +262,23 @@ public final class ConversationStateStore {
         retained.removeAll()
     }
 
+    static func cachedTokens(_ match: ConversationCacheMatch) -> Int {
+        switch match {
+        case .hit(_, let cached), .renderThenResume(let cached): return cached
+        case .miss: return 0
+        }
+    }
+
+    /// Whether the request carries on `entry`'s conversation rather than
+    /// starting another one that happens to share its opening tokens.
+    static func continues(_ transcript: ConversationTranscript,
+                          _ entry: ConversationCacheEntry) -> Bool {
+        transcript.messages.count > entry.transcript.messages.count
+            && ConversationCacheIdentity.messages(
+                transcript.messages.prefix(entry.transcript.messages.count),
+                entry.transcript.messages)
+    }
+
     /// A checkpoint hit resumes before the end of the entry's KV, so the
     /// runner returns to the checkpoint first. False means the runner could
     /// not, and has been reset.
@@ -243,7 +287,7 @@ public final class ConversationStateStore {
                                 runner: any StateSnapshottingRunner & ContinuableLogitProducer)
         -> Bool {
         guard case .hit(_, let cached) = match, cached < entry.kvPosition else { return true }
-        guard let checkpoint = entry.prefixCheckpoint, checkpoint.position == cached,
+        guard let checkpoint = entry.prefixCheckpoints.first(where: { $0.position == cached }),
               let checkpointing = runner as? any PrefixCheckpointingRunner else {
             logConversationCacheMiss("checkpoint hit without a usable checkpoint")
             return false

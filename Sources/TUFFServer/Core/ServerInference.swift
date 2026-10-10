@@ -1099,12 +1099,9 @@ public actor ServerModelSession: ServerInferenceBackend {
             tokenizer: tokenizer, tools: request.tools,
             reasoning: request.reasoning)
 
-        // GPT-OSS rewrites a finished turn when the next one is rendered, so
-        // a user turn records where it began: the next message resumes there
-        // instead of from scratch. Tool rounds inside the turn keep it.
-        let capturesTurnCheckpoint = promptCacheMode == .singlePrefix
-            && chatDialect == .harmony && multimodalInput == nil
-            && request.messages.last?.role == .user
+        let checkpointPositions = promptCacheMode == .singlePrefix && multimodalInput == nil
+            ? harmonyCheckpointPositions(request: request, effectivePromptIDs: effectivePromptIDs)
+            : []
 
         completionStarted = true
         let decoded = try await Self.decodeStructuredCompletion(
@@ -1121,7 +1118,7 @@ public actor ServerModelSession: ServerInferenceBackend {
             scratch: scratch,
             prefillConfig: prefillConfig,
             start: completionStart,
-            capturePrefixCheckpoint: capturesTurnCheckpoint,
+            prefixCheckpointPositions: checkpointPositions,
             onEvent: onEvent)
         let result = decoded.result
         let reason: String
@@ -1146,9 +1143,10 @@ public actor ServerModelSession: ServerInferenceBackend {
                 result: result,
                 stopStringFiltered: decoded.stopStringFiltered,
                 conversationKey: request.promptCacheKey,
-                prefixCheckpoint: result.prefixCheckpoint.flatMap {
-                    ConversationPrefixCheckpoint(tokenIDs: effectivePromptIDs, snapshot: $0)
-                } ?? plannedEntry?.prefixCheckpoint))
+                prefixCheckpoints: result.prefixCheckpoints.compactMap {
+                    ConversationPrefixCheckpoint(
+                        tokenIDs: Array(effectivePromptIDs.prefix($0.position)), snapshot: $0)
+                } + (plannedEntry?.prefixCheckpoints ?? [])))
         } else {
             conversations.invalidateActive()
         }
@@ -1169,6 +1167,35 @@ public actor ServerModelSession: ServerInferenceBackend {
                                 ? nil : min(decoded.reasoningTokens, result.newTokens)),
             timingSeconds: timingSeconds)
     }
+
+    /// Where a GPT-OSS request takes checkpoints. Where the instructions and
+    /// tools end lets a new conversation with the same system prompt skip
+    /// them; an agent's is often thousands of tokens. Where a user turn's
+    /// prompt ends lets the next message resume there, because Harmony
+    /// rewrites a finished turn when the next one is rendered. Tool rounds
+    /// keep both.
+    func harmonyCheckpointPositions(request: ValidatedChatRequest,
+                                    effectivePromptIDs: [Int32]) -> [Int] {
+        guard chatDialect == .harmony,
+              let effort = request.reasoningEffort,
+              let date = request.harmonyCurrentDate else { return [] }
+        var positions: [Int] = []
+        if let instructions = try? tokenizer.harmonyInstructionPrefix(
+            messages: request.messages, tools: request.tools,
+            reasoningEffort: effort, currentDate: date),
+           instructions.count >= Self.minimumSharedPrefixTokens,
+           effectivePromptIDs.count > instructions.count,
+           effectivePromptIDs.starts(with: instructions) {
+            positions.append(instructions.count)
+        }
+        if request.messages.last?.role == .user {
+            positions.append(effectivePromptIDs.count)
+        }
+        return positions
+    }
+
+    /// Shorter instructions cost less to read than the checkpoint saves.
+    static let minimumSharedPrefixTokens = 256
 
     private func renderPrompt(_ request: ValidatedChatRequest) throws -> [Int32] {
         let promptIDs: [Int32]
@@ -1244,7 +1271,7 @@ extension ServerModelSession {
         scratch: RawCompletionScratch,
         prefillConfig: PrefillRuntimeConfig,
         start: RawCompletionStart,
-        capturePrefixCheckpoint: Bool = false,
+        prefixCheckpointPositions: [Int] = [],
         onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
     ) async throws -> ServerStructuredDecodeOutcome {
         let state = ServerDecodeState(
@@ -1283,7 +1310,7 @@ extension ServerModelSession {
             scratch: scratch,
             prefillConfig: prefillConfig,
             start: start,
-            capturePrefixCheckpoint: capturePrefixCheckpoint,
+            prefixCheckpointPositions: prefixCheckpointPositions,
             shouldStop: { state.shouldStop }) { @Sendable progress in
                 guard state.decodingError == nil else { return }
                 do {
