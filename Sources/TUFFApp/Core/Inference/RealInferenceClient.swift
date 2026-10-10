@@ -664,6 +664,7 @@ actor RealInferenceSession {
                 conversationKey: request.conversationKey,
                 runner: runner,
                 allowsTextBridge: Self.allowsTextBridge(request))
+            let plannedEntry = plan.match.isHit ? conversations.active : nil
             if case .hit(let effective, _) = plan.match, effective.count < runner.maxContext {
                 promptIds = effective
                 multimodalInput = nil
@@ -756,12 +757,20 @@ actor RealInferenceSession {
                 }
             }
 
+            // GPT-OSS rewrites a finished turn when the next one is rendered,
+            // so a user turn records where it began and the next message
+            // resumes there. Tool rounds inside the turn keep it.
+            let capturesTurnCheckpoint = tokenizer.dialect == .harmony
+                && multimodalInput == nil && request.assistantPrefix.isEmpty
+                && transcript.messages.last?.role == .user
+
             completionStarted = true
             let result = try await runRawCompletion(
                 producer: runner, tokenizer: tokenizer, promptIds: promptIds,
                 multimodalInput: multimodalInput,
                 config: config, context: ctx, scratch: scratch,
-                prefillConfig: prefillConfig, start: completionStart) { @Sendable event in
+                prefillConfig: prefillConfig, start: completionStart,
+                capturePrefixCheckpoint: capturesTurnCheckpoint) { @Sendable event in
                 switch event {
                 case .prefill(let done, let total):
                     if done == total {
@@ -833,7 +842,10 @@ actor RealInferenceSession {
                                            argumentsJSON: "")
                         },
                         result: result,
-                        conversationKey: request.conversationKey)
+                        conversationKey: request.conversationKey,
+                        prefixCheckpoint: result.prefixCheckpoint.flatMap {
+                            ConversationPrefixCheckpoint(tokenIDs: promptIds, snapshot: $0)
+                        } ?? plannedEntry?.prefixCheckpoint)
                     : nil)
             }
             progress.cachedPromptTokens = result.cachedPromptTokens

@@ -9,11 +9,6 @@ change what I work on next.
 
 - **Flash Next's first prompt got a bit slower in 8.0** (about 0.3 s), after
   shader compilation was split by model. Cause unknown.
-- **GPT-OSS rereads the whole conversation when you send a new message.**
-  Tool results continue from saved state since 8.2, but a normal follow-up
-  still starts over, because Harmony drops earlier reasoning from the
-  prompt. On GPT-OSS 120B with a 16 GB Mac, a 1,400-token follow-up takes
-  about 15 minutes to start.
 - **Search is untested on GPT-OSS 120B and MiniMax M2.7.**
 - **Small-block prefill is off by default** until it's shown to speed up real
   requests.
@@ -39,5 +34,5 @@ change what I work on next.
 2. **Pick up a [good first issue](https://github.com/rexmhall09/TUFF/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22).**
 3. **Try search** on GPT-OSS 120B or MiniMax if your Mac can run them.
 4. **Polish the app.** Accessibility and small UI fixes are easy to review.
-5. **Help with a model or GPT-OSS prompt reuse** if you like engine work.
+5. **Help with a model or faster prompts** if you like engine work.
    Open an issue first so we can plan it.

@@ -157,8 +157,10 @@ public struct HarmonyPromptRenderer: Sendable {
                     output += Self.startMark + "assistant" + Self.channelMark
                         + "commentary" + Self.messageMark + content + Self.endMark
                 }
-                output += Self.startMark + "assistant to=functions.\(call.name)"
-                    + Self.channelMark + "commentary" + "<|constrain|>json" + Self.messageMark
+                // The form GPT-OSS writes a call in, so a rendered history
+                // reads the way the model's own output did.
+                output += Self.startMark + "assistant" + Self.channelMark
+                    + "commentary to=functions.\(call.name) <|constrain|>json" + Self.messageMark
                     + (try call.arguments.encoded()) + Self.callMark
                 lastTool = (call.id, call.name)
 
@@ -378,7 +380,7 @@ final class HarmonyAssistantDecoder: @unchecked Sendable {
 
     /// Inside an analysis message: Harmony's reasoning channel.
     var isInAnalysis: Bool {
-        if case .content(let channel, _) = state { return channel == "analysis" }
+        if case .content(let channel, nil) = state { return channel == "analysis" }
         return false
     }
 
@@ -422,7 +424,7 @@ final class HarmonyAssistantDecoder: @unchecked Sendable {
                     state = .content(channel: header.channel, recipient: header.recipient)
                 case .format(let channel, let recipient):
                     guard buffer.trimmingCharacters(in: .whitespacesAndNewlines) == "json",
-                          recipient != nil, channel == "commentary" else {
+                          recipient != nil, Self.callChannels.contains(channel) else {
                         throw ToolCallParserError.malformed
                     }
                     state = .content(channel: channel, recipient: recipient)
@@ -451,7 +453,7 @@ final class HarmonyAssistantDecoder: @unchecked Sendable {
             }
             if tokenID == tokens.call {
                 guard case .content(let channel, let recipient?) = state,
-                      channel == "commentary" else {
+                      Self.callChannels.contains(channel) else {
                     throw ToolCallParserError.malformed
                 }
                 let call = try HarmonyToolCallParser().parse(
@@ -564,8 +566,15 @@ final class HarmonyAssistantDecoder: @unchecked Sendable {
                 throw ToolCallParserError.malformed
             }
         }
-        guard (recipient == nil && !formatSeen) || (recipient != nil && channel == "commentary")
+        guard (recipient == nil && !formatSeen)
+                || (recipient != nil && Self.callChannels.contains(channel))
         else { throw ToolCallParserError.malformed }
         return (channel, recipient)
     }
+
+    /// Calls belong on commentary, but GPT-OSS sometimes addresses one from
+    /// analysis (`<|channel|>analysis to=functions.x`). It is still a call;
+    /// refusing it failed the whole request.
+    private static let callChannels: Set<String> = ["commentary", "analysis"]
 }
+

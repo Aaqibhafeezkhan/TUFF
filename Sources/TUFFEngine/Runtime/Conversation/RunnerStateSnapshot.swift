@@ -82,6 +82,23 @@ public protocol StateSnapshottingRunner: AnyObject {
     func restoreState(_ snapshot: RunnerStateSnapshot) throws
 }
 
+/// A runner that can return to an earlier position of the sequence it holds.
+///
+/// Rows that later tokens only append after stay where they are, so going
+/// back needs a copy of just the rows that are overwritten in place, such as
+/// a sliding-window ring. A checkpoint holds those rows and its position.
+public protocol PrefixCheckpointingRunner: AnyObject {
+    /// Whether this runner can take checkpoints at all.
+    var supportsPrefixCheckpoints: Bool { get }
+    /// Copies what returning to the current position later needs. The runner
+    /// is unchanged.
+    func capturePrefixCheckpoint() throws -> RunnerStateSnapshot
+    /// Returns to `checkpoint`'s position. The runner must still hold the
+    /// sequence the checkpoint was taken from, at or past that position. On a
+    /// throw the runner has been reset and holds no sequence.
+    func rewind(to checkpoint: RunnerStateSnapshot) throws
+}
+
 /// Collects the ranges one snapshot copies, then performs the copy.
 ///
 /// Callers describe ranges as (buffer, offset, length). The builder lays them

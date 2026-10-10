@@ -115,6 +115,34 @@ struct HarmonyAssistantDecoderTests {
         }
     }
 
+    /// GPT-OSS 20B wrote `<|channel|>analysis to=functions.read_file<|message|>`
+    /// in a real agent loop. It is a call, not reasoning, and refusing it
+    /// failed the request with a 500.
+    @Test("A call addressed from the analysis channel is still a call")
+    func analysisChannelToolCall() throws {
+        let decoder = decoder()
+        var events: [StructuredAssistantEvent] = []
+        events += try decoder.consume(tokenID: tokens.channel, delta: "")
+        events += try decoder.consume(tokenID: textToken, delta: "analysis")
+        events += try decoder.consume(tokenID: tokens.message, delta: "")
+        events += try decoder.consume(tokenID: textToken, delta: "Need the file.")
+        events += try decoder.consume(tokenID: tokens.end, delta: "")
+        events += try decoder.consume(tokenID: tokens.start, delta: "")
+        events += try decoder.consume(tokenID: textToken, delta: "assistant")
+        events += try decoder.consume(tokenID: tokens.channel, delta: "")
+        events += try decoder.consume(tokenID: textToken, delta: "analysis to=functions.get_weather")
+        events += try decoder.consume(tokenID: tokens.message, delta: "")
+        #expect(!decoder.isInAnalysis)
+        events += try decoder.consume(tokenID: textToken, delta: #"{"city":"Paris"}"#)
+        events += try decoder.consume(tokenID: tokens.call, delta: "")
+        #expect(thinkingText(events) == "Need the file.")
+        #expect(events.last == .toolCall(ParsedToolCall(
+            id: "call_fixed", name: "get_weather",
+            arguments: .object(["city": .string("Paris")]),
+            argumentsJSON: #"{"city":"Paris"}"#)))
+        try decoder.finish()
+    }
+
     @Test("Unaddressed commentary is visible and can precede a final message")
     func commentaryThenFinal() throws {
         let decoder = decoder()

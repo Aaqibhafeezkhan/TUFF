@@ -118,7 +118,7 @@ struct HarmonyPromptRendererTests {
         #expect(!rendered.contains("Need current data."),
                 "analysis preceding a later final answer must not be preserved")
         #expect(rendered.contains(
-            "<|start|>assistant to=functions.get_weather<|channel|>commentary<|constrain|>json"
+            "<|start|>assistant<|channel|>commentary to=functions.get_weather <|constrain|>json"
             + "<|message|>{\"city\":\"Paris\"}<|call|>"))
         #expect(rendered.contains(
             "<|start|>functions.get_weather to=assistant<|channel|>commentary"
@@ -158,7 +158,7 @@ struct HarmonyPromptRendererTests {
         #expect(rendered.contains(
             "<|start|>assistant<|channel|>analysis<|message|>Need the read tool.<|end|>"
             + "<|start|>assistant<|channel|>commentary<|message|>Reading now.<|end|>"
-            + "<|start|>assistant to=functions.read<|channel|>commentary<|constrain|>json<|message|>"))
+            + "<|start|>assistant<|channel|>commentary to=functions.read <|constrain|>json<|message|>"))
     }
 
     @Test("Training render terminates the final assistant message with return")

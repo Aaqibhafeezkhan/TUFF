@@ -253,6 +253,11 @@ public final class KVCacheManager {
     /// smaller than `maxContext`; full layers and ring-off storage stay linear.
     public func capacity(layer: Int) -> Int { capacityTokens[layer] }
 
+    /// Whether `layer` keeps its rows in a ring that later tokens overwrite.
+    public func isRingLayer(_ layer: Int) -> Bool {
+        fp16RingEnabled && kinds[layer] == .swa
+    }
+
     public func ringCapacity(layer: Int) -> Int {
         guard fp16RingEnabled, kinds[layer] == .swa else { return 0 }
         return capacityTokens[layer]

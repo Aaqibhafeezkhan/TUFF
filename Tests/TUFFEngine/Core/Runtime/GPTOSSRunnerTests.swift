@@ -359,6 +359,54 @@ private enum GPTOSSToyCPUReference {
         #expect(RelError.compute(actual: values(output).map(Float.init), reference: expected) < 0.02)
     }
 
+    /// Generating past the checkpoint overwrites the sliding-window ring
+    /// (window 32, ring 64 here). Rewinding must bring back exactly the state
+    /// at the checkpoint, so continuing from it equals a fresh run.
+    @Test func rewindingToACheckpointMatchesAFreshRun() async throws {
+        let (directory, context, _, runner) = try makeRunner(maxContext: 256)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let output = try logits(context)
+        let prompt = (0..<40).map { Int32(($0 * 5) % 90 + 1) }
+        let next: [Int32] = [17, 4, 61]
+
+        for (position, token) in prompt.enumerated() {
+            try await runner.produce(token: token, position: position, into: output)
+        }
+        let checkpoint = try runner.capturePrefixCheckpoint()
+        #expect(checkpoint.position == 40)
+        for offset in 0..<100 {
+            try await runner.produce(token: Int32(offset % 50 + 2), position: 40 + offset,
+                                     into: output)
+        }
+        try runner.rewind(to: checkpoint)
+        #expect(runner.continuationPosition == 40)
+        try runner.prepareForContinuation(expectedPosition: 40)
+        for (offset, token) in next.enumerated() {
+            try await runner.produce(token: token, position: 40 + offset, into: output)
+        }
+        let resumed = values(output)
+
+        runner.reset()
+        for (position, token) in (prompt + next).enumerated() {
+            try await runner.produce(token: token, position: position, into: output)
+        }
+        #expect(resumed == values(output))
+    }
+
+    @Test func aCheckpointPastTheSequenceIsRefused() async throws {
+        let (directory, context, _, runner) = try makeRunner()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let output = try logits(context)
+        for position in 0..<6 {
+            try await runner.produce(token: 9, position: position, into: output)
+        }
+        let checkpoint = try runner.capturePrefixCheckpoint()
+        runner.reset()
+        try await runner.produce(token: 9, position: 0, into: output)
+        #expect(throws: RunnerStateSnapshotError.self) { try runner.rewind(to: checkpoint) }
+        #expect(runner.continuationPosition == 0)
+    }
+
     @Test func resetRestoresDeterministicKVState() async throws {
         let (directory, context, _, runner) = try makeRunner()
         defer { try? FileManager.default.removeItem(at: directory) }

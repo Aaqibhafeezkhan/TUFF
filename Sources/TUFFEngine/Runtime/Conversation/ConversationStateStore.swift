@@ -99,7 +99,11 @@ public final class ConversationStateStore {
         return value
     }
 
-    public var retainedBytes: Int { retained.reduce(0) { $0 + $1.snapshot.byteCount } }
+    public var retainedBytes: Int {
+        retained.reduce(0) {
+            $0 + $1.snapshot.byteCount + ($1.entry.prefixCheckpoint?.snapshot.byteCount ?? 0)
+        }
+    }
     public var retainedEntries: [ConversationCacheEntry] { retained.map(\.entry) }
 
     /// Decides how a request starts and puts the runner in that state.
@@ -135,8 +139,14 @@ public final class ConversationStateStore {
             entry: active, domain: domain, transcript: transcript,
             renderedPromptIDs: renderedPromptIDs, tokenizer: tokenizer,
             modelVariant: modelVariant, allowsTextBridge: allowsTextBridge)
-        if activeMatch.isHit {
+        if activeMatch.isHit, let entry = active {
             counters.lastLookupSeconds = Self.seconds(since: lookupStarted)
+            guard rewindIfNeeded(entry: entry, match: activeMatch, runner: runner) else {
+                active = nil
+                counters.misses += 1
+                counters.lastMissReason = .unusableEntry
+                return Plan(match: .miss(.unusableEntry), source: .cold)
+            }
             counters.activeHits += 1
             log(.active, activeMatch)
             return Plan(match: activeMatch, source: .active)
@@ -176,6 +186,11 @@ public final class ConversationStateStore {
             let started = ContinuousClock.now
             defer { counters.lastRestoreSeconds = Self.seconds(since: started) }
             try runner.restoreState(restoring.snapshot)
+            guard rewindIfNeeded(entry: restoring.entry, match: match, runner: runner) else {
+                counters.restoreFailures += 1
+                counters.misses += 1
+                return Plan(match: .miss(.unusableEntry), source: .cold)
+            }
             counters.lastRestoreSeconds = Self.seconds(since: started)
             active = restoring.entry
             counters.retainedHits += 1
@@ -218,6 +233,28 @@ public final class ConversationStateStore {
     public func releaseRetained() {
         counters.evictions += retained.count
         retained.removeAll()
+    }
+
+    /// A checkpoint hit resumes before the end of the entry's KV, so the
+    /// runner returns to the checkpoint first. False means the runner could
+    /// not, and has been reset.
+    private func rewindIfNeeded(entry: ConversationCacheEntry,
+                                match: ConversationCacheMatch,
+                                runner: any StateSnapshottingRunner & ContinuableLogitProducer)
+        -> Bool {
+        guard case .hit(_, let cached) = match, cached < entry.kvPosition else { return true }
+        guard let checkpoint = entry.prefixCheckpoint, checkpoint.position == cached,
+              let checkpointing = runner as? any PrefixCheckpointingRunner else {
+            logConversationCacheMiss("checkpoint hit without a usable checkpoint")
+            return false
+        }
+        do {
+            try checkpointing.rewind(to: checkpoint.snapshot)
+            return true
+        } catch {
+            logConversationCacheMiss("checkpoint rewind failed: \(error)")
+            return false
+        }
     }
 
     private func displaceActive(runner: any StateSnapshottingRunner & ContinuableLogitProducer,

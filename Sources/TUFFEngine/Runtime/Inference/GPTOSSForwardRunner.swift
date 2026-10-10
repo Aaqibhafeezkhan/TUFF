@@ -270,6 +270,47 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
         }
     }
 
+    // MARK: Prefix checkpoints
+
+    /// GPT-OSS's full-attention rows are only appended to, so returning to an
+    /// earlier position needs just the sliding-window rings.
+    var supportsPrefixCheckpoints: Bool { true }
+
+    func capturePrefixCheckpoint() throws -> RunnerStateSnapshot {
+        guard speculativeStartPosition == nil else {
+            throw RunnerStateSnapshotError.unsupported("a speculative verification is in progress")
+        }
+        var builder = RunnerStateSnapshotBuilder()
+        kv.addSnapshotRanges(to: &builder, position: kv.position,
+                             skipLayer: { [kv] in !kv.isRingLayer($0) })
+        return try builder.capture(owner: self, queue: context.queue,
+                                   host: .init(position: kv.position, ngramContext: [], ropeDelta: 0))
+    }
+
+    func rewind(to checkpoint: RunnerStateSnapshot) throws {
+        guard checkpoint.owner == ObjectIdentifier(self) else {
+            throw RunnerStateSnapshotError.foreignSnapshot
+        }
+        let position = checkpoint.host.position
+        do {
+            guard position > 0, position <= kv.position, speculativeStartPosition == nil else {
+                throw RunnerStateSnapshotError.layoutMismatch(
+                    "checkpoint at \(position) is past the sequence at \(kv.position)")
+            }
+            var builder = RunnerStateSnapshotBuilder()
+            kv.addSnapshotRanges(to: &builder, position: position,
+                                 skipLayer: { [kv] in !kv.isRingLayer($0) })
+            try builder.restore(checkpoint, queue: context.queue)
+            kv.rewind(to: position)
+            lastLogitsBuffer = nil
+            cachedSpeculativeBoundaryToken = nil
+            speculativeProcessedTokens = 0
+        } catch {
+            reset()
+            throw error
+        }
+    }
+
     func prepareForContinuation(expectedPosition: Int) throws {
         guard expectedPosition > 0, kv.position == expectedPosition else {
             throw PrefillError.prefillCursorMismatch(

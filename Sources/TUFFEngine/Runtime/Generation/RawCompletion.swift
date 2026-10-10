@@ -36,6 +36,9 @@ public struct RawDecodeResult: Sendable {
     /// this list, or the decoder consumes the same token twice.
     public let undeliveredBoundaryTokenIDs: [Int32]
     public let speculative: SpeculativeDecodeMetrics
+    /// The runner's checkpoint at the end of the prompt, when the caller
+    /// asked for one and the runner can take it.
+    public var prefixCheckpoint: RunnerStateSnapshot?
 
     public init(prefillTokens: Int,
                 cachedPromptTokens: Int,
@@ -157,6 +160,7 @@ public func runRawCompletion(producer: any LogitProducer,
                              prefillConfig: PrefillRuntimeConfig = .defaultChunked,
                              start: RawCompletionStart = .reset,
                              draftProducer: (any DraftTokenProducer)? = nil,
+                             capturePrefixCheckpoint: Bool = false,
                              shouldStop: () -> Bool = { false },
                              onProgress: (RawDecodeProgress) -> Void) async throws -> RawDecodeResult {
     try config.validate()
@@ -331,6 +335,15 @@ public func runRawCompletion(producer: any LogitProducer,
         maximumBlockTokens: speculativeController.maximumBlockTokens)
     if speculativeEnabled {
         draftProducer?.reset()
+    }
+
+    // Taken before the first generated token touches the KV. A checkpoint
+    // that cannot be taken only costs a later request its reuse.
+    var prefixCheckpoint: RunnerStateSnapshot?
+    if capturePrefixCheckpoint,
+       let checkpointing = producer as? any PrefixCheckpointingRunner,
+       checkpointing.supportsPrefixCheckpoints {
+        prefixCheckpoint = try? checkpointing.capturePrefixCheckpoint()
     }
 
     let decodeStart = Date()
@@ -631,7 +644,7 @@ public func runRawCompletion(producer: any LogitProducer,
         _ = try await advanceAfterCommittedToken(tokenID)
     }
 
-    return RawDecodeResult(prefillTokens: promptIds.count,
+    var result = RawDecodeResult(prefillTokens: promptIds.count,
                            cachedPromptTokens: cachedPromptTokens,
                            computedPrefillTokens: computedPrefillTokens,
                            prefillSeconds: prefillSeconds,
@@ -675,6 +688,8 @@ public func runRawCompletion(producer: any LogitProducer,
                                normalFallbackDecodes: speculativeFallbackDecodes,
                                adaptiveDisabled: speculativeUnavailableForAuto
                                    || speculativeController.disabled))
+    result.prefixCheckpoint = prefixCheckpoint
+    return result
 }
 
 private func sampleOnce(scratch: RawCompletionScratch, context: MetalContext,

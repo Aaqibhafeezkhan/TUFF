@@ -1002,6 +1002,7 @@ public actor ServerModelSession: ServerInferenceBackend {
             phases.record("prompt_render_and_tokenization", since: renderStart)
         }
         var cacheMatch: ServerPromptCacheMatch = .miss
+        var plannedEntry: ServerPromptCacheEntry?
         if promptCacheMode == .singlePrefix {
             let planStart = DispatchTime.now().uptimeNanoseconds
             let plan = conversations.plan(
@@ -1016,6 +1017,7 @@ public actor ServerModelSession: ServerInferenceBackend {
             phases.record("cache_plan", since: planStart)
             phases.recordCachePlan(conversations.statistics)
             cacheMatch = plan.match
+            plannedEntry = plan.match.isHit ? conversations.active : nil
             if plan.match.missReason == .bridgeRenderFailed {
                 ServerLog.promptCacheBridgeFailed(error: GFTokenizerError.invalidChatTemplate(
                     "tool-result bridge failed to encode"))
@@ -1097,6 +1099,13 @@ public actor ServerModelSession: ServerInferenceBackend {
             tokenizer: tokenizer, tools: request.tools,
             reasoning: request.reasoning)
 
+        // GPT-OSS rewrites a finished turn when the next one is rendered, so
+        // a user turn records where it began: the next message resumes there
+        // instead of from scratch. Tool rounds inside the turn keep it.
+        let capturesTurnCheckpoint = promptCacheMode == .singlePrefix
+            && chatDialect == .harmony && multimodalInput == nil
+            && request.messages.last?.role == .user
+
         completionStarted = true
         let decoded = try await Self.decodeStructuredCompletion(
             producer: runner,
@@ -1112,6 +1121,7 @@ public actor ServerModelSession: ServerInferenceBackend {
             scratch: scratch,
             prefillConfig: prefillConfig,
             start: completionStart,
+            capturePrefixCheckpoint: capturesTurnCheckpoint,
             onEvent: onEvent)
         let result = decoded.result
         let reason: String
@@ -1135,7 +1145,10 @@ public actor ServerModelSession: ServerInferenceBackend {
                 calls: decoded.calls,
                 result: result,
                 stopStringFiltered: decoded.stopStringFiltered,
-                conversationKey: request.promptCacheKey))
+                conversationKey: request.promptCacheKey,
+                prefixCheckpoint: result.prefixCheckpoint.flatMap {
+                    ConversationPrefixCheckpoint(tokenIDs: effectivePromptIDs, snapshot: $0)
+                } ?? plannedEntry?.prefixCheckpoint))
         } else {
             conversations.invalidateActive()
         }
@@ -1231,6 +1244,7 @@ extension ServerModelSession {
         scratch: RawCompletionScratch,
         prefillConfig: PrefillRuntimeConfig,
         start: RawCompletionStart,
+        capturePrefixCheckpoint: Bool = false,
         onEvent: @escaping @Sendable (ServerInferenceEvent) -> Void
     ) async throws -> ServerStructuredDecodeOutcome {
         let state = ServerDecodeState(
@@ -1269,6 +1283,7 @@ extension ServerModelSession {
             scratch: scratch,
             prefillConfig: prefillConfig,
             start: start,
+            capturePrefixCheckpoint: capturePrefixCheckpoint,
             shouldStop: { state.shouldStop }) { @Sendable progress in
                 guard state.decodingError == nil else { return }
                 do {
