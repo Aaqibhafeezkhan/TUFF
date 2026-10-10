@@ -107,8 +107,17 @@ def extract_result(body: str) -> dict:
         raise Rejected("The post is too long.")
     matches = FENCE.findall(body)
     if not matches:
+        # People paste the saved result file instead of the shared post. The
+        # data is the same, so a body that is only that file is read as is.
+        try:
+            pasted = json.loads(body.strip())
+        except json.JSONDecodeError:
+            pasted = None
+        if isinstance(pasted, dict) and pasted.get("schema") == "tuff-benchmark/1":
+            return pasted
         raise Rejected("No result data found. Share from TUFF's Benchmarks screen or "
-                       "`tuff bench --share`, and keep the `json tuff-benchmark` block as it is.")
+                       "`tuff bench --share` and paste the post it copies, keeping the "
+                       "`json tuff-benchmark` block as it is.")
     if len(matches) > 1:
         raise Rejected("The post has more than one result block. Post one run per discussion.")
     try:

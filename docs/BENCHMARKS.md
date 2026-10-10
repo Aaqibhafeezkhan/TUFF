@@ -9,6 +9,12 @@ benchmark is built in, takes a few clicks, and the results go on the
 **In the app:** open **Benchmarks**, tick the models you want, and press
 **Run Benchmark**. When it's done, press **Share on GitHub**.
 
+Sharing opens a new post in the Benchmarks discussions. A short result is
+filled in for you. A longer one, usually two or more models, is too big for
+GitHub to fill in, so TUFF copies the whole post to your clipboard instead:
+press Cmd-V in the body, then **Start discussion**. Paste that, not the
+saved `.json` file, and leave the data block as it is.
+
 ![The Benchmarks screen](assets/tuff-benchmarks.png)
 
 **From the terminal:**

@@ -2,7 +2,7 @@ import Testing
 import Foundation
 @testable import TUFFEngine
 
-/// The tool-result bridge for ChatML (Qwen) and MiniMax. The cached KV holds
+/// The tool-result bridge for ChatML (Qwen), MiniMax and Harmony (GPT-OSS). The cached KV holds
 /// the conversation through the assistant's tool call, without the closing
 /// end-of-turn token; the bridge must carry on from exactly there so that
 /// cached tokens plus bridge equal a full render of the incoming history.
@@ -126,20 +126,98 @@ import Foundation
         }
     }
 
-    @Test func harmonyHasNoToolResultBridge() async throws {
+    private static let harmonyDate = "2026-10-09"
+
+    private static func harmonyRender(_ tokenizer: GFTokenizer,
+                                      _ messages: [GFTokenizer.Message],
+                                      generationPrompt: Bool = true) throws -> [Int32] {
+        tokenizer.encode(
+            try HarmonyPromptRenderer().render(
+                messages: messages, tools: [searchTool], reasoningEffort: .low,
+                currentDate: harmonyDate, addGenerationPrompt: generationPrompt),
+            addBOS: false)
+    }
+
+    /// The KV a GPT-OSS tool call leaves: everything through the call's
+    /// arguments, with `<|call|>` withheld as the stop token.
+    private static func harmonyKV(_ tokenizer: GFTokenizer,
+                                  _ messages: [GFTokenizer.Message]) throws -> [Int32] {
+        let rendered = try harmonyRender(tokenizer, messages, generationPrompt: false)
+        let call = try #require(tokenizer.harmonyTokenIDs?.call)
+        #expect(rendered.last == call)
+        return Array(rendered.dropLast())
+    }
+
+    private static func harmonyBridge(_ tokenizer: GFTokenizer,
+                                      cached: [GFTokenizer.Message],
+                                      assistant: GFTokenizer.Message,
+                                      incoming: [GFTokenizer.Message]) throws -> [Int32] {
+        try tokenizer.encodeToolResultContinuation(
+            cachedMessages: cached, assistant: assistant, incomingMessages: incoming,
+            tools: [searchTool], reasoningEffort: .low, harmonyCurrentDate: harmonyDate)
+    }
+
+    @Test(arguments: [nil, "Let me check."])
+    func harmonyCachedTokensPlusBridgeEqualTheFullRender(content: String?) async throws {
         let tokenizer = try await Self.fixture("HarmonyTokenizer")
+        let assistant = Self.assistant(content: content)
+        let incoming = Self.cached + [assistant, Self.result]
+        let bridge = try Self.harmonyBridge(tokenizer, cached: Self.cached,
+                                            assistant: assistant, incoming: incoming)
+        let kv = try Self.harmonyKV(tokenizer, Self.cached + [assistant])
+        #expect(kv + bridge == (try Self.harmonyRender(tokenizer, incoming)))
+        #expect(bridge.first == tokenizer.harmonyTokenIDs?.call)
+        #expect(tokenizer.decode(bridge, skipSpecialTokens: false)
+            .contains("Actors isolate mutable state."))
+    }
+
+    /// Each round of an agent loop continues from the latest call. Earlier
+    /// calls keep their analysis because no final answer follows them yet.
+    @Test func harmonyASecondRoundBridgesFromTheLatestCall() async throws {
+        let tokenizer = try await Self.fixture("HarmonyTokenizer")
+        let secondCall = GFTokenizer.HistoricalToolCall(
+            id: "call_2", name: "web_search", arguments: .object(["query": .string("actor reentrancy")]))
+        let roundOne = Self.cached + [Self.assistant(), Self.result]
+        let second = GFTokenizer.Message(role: .assistant, content: nil,
+                                         thinking: "One more search.", toolCalls: [secondCall])
+        let secondResult = GFTokenizer.Message(role: .tool, content: "[2] Reentrancy.",
+                                               toolCallID: "call_2", name: "web_search")
+        let incoming = roundOne + [second, secondResult]
+        let bridge = try Self.harmonyBridge(tokenizer, cached: roundOne,
+                                            assistant: second, incoming: incoming)
+        let kv = try Self.harmonyKV(tokenizer, roundOne + [second])
+        #expect(kv + bridge == (try Self.harmonyRender(tokenizer, incoming)))
+        #expect(tokenizer.decode(kv, skipSpecialTokens: false).contains("I should look this up."))
+    }
+
+    @Test func harmonyRefusesWhatItCannotBridge() async throws {
+        let tokenizer = try await Self.fixture("HarmonyTokenizer")
+        let incoming = Self.cached + [Self.assistant(), Self.result]
+        // Without the system message's effort and date the render is unknown.
         #expect(throws: GFTokenizerError.self) {
             try tokenizer.encodeToolResultContinuation(
                 cachedMessages: Self.cached, assistant: Self.assistant(),
-                incomingMessages: Self.cached + [Self.assistant(), Self.result],
-                tools: [Self.searchTool])
+                incomingMessages: incoming, tools: [Self.searchTool])
+        }
+        // Anything after the result is not a tool-result continuation.
+        #expect(throws: GFTokenizerError.self) {
+            try Self.harmonyBridge(tokenizer, cached: Self.cached, assistant: Self.assistant(),
+                                   incoming: incoming + [.init(role: .user, content: "and?")])
+        }
+        // A client that changed the call sent a different turn.
+        let otherCall = GFTokenizer.Message(
+            role: .assistant, content: nil, thinking: nil,
+            toolCalls: [.init(id: "call_1", name: "web_search",
+                              arguments: .object(["query": .string("swift tasks")]))])
+        #expect(throws: GFTokenizerError.self) {
+            try Self.harmonyBridge(tokenizer, cached: Self.cached, assistant: Self.assistant(),
+                                   incoming: Self.cached + [otherCall, Self.result])
         }
     }
 
-    /// Harmony's missing bridge is an expected miss, not a template that
-    /// disagrees with the cached turn, so it does not reach the server's
-    /// bridge-failure log.
-    @Test func harmonyToolResultsMissQuietly() async throws {
+    /// The cache resumes a GPT-OSS tool round from the KV the call left,
+    /// and the effective prompt is exactly the cold render.
+    @Test func harmonyToolResultsResumeFromTheCache() async throws {
         let tokenizer = try await Self.fixture("HarmonyTokenizer")
         let domain = ConversationCacheDomain(
             modelID: "gpt-oss", sourceSnapshotHash: nil, runtimeProfileHash: "r",
@@ -148,22 +226,34 @@ import Foundation
         func transcript(_ messages: [GFTokenizer.Message]) -> ConversationTranscript {
             ConversationTranscript(messages: messages,
                                    imageIdentities: messages.map { _ in [] },
-                                   tools: [Self.searchTool])
+                                   tools: [Self.searchTool], reasoningEffort: .low,
+                                   harmonyCurrentDate: Self.harmonyDate)
         }
         let call = ParsedToolCall(id: "call_1", name: "web_search",
                                   arguments: Self.call.arguments,
                                   argumentsJSON: try Self.call.arguments.encoded())
+        let kv = try Self.harmonyKV(tokenizer, Self.cached + [Self.assistant()])
         let result = RawDecodeResult(
-            prefillTokens: 3, cachedPromptTokens: 0, computedPrefillTokens: 3,
-            prefillSeconds: 0, newTokens: 1, decodeSeconds: 0, reason: .toolCalls,
-            kvPosition: 3, kvBackedTokenIDs: [1, 2, 3], uncommittedBoundaryTokenIDs: [4])
+            prefillTokens: kv.count - 20, cachedPromptTokens: 0,
+            computedPrefillTokens: kv.count - 20, prefillSeconds: 0, newTokens: 21,
+            decodeSeconds: 0, reason: .toolCalls, kvPosition: kv.count,
+            kvBackedTokenIDs: kv,
+            uncommittedBoundaryTokenIDs: [try #require(tokenizer.harmonyTokenIDs?.call)])
         let entry = ConversationCache.entry(
             domain: domain, transcript: transcript(Self.cached), content: "",
-            calls: [call], result: result)
+            thinking: "I should look this up.", calls: [call], result: result)
+        // A client that drops the reasoning it was shown still continues.
+        let incoming = Self.cached + [Self.assistant(thinking: nil), Self.result]
         let match = ConversationCache.match(
-            entry: entry, domain: domain,
-            transcript: transcript(Self.cached + [Self.assistant(thinking: nil), Self.result]),
-            renderedPromptIDs: [9, 9, 9, 9, 9], tokenizer: tokenizer)
-        #expect(match.missReason == .unsupportedContinuation, "\(match)")
+            entry: entry, domain: domain, transcript: transcript(incoming),
+            renderedPromptIDs: try Self.harmonyRender(tokenizer, incoming),
+            tokenizer: tokenizer)
+        guard case .hit(let effective, let cached) = match else {
+            Issue.record("expected a hit, got \(match)")
+            return
+        }
+        #expect(cached == kv.count)
+        #expect(effective == (try Self.harmonyRender(
+            tokenizer, Self.cached + [Self.assistant(), Self.result])))
     }
 }

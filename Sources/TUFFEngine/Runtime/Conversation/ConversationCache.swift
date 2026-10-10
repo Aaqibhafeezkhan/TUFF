@@ -410,12 +410,9 @@ public enum ConversationCache {
                 incomingMessages: transcript.messages,
                 tools: transcript.tools,
                 reasoning: transcript.reasoning,
-                preserveThinking: transcript.preserveThinking)
-        } catch GFTokenizerError.unsupportedForDialect(let operation) {
-            // Harmony has no tool-result bridge yet: an expected miss, not a
-            // template that disagrees with the cached turn.
-            logConversationCacheMiss("tool-result bridge unsupported: \(operation)")
-            return .miss(.unsupportedContinuation)
+                preserveThinking: transcript.preserveThinking,
+                reasoningEffort: transcript.reasoningEffort,
+                harmonyCurrentDate: transcript.harmonyCurrentDate)
         } catch {
             logConversationCacheMiss("tool-result bridge failed to encode: \(error)")
             return .miss(.bridgeRenderFailed)

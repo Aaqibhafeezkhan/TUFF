@@ -76,6 +76,14 @@ class ReviewTests(unittest.TestCase):
                 self.assertEqual(decision.verdict, "rejected")
                 self.assertTrue(decision.reasons[0])
 
+    def test_a_pasted_result_file_is_read_as_is(self):
+        pasted = json.dumps(result(), indent=2, separators=(",", " : "))
+        decision = bd.review(post(1, raw=pasted), [], NOW)
+        self.assertEqual(decision.verdict, "community", decision.reasons)
+        # Any other bare JSON is still not a result.
+        decision = bd.review(post(1, raw=json.dumps({"schema": "other"})), [], NOW)
+        self.assertEqual(decision.verdict, "rejected")
+
     def test_fields_that_were_tampered_with_are_rejected(self):
         def mutate(change):
             data = result()
