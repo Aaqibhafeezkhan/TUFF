@@ -84,6 +84,30 @@ class ReviewTests(unittest.TestCase):
         decision = bd.review(post(1, raw=json.dumps({"schema": "other"})), [], NOW)
         self.assertEqual(decision.verdict, "rejected")
 
+    def test_an_unchanged_verdict_leaves_the_comment_alone(self):
+        calls = []
+        original_graphql, original_labels = bd.graphql, bd.ensure_labels
+        bd.ensure_labels = lambda: {label: label for label in bd.LABELS}
+        try:
+            def fake(query, **variables):
+                calls.append(query)
+                if "updateDiscussionComment" in query:
+                    raise RuntimeError("update refused")
+                return {}
+            bd.graphql = fake
+            item = post(1, raw="just text", labels={bd.LABEL_REJECTED})
+            decision = bd.review(item, [], NOW)
+            item.bot_comment_id = "c1"
+            item.bot_comment_body = bd.comment_body(decision)
+            bd.apply_review(item, decision)
+            self.assertEqual(calls, [])
+            # A changed verdict that cannot be edited in is posted as new.
+            item.bot_comment_body = "old"
+            bd.apply_review(item, decision)
+            self.assertTrue(any("addDiscussionComment" in query for query in calls))
+        finally:
+            bd.graphql, bd.ensure_labels = original_graphql, original_labels
+
     def test_fields_that_were_tampered_with_are_rejected(self):
         def mutate(change):
             data = result()

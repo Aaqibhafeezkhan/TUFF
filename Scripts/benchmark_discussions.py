@@ -84,6 +84,7 @@ class Post:
     labels: set[str] = field(default_factory=set)
     discussion_id: str = ""
     bot_comment_id: str | None = None
+    bot_comment_body: str = ""
 
 
 @dataclass
@@ -506,8 +507,11 @@ def graphql(query: str, **variables) -> dict:
         else:
             flag = "-F" if isinstance(value, int) else "-f"
             command += [flag, f"{name}={value}"]
-    output = subprocess.run(command, check=True, capture_output=True, text=True).stdout
-    data = json.loads(output)
+    completed = subprocess.run(command, capture_output=True, text=True)
+    if completed.returncode != 0:
+        raise RuntimeError("gh api graphql failed: "
+                           + (completed.stderr.strip() or completed.stdout.strip()))
+    data = json.loads(completed.stdout)
     if data.get("errors"):
         raise RuntimeError(data["errors"])
     return data["data"]
@@ -560,7 +564,7 @@ def fetch_posts() -> list[Post]:
         page = graphql(POSTS_QUERY, **variables)["repository"]["discussions"]
         for node in page["nodes"]:
             author = node.get("author") or {}
-            bot = next((c["id"] for c in node["comments"]["nodes"]
+            bot = next((c for c in node["comments"]["nodes"]
                         if BOT_MARKER in (c.get("body") or "")
                         and (c.get("author") or {}).get("login") == "github-actions"), None)
             posts.append(Post(
@@ -569,7 +573,8 @@ def fetch_posts() -> list[Post]:
                 author_created_at=parse_time(author["createdAt"]) if author.get("createdAt") else None,
                 created_at=parse_time(node["createdAt"]),
                 labels={label["name"] for label in node["labels"]["nodes"]},
-                discussion_id=node["id"], bot_comment_id=bot))
+                discussion_id=node["id"], bot_comment_id=bot["id"] if bot else None,
+                bot_comment_body=bot["body"] if bot else ""))
         if not page["pageInfo"]["hasNextPage"]:
             return posts
         after = page["pageInfo"]["endCursor"]
@@ -612,14 +617,22 @@ def apply_review(post: Post, review_: Review) -> None:
           addLabelsToLabelable(input: {labelableId: $id, labelIds: $labels}) { clientMutationId } }""",
                 id=post.discussion_id, labels=[label_ids[review_.label]])
     body = comment_body(review_)
+    # Re-reviewing an edited post often reaches the same verdict. Editing the
+    # comment to the text it already has failed the whole run, so leave it.
+    if post.bot_comment_id and post.bot_comment_body.strip() == body.strip():
+        return
     if post.bot_comment_id:
-        graphql("""mutation($id: ID!, $body: String!) {
-          updateDiscussionComment(input: {commentId: $id, body: $body}) { clientMutationId } }""",
-                id=post.bot_comment_id, body=body)
-    else:
-        graphql("""mutation($id: ID!, $body: String!) {
-          addDiscussionComment(input: {discussionId: $id, body: $body}) { clientMutationId } }""",
-                id=post.discussion_id, body=body)
+        try:
+            graphql("""mutation($id: ID!, $body: String!) {
+              updateDiscussionComment(input: {commentId: $id, body: $body}) { clientMutationId } }""",
+                    id=post.bot_comment_id, body=body)
+            return
+        except RuntimeError as error:
+            # The new verdict still has to reach the person.
+            print(f"Could not update the review comment, adding one instead: {error}")
+    graphql("""mutation($id: ID!, $body: String!) {
+      addDiscussionComment(input: {discussionId: $id, body: $body}) { clientMutationId } }""",
+            id=post.discussion_id, body=body)
 
 
 def main() -> int:
