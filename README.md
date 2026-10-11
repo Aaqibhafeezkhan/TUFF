@@ -18,21 +18,16 @@
 
 ![TUFF chatting with Qwen3.8 Flash Next on a 16 GB MacBook Air](docs/assets/tuff-chat.png)
 
-TUFF runs language models locally on Apple Silicon. The app is native
-SwiftUI and the inference engine is written from scratch in Swift and Metal,
-so it isn't a wrapper around llama.cpp or MLX. It's open source, and nothing
-you type leaves your Mac unless you turn on web search.
+TUFF runs language models on Apple Silicon Macs. The app is SwiftUI and the
+engine is my own, written in Swift and Metal. It's open source, and nothing you
+type leaves your Mac unless you turn on web search.
 
 **Qwen3.8 Flash Next is a 111 GB model, and TUFF runs it on a 16 GB MacBook
-Air.** Most apps need the whole model in memory. TUFF keeps a
-mixture-of-experts model's experts on the SSD and loads only the few each
-token needs into a small cache. GPT-OSS 120B and MiniMax M2.7 run the same
-way.
-
-That has a cost: on a 16 GB Air, Flash Next writes about 1.7 tokens a second.
-Smaller models are quick, and Macs with more memory do better. The
-[benchmark leaderboard](https://rexmhall09.github.io/TUFF/benchmarks/) shows
-how each model runs on real Macs.
+Air.** TUFF keeps a mixture-of-experts model's experts on the SSD and reads
+only the few each token needs. GPT-OSS 120B and MiniMax M2.7 run the same
+way. On that Air, Flash Next writes about 1.7 tokens a second; smaller models
+are much faster. The [benchmarks](https://rexmhall09.github.io/TUFF/benchmarks/)
+show how each model runs on real Macs.
 
 ## Install
 
@@ -51,8 +46,8 @@ brew tap rexmhall09/tuff https://github.com/rexmhall09/TUFF.git
 brew install --cask rexmhall09/tuff/tuff
 ```
 
-TUFF updates itself. If an update ever stops it from opening,
-[recovery](docs/RELEASE_RECOVERY.md) gets you back without losing anything.
+TUFF updates itself. If an update stops it from opening, see
+[recovery](docs/RELEASE_RECOVERY.md).
 
 ## What's in it
 
@@ -81,9 +76,8 @@ TUFF updates itself. If an update ever stops it from opening,
 | MiniMax M2.7 | 128.7 GB | 16 GB, M2 or newer | No |
 | Qwen3.8 Flash Next | 110.9 GB | 16 GB, M2 or newer | Optional |
 
-The minimums are what the app allows. I test releases on a 16 GB M2 MacBook
-Air, so everything else comes from people's benchmarks. Images need an M2 or
-newer.
+I test releases on a 16 GB M2 MacBook Air. Numbers for other Macs come from
+people's benchmarks. Images need an M2 or newer.
 
 ## How TUFF compares
 
@@ -112,13 +106,11 @@ newer.
 - **Folders:** LM Studio can chat with documents you attach, which covers
   some of the same ground.
 - **Streaming** means a fixed-size expert cache, not OS paging or CPU
-  offload. LM Studio and Ollama handle big models differently, and have far
-  bigger model libraries.
+  offload. LM Studio and Ollama have much bigger model libraries.
 - **Colibrì** also streams experts and runs Flash Next, on more platforms.
   **TurboFieldfare** is where TUFF started.
 
-Other engines run models bigger than RAM too. I haven't benchmarked them
-against TUFF on the same Mac, so this compares features, not speed.
+This compares features only. I haven't benchmarked these against each other.
 
 ## Command line
 
@@ -152,8 +144,8 @@ code.
 
 ## Contributing
 
-Help is welcome, and a lot of it needs no code. Running a benchmark on your
-Mac is the easiest place to start. There are also
+The easiest way to help is to run a benchmark on your Mac and share it.
+There are also
 [good first issues](https://github.com/rexmhall09/TUFF/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22),
 a [roadmap](docs/ROADMAP.md), and [Discussions](https://github.com/rexmhall09/TUFF/discussions)
 for questions and ideas. [CONTRIBUTING.md](CONTRIBUTING.md) explains the rest.

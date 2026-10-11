@@ -148,11 +148,10 @@ function emptyState() {
 
 function renderLeaderboard(view) {
   setHeader("Benchmarks",
-    "How fast models run in TUFF on real Macs, measured by the people who own them. Every result comes from TUFF's built-in benchmark and links to the post it came from.");
-  view.append(summary());
+    "How fast models run in TUFF on real Macs, measured by the people who own them.");
   const fastest = fastestPerModel();
   if (fastest.length) {
-    view.append(el("h2", {}, "Fastest on each model", el("small", {}, "best Mac, decode speed")));
+    view.append(el("h2", {}, "Fastest Mac for each model"));
     view.append(fastestBars(fastest));
   }
   view.append(el("h2", {}, "All results"));
@@ -166,23 +165,6 @@ function renderLeaderboard(view) {
   }
   view.append(el("p", { class: "note" },
     `Updated ${new Date(state.data.generated).toLocaleString()}. New posts usually appear within a few minutes.`));
-}
-
-function summary() {
-  const entries = (state.data.entries ?? []).filter((e) => e.trust !== "needs-review");
-  const groups = state.data.groups ?? [];
-  const macs = new Set(entries.map((e) => `${e.chip}/${e.memory_gb}`)).size;
-  const models = new Set(entries.map((e) => e.model)).size;
-  const people = new Set(entries.map((e) => e.author)).size;
-  const best = groups.reduce((a, b) => ((b.decode ?? 0) > (a?.decode ?? 0) ? b : a), null);
-  const stat = (label, value, detail, accent) => el("div", { class: accent ? "stat accent" : "stat" },
-    el("div", { class: "label" }, label), el("div", { class: "value" }, value),
-    detail ? el("div", { class: "detail" }, detail) : null);
-  return el("div", { class: "stats" },
-    stat("Results", entries.length, `from ${people} ${people === 1 ? "person" : "people"}`),
-    stat("Macs", macs, "chip and memory combinations"),
-    stat("Models", models, "measured so far"),
-    best ? stat("Fastest decode", rate(best.decode), `${modelName(best.model)} on ${mac(best.chip, best.memory_gb)}`, true) : null);
 }
 
 function fastestPerModel() {
@@ -203,7 +185,7 @@ function fastestBars(rows) {
         el("span", { class: "name" }, modelName(row.model), el("small", {}, mac(row.chip, row.memory_gb))),
         bar(row.decode, max),
         el("span", { class: "figure" }, rate(row.decode))))),
-    el("p", { class: "scale-note" }, "Bars use a log scale so slower models stay visible."));
+    );
 }
 
 function filters() {
