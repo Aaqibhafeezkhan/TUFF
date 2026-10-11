@@ -502,6 +502,28 @@ private enum GPTOSSToyCPUReference {
         #expect(reads[0] > reads[1], "depth 2 should issue more reads: \(reads)")
     }
 
+    /// Reading a prompt reports where its time went: attention and routed
+    /// experts on the GPU, reading experts, and waiting on the GPU.
+    @Test func prefillReportsItsPhases() async throws {
+        let (directory, context, _, runner) = try makeRunner(cacheSlots: 4)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let output = try logits(context)
+        let before = runner.prefillPhaseTimes
+        let prompt = (0..<32).map { Int32($0 + 1) }
+        _ = try await runner.prefillChunked(tokens: prompt[...], startPosition: 0,
+            outputMode: .logits, config: .production(chunkTokens: 32), into: output,
+            onProgress: { _ in })
+        let phases = runner.prefillPhaseTimes - before
+        #expect(phases.attentionGPU > 0)
+        #expect(phases.routedExpertGPU > 0)
+        #expect(phases.gpuWait > 0)
+        #expect(phases.expertReadWait >= 0)
+        // Decoding a token is not prefill.
+        let afterPrefill = runner.prefillPhaseTimes
+        try await runner.produce(token: 5, position: 32, into: output)
+        #expect(runner.prefillPhaseTimes == afterPrefill)
+    }
+
     @Test func resetRestoresDeterministicKVState() async throws {
         let (directory, context, _, runner) = try makeRunner()
         defer { try? FileManager.default.removeItem(at: directory) }

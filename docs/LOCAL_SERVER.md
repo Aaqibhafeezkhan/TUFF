@@ -131,6 +131,21 @@ Inside generation:
 | `prefill` | Reading the prompt tokens that weren't reused |
 | `decode` | Writing every output token, after the prompt is read |
 
+Where reading the prompt went, when any of it had to be read:
+
+| Field | What it covers |
+| --- | --- |
+| `prefill_expert_read_wait` | Waiting for routed experts to be read from the SSD |
+| `prefill_attention_gpu` | GPU time for attention and routing (the whole layer for a dense model) |
+| `prefill_routed_expert_gpu` | GPU time for the routed experts |
+| `prefill_shared_expert_gpu` | GPU time for the shared expert, on models that have one |
+| `prefill_other_gpu` | GPU time for everything else: combining experts, embeddings and the output head |
+| `prefill_gpu_wait` | Time spent waiting for the GPU to finish |
+
+These overlap: experts are read while earlier ones compute. On a 16 GB Mac a
+large share of `prefill` is usually `prefill_expert_read_wait`.
+`TUFF_PHASES=1 tuff prompt ...` prints the same breakdown in the terminal.
+
 Image requests also report `image_admission` and
 `multimodal_render_and_encode`. The cache fields are 0 when that step didn't
 run.

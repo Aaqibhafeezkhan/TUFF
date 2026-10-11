@@ -42,6 +42,9 @@ public struct RawDecodeResult: Sendable {
     /// The runner's whole state at `stateSnapshotPosition`, when asked for,
     /// for a caller that keeps it beyond this process.
     public var stateSnapshot: RunnerStateSnapshot?
+    /// Where this request's prompt reading spent its time, for a runner that
+    /// times it by phase.
+    public var prefillPhases: PrefillPhaseTimes?
 
     public init(prefillTokens: Int,
                 cachedPromptTokens: Int,
@@ -242,6 +245,8 @@ public func runRawCompletion(producer: any LogitProducer,
         try continuable.prepareForContinuation(expectedPosition: cachedPromptTokens)
     }
     let prefillStart = Date()
+    let phaseReporter = producer as? any PrefillPhaseReporting
+    let phasesBefore = phaseReporter?.prefillPhaseTimes
     var position = cachedPromptTokens
     var prefillSeed: PrefillSeed?
     let prefillTokens = promptIds[cachedPromptTokens...]
@@ -376,6 +381,9 @@ public func runRawCompletion(producer: any LogitProducer,
     // The end of the prompt, before the first generated token touches the KV.
     if checkpointPositions.last == promptIds.count { takeCheckpoint() }
 
+    let prefillPhases = phasesBefore.flatMap { before in
+        phaseReporter.map { $0.prefillPhaseTimes - before }
+    }
     let decodeStart = Date()
     let prefillSeconds = decodeStart.timeIntervalSince(prefillStart)
     var stopMatcher = StreamingStopMatcher(stops: config.stopStrings)
@@ -719,6 +727,7 @@ public func runRawCompletion(producer: any LogitProducer,
                                adaptiveDisabled: speculativeUnavailableForAuto
                                    || speculativeController.disabled))
     result.prefixCheckpoints = prefixCheckpoints
+    result.prefillPhases = prefillPhases
     result.stateSnapshot = stateSnapshot
     return result
 }

@@ -404,6 +404,18 @@ public func run(args: Args,
             lines += "  logical traffic includes prefill and OS-cache hits; physical SSD traffic is not measured\n"
             lines += "  routed expert cache hits: \(runner.totalRoutedExpertCacheHits)\n"
             lines += "  routed expert cache misses: \(runner.totalRoutedExpertCacheMisses)\n"
+            if let phases = stats.prefillPhases {
+                let s = { (value: Double) in String(format: "%.1f", value * 1000) }
+                lines += "[prefill phases over \(stats.prefillTokens - stats.cachedPromptTokens) tokens, "
+                    + String(format: "%.0f", stats.prefillSeconds * 1000) + " ms]\n"
+                lines += "  attention gpu:      " + s(phases.attentionGPU) + " ms\n"
+                lines += "  shared expert gpu:  " + s(phases.sharedExpertGPU) + " ms\n"
+                lines += "  routed expert gpu:  " + s(phases.routedExpertGPU) + " ms\n"
+                lines += "  other gpu:          " + s(phases.otherGPU) + " ms\n"
+                lines += "  expert read wait:   " + s(phases.expertReadWait) + " ms\n"
+                lines += "  waiting on gpu:     " + s(phases.gpuWait) + " ms\n"
+                lines += "  gpu spans overlap the waits and each other; don't add them\n"
+            }
             if let lookahead = runner.expertLookahead,
                lookahead.readsIssued > 0 || lookahead.precision > 0 {
                 lines += "  expert lookahead: "

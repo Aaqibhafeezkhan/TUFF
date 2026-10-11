@@ -1216,6 +1216,9 @@ public actor ServerModelSession: ServerInferenceBackend {
         var timingSeconds = phases.seconds
         timingSeconds["prefill"] = result.prefillSeconds
         timingSeconds["decode"] = result.decodeSeconds
+        if let phases = result.prefillPhases {
+            timingSeconds.merge(phases.timingSeconds, uniquingKeysWith: { _, new in new })
+        }
         return ServerCompletion(
             content: decoded.content,
             reasoning: decoded.reasoning,
