@@ -282,6 +282,10 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
     /// earlier position needs just the sliding-window rings.
     var supportsPrefixCheckpoints: Bool { true }
 
+    var prefixCheckpointByteEstimate: Int {
+        kv.snapshotBytes(position: kv.position, skipLayer: { [kv] in !kv.isRingLayer($0) })
+    }
+
     func capturePrefixCheckpoint() throws -> RunnerStateSnapshot {
         guard speculativeStartPosition == nil else {
             throw RunnerStateSnapshotError.unsupported("a speculative verification is in progress")

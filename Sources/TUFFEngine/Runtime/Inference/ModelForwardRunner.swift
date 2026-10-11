@@ -403,6 +403,13 @@ extension ModelForwardRunner: PrefixCheckpointingRunner {
         }
     }
 
+    public var prefixCheckpointByteEstimate: Int {
+        switch backend {
+        case .affine(let runner): return runner.prefixCheckpointByteEstimate
+        case .gptOss(let runner): return runner.prefixCheckpointByteEstimate
+        }
+    }
+
     public func capturePrefixCheckpoint() throws -> RunnerStateSnapshot {
         switch backend {
         case .affine(let runner): return try runner.capturePrefixCheckpoint()

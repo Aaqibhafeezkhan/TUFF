@@ -980,14 +980,24 @@ public actor ServerModelSession: ServerInferenceBackend {
         var phases = ServerInferencePhaseTimings(prepared.timingSeconds)
         var completionStarted = false
         var completed = false
+        var plannedEntry: ServerPromptCacheEntry?
+        var cancelCheckpoint: RunnerStateSnapshot?
         defer {
             // Rendering, planning and image encoding touch no KV state, so a
             // request that fails or is cancelled before the completion starts
             // leaves the cache exactly as the last completed request left it.
             // Image encoding is seconds long, so this window is not rare.
             if completionStarted, !completed {
-                conversations.invalidateActive()
-                runner.reset()
+                // A request that continued a conversation goes back to where
+                // it started, so the conversation survives a client giving
+                // up mid-answer; anything else starts over.
+                if let checkpoint = cancelCheckpoint, let entry = plannedEntry,
+                   (try? runner.rewind(to: checkpoint)) != nil {
+                    conversations.restoreAfterCancel(entry, runnerPosition: runner.continuationPosition)
+                } else {
+                    conversations.invalidateActive()
+                    runner.reset()
+                }
             }
         }
         let needsToolTemplate = usesToolTemplate(request)
@@ -1012,7 +1022,6 @@ public actor ServerModelSession: ServerInferenceBackend {
             phases.record("prompt_render_and_tokenization", since: renderStart)
         }
         var cacheMatch: ServerPromptCacheMatch = .miss
-        var plannedEntry: ServerPromptCacheEntry?
         if promptCacheMode == .singlePrefix {
             let planStart = DispatchTime.now().uptimeNanoseconds
             let plan = conversations.plan(
@@ -1142,6 +1151,13 @@ public actor ServerModelSession: ServerInferenceBackend {
                 !store.contains(tokens: Array(effectivePromptIDs.prefix($0)),
                                 domain: promptCacheDomain) ? $0 : nil
             }
+        }
+
+        // Where a continuation starts, so a cancelled request can return here.
+        // Taken only when the copy fits the conversation budget.
+        if case .resume = completionStart, plannedEntry != nil, runner.supportsPrefixCheckpoints,
+           runner.prefixCheckpointByteEstimate <= conversations.budgetBytes {
+            cancelCheckpoint = try? runner.capturePrefixCheckpoint()
         }
 
         completionStarted = true

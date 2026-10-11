@@ -279,7 +279,8 @@ public enum ConversationCache {
         entry: ConversationCacheEntry?,
         domain: ConversationCacheDomain,
         transcript: ConversationTranscript,
-        renderedPromptIDs: [Int32]?
+        renderedPromptIDs: [Int32]?,
+        maximumPosition: Int = .max
     ) -> ConversationCacheMatch? {
         guard let entry, let renderedPromptIDs,
               entry.domain == domain,
@@ -292,7 +293,7 @@ public enum ConversationCache {
               requestIdentities.allSatisfy(\.isEmpty),
               entry.transcript.imageIdentities?.allSatisfy(\.isEmpty) == true,
               let checkpoint = entry.prefixCheckpoints.last(where: {
-                  $0.position < entry.kvPosition
+                  $0.position < entry.kvPosition && $0.position <= maximumPosition
                       && renderedPromptIDs.count > $0.position
                       && renderedPromptIDs.starts(with: $0.tokenIDs)
               }) else {

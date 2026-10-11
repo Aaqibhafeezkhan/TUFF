@@ -33,6 +33,7 @@ import Metal
         }
 
         var supportsPrefixCheckpoints: Bool { true }
+        var prefixCheckpointByteEstimate: Int { 0 }
         func capturePrefixCheckpoint() throws -> RunnerStateSnapshot { snapshot(at: position) }
         func rewind(to checkpoint: RunnerStateSnapshot) throws {
             guard !failRewind, checkpoint.position <= position else {
@@ -355,5 +356,59 @@ import Metal
         #expect(try publish(budget: 1 << 20).activeCheckpointBytes == 64 << 10)
         #expect(try publish(budget: 32 << 10).activeCheckpointBytes == 0)
         #expect(try publish(budget: 0).activeCheckpointBytes == 0)
+    }
+
+    // MARK: Cancellation
+
+    /// A request that continued the conversation and was cancelled is rewound
+    /// to where it started. At the entry's end the entry is whole again.
+    @Test func aConversationRewoundToItsEndAfterACancelContinuesFully() async throws {
+        let tokenizer = try await Self.harmony()
+        let store = ConversationStateStore(budgetBytes: 1 << 20, memoryIsPressured: { false })
+        let runner = CheckpointRunner()
+        let entry = try #require(try Self.finishedTurn(tokenizer, runner: runner))
+        store.publish(entry)
+        runner.position = entry.kvPosition + 40     // the cancelled request's tokens
+        runner.position = entry.kvPosition          // rewound
+        store.restoreAfterCancel(entry, runnerPosition: runner.position)
+        #expect(store.active == entry)
+        let plan = store.plan(
+            domain: Self.domain, transcript: Self.transcript(Self.followUp),
+            renderedPromptIDs: try Self.render(tokenizer, Self.followUp),
+            tokenizer: tokenizer, modelVariant: nil, conversationKey: nil,
+            runner: runner, allowsTextBridge: false)
+        #expect(plan.match.isHit)
+    }
+
+    /// Rewound to a checkpoint before the entry's end, as after a checkpoint
+    /// hit, only checkpoints at or before the runner's position resume, and
+    /// the runner's partial state is never kept as that conversation.
+    @Test func aConversationRewoundToACheckpointResumesOnlyFromThere() async throws {
+        let tokenizer = try await Self.harmony()
+        let store = ConversationStateStore(budgetBytes: 1 << 20, memoryIsPressured: { false })
+        let runner = CheckpointRunner()
+        let entry = try #require(try Self.finishedTurn(tokenizer, runner: runner))
+        let prompt = try Self.render(tokenizer, Self.firstTurn)
+        store.publish(entry)
+        runner.position = prompt.count               // rewound to the turn checkpoint
+        store.restoreAfterCancel(entry, runnerPosition: runner.position)
+        let plan = store.plan(
+            domain: Self.domain, transcript: Self.transcript(Self.followUp),
+            renderedPromptIDs: try Self.render(tokenizer, Self.followUp),
+            tokenizer: tokenizer, modelVariant: nil, conversationKey: nil,
+            runner: runner, allowsTextBridge: false)
+        #expect(plan.start == .resume(cachedPromptTokens: prompt.count))
+
+        // Another conversation takes the runner: the partial state is dropped,
+        // not retained under the entry's name.
+        store.restoreAfterCancel(entry, runnerPosition: prompt.count)
+        runner.position = prompt.count
+        let other: [GFTokenizer.Message] = [.init(role: .user, content: "Unrelated")]
+        _ = store.plan(
+            domain: Self.domain, transcript: Self.transcript(other),
+            renderedPromptIDs: try Self.render(tokenizer, other),
+            tokenizer: tokenizer, modelVariant: nil, conversationKey: nil,
+            runner: runner, allowsTextBridge: false)
+        #expect(store.retainedEntries.isEmpty)
     }
 }
