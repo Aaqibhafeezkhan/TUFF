@@ -361,8 +361,10 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
     private func handleCompletion(body: ParsedChatRequestBody,
                                   api: InferenceAPI,
                                   context: ChannelHandlerContext) {
+        var requestedModel: String?
         do {
             let decoded = try api.request(body.json)
+            requestedModel = decoded.model
             let target = try provider.route(decoded.model)
             let modelID = target.id
             try api.validateNativeHistory(decoded, dialect: target.dialect)
@@ -534,13 +536,18 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                 }
             }
         } catch let error as ServerRequestError {
+            if case .unknownModel = error, let requestedModel {
+                writeError(context, status: error.httpStatus, OpenAIErrorEnvelope(
+                    message: "model \"\(requestedModel)\" is not available; "
+                        + "GET /v1/models lists the installed models",
+                    param: "model", code: "model_not_found"))
+                return
+            }
             writeError(context,
                        status: error.httpStatus,
                        error.envelope)
         } catch {
-            writeError(context, status: .badRequest,
-                       OpenAIErrorEnvelope(message: "malformed JSON request",
-                                           code: "invalid_json"))
+            writeError(context, status: .badRequest, OpenAIErrorEnvelope.decoding(error))
         }
     }
 
@@ -846,6 +853,11 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
             if closeAfter {
                 headers.add(name: "connection", value: "close")
             }
+            // A full queue clears as requests finish; clients that honour
+            // Retry-After back off instead of retrying at once.
+            if status == .tooManyRequests {
+                headers.add(name: "retry-after", value: "5")
+            }
             contextBox.value.write(self.wrapOutboundOut(.head(
                 HTTPResponseHead(version: .http1_1, status: status, headers: headers))),
                 promise: nil)
@@ -1109,5 +1121,38 @@ final class ConnectionCloseWatcher: ChannelInboundHandler {
     static func watch(_ context: ChannelHandlerContext) {
         (try? context.pipeline.syncOperations.context(
             handlerType: ConnectionCloseWatcher.self))?.read()
+    }
+}
+
+extension OpenAIErrorEnvelope {
+    /// Valid JSON in the wrong shape names the field rather than calling the
+    /// JSON malformed, which sent clients looking for a syntax error.
+    static func decoding(_ error: any Error) -> OpenAIErrorEnvelope {
+        func path(_ codingPath: [any CodingKey], _ last: (any CodingKey)? = nil) -> String {
+            let keys = codingPath + (last.map { [$0] } ?? [])
+            let joined = keys.map { $0.intValue.map { "[\($0)]" } ?? ".\($0.stringValue)" }
+                .joined()
+            return joined.hasPrefix(".") ? String(joined.dropFirst()) : joined
+        }
+        switch error as? DecodingError {
+        case .keyNotFound(let key, let context)?:
+            let field = path(context.codingPath, key)
+            return OpenAIErrorEnvelope(message: "missing required field: \(field)",
+                                       param: field, code: "missing_required_parameter")
+        case .typeMismatch(let type, let context)?, .valueNotFound(let type, let context)?:
+            let field = path(context.codingPath)
+            let expected = String(describing: type).lowercased()
+            return OpenAIErrorEnvelope(
+                message: field.isEmpty
+                    ? "the request body must be a JSON object"
+                    : "\(field) has the wrong type; expected \(expected)",
+                param: field.isEmpty ? nil : field, code: "invalid_type")
+        case .dataCorrupted(let context)? where !context.codingPath.isEmpty:
+            let field = path(context.codingPath)
+            return OpenAIErrorEnvelope(message: "invalid value for \(field)",
+                                       param: field, code: "invalid_value")
+        default:
+            return OpenAIErrorEnvelope(message: "malformed JSON request", code: "invalid_json")
+        }
     }
 }

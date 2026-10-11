@@ -44,6 +44,23 @@ function compareVersions(a, b) {
   return 0;
 }
 
+// Bars use a log scale: decode speeds run from under 1 to over 40 tok/s, and a
+// linear bar left the slow models as invisible slivers.
+function barPercent(value, max) {
+  if (value == null || value <= 0 || !max) return 0;
+  return Math.max(4, (100 * Math.log10(1 + value)) / Math.log10(1 + max));
+}
+
+function bar(value, max) {
+  return el("div", { class: "track", "aria-hidden": "true" },
+    el("div", { class: "fill", style: `width: ${barPercent(value, max).toFixed(1)}%` }));
+}
+
+function speedCell(value, max, extra) {
+  return el("td", { class: "num" },
+    el("span", { class: "speed" }, bar(value, max), el("strong", {}, rate(value))), extra);
+}
+
 function trustBadge(trust) {
   if (trust === "verified") return el("span", { class: "badge verified" }, "verified");
   if (trust === "needs-review") return el("span", { class: "badge held" }, "held");
@@ -132,6 +149,13 @@ function emptyState() {
 function renderLeaderboard(view) {
   setHeader("Benchmarks",
     "How fast models run in TUFF on real Macs, measured by the people who own them. Every result comes from TUFF's built-in benchmark and links to the post it came from.");
+  view.append(summary());
+  const fastest = fastestPerModel();
+  if (fastest.length) {
+    view.append(el("h2", {}, "Fastest on each model", el("small", {}, "best Mac, decode speed")));
+    view.append(fastestBars(fastest));
+  }
+  view.append(el("h2", {}, "All results"));
   view.append(filters());
   if (state.grouped) {
     const rows = sorted(filteredGroups());
@@ -144,11 +168,50 @@ function renderLeaderboard(view) {
     `Updated ${new Date(state.data.generated).toLocaleString()}. New posts usually appear within a few minutes.`));
 }
 
+function summary() {
+  const entries = (state.data.entries ?? []).filter((e) => e.trust !== "needs-review");
+  const groups = state.data.groups ?? [];
+  const macs = new Set(entries.map((e) => `${e.chip}/${e.memory_gb}`)).size;
+  const models = new Set(entries.map((e) => e.model)).size;
+  const people = new Set(entries.map((e) => e.author)).size;
+  const best = groups.reduce((a, b) => ((b.decode ?? 0) > (a?.decode ?? 0) ? b : a), null);
+  const stat = (label, value, detail, accent) => el("div", { class: accent ? "stat accent" : "stat" },
+    el("div", { class: "label" }, label), el("div", { class: "value" }, value),
+    detail ? el("div", { class: "detail" }, detail) : null);
+  return el("div", { class: "stats" },
+    stat("Results", entries.length, `from ${people} ${people === 1 ? "person" : "people"}`),
+    stat("Macs", macs, "chip and memory combinations"),
+    stat("Models", models, "measured so far"),
+    best ? stat("Fastest decode", rate(best.decode), `${modelName(best.model)} on ${mac(best.chip, best.memory_gb)}`, true) : null);
+}
+
+function fastestPerModel() {
+  const best = new Map();
+  for (const group of state.data.groups ?? []) {
+    if (group.decode == null) continue;
+    const current = best.get(group.model);
+    if (!current || group.decode > current.decode) best.set(group.model, group);
+  }
+  return [...best.values()].sort((a, b) => b.decode - a.decode);
+}
+
+function fastestBars(rows) {
+  const max = Math.max(...rows.map((r) => r.decode));
+  return el("div", {},
+    el("div", { class: "bars" }, rows.map((row) =>
+      el("a", { class: "bar-row", href: `#model/${encode(row.model)}` },
+        el("span", { class: "name" }, modelName(row.model), el("small", {}, mac(row.chip, row.memory_gb))),
+        bar(row.decode, max),
+        el("span", { class: "figure" }, rate(row.decode))))),
+    el("p", { class: "scale-note" }, "Bars use a log scale so slower models stay visible."));
+}
+
 function filters() {
   const entries = state.data.entries;
   const options = (values, label, key, format = (v) => v) => {
     const select = el("select", {
       "aria-label": label,
+      class: state.filters[key] ? "active" : null,
       onchange: (event) => { state.filters[key] = event.target.value; render(); },
     }, el("option", { value: "" }, label));
     for (const value of values) {
@@ -168,13 +231,19 @@ function filters() {
     el("input", { type: "checkbox", checked: state.filters.held,
       onchange: (event) => { state.filters.held = event.target.checked; render(); } }),
     "Show held results");
+  const filtering = ["model", "chip", "memory", "tuff"].some((key) => state.filters[key]);
+  const reset = filtering ? el("button", { type: "button", class: "reset",
+    onclick: () => { Object.assign(state.filters, { model: "", chip: "", memory: "", tuff: "" }); render(); } },
+    "Clear filters") : null;
   return el("div", { class: "controls" },
     segmented,
+    el("span", { class: "spacer" }),
     options(Object.keys(state.data.models).filter((id) => unique("model").includes(id)), "All models", "model", modelName),
     options(unique("chip").sort(), "All chips", "chip", chipShort),
     options(unique("memory_gb").sort((a, b) => a - b), "All memory", "memory", (v) => `${v} GB`),
     options(unique("tuff").sort(compareVersions).reverse(), "All versions", "tuff", (v) => `TUFF ${v}`),
-    state.grouped ? null : held);
+    state.grouped ? null : held,
+    reset);
 }
 
 function header(label, key, numeric = true) {
@@ -195,16 +264,19 @@ function table(head, rows) {
 }
 
 function groupTable(rows) {
+  const max = Math.max(0, ...rows.map((r) => r.decode ?? 0));
   return table([
+    el("th", {}, "#"),
     header("Model", "model", false), header("Mac", "chip", false), header("TUFF", "tuff", false),
     header("Writes", "decode"), header("Reads prompt", "prefill"), header("First token", "ttft"),
     header("Follow-up", "followup_ttft"), header("People", "contributors"),
-  ], rows.map((row) => el("tr", {},
+  ], rows.map((row, index) => el("tr", {},
+    el("td", { class: "rank" }, index + 1),
     el("td", {}, el("a", { href: `#model/${encode(row.model)}` }, modelName(row.model)),
       row.verified ? [" ", trustBadge("verified")] : null),
     el("td", {}, el("a", { href: `#mac/${encode(row.chip)}/${row.memory_gb}` }, mac(row.chip, row.memory_gb))),
     el("td", {}, row.tuff),
-    el("td", { class: "num" }, rate(row.decode),
+    speedCell(row.decode, max,
       row.contributors > 1 && row.decode_low != null
         ? el("span", { class: "range" }, `${row.decode_low}–${row.decode_high}`) : null),
     el("td", { class: "num" }, rate(row.prefill)),
@@ -215,6 +287,7 @@ function groupTable(rows) {
 }
 
 function entryTable(rows, showModel = true) {
+  const max = Math.max(0, ...rows.map((r) => r.decode ?? 0));
   return table([
     showModel ? header("Model", "model", false) : null, header("Mac", "chip", false),
     header("TUFF", "tuff", false), header("Writes", "decode"), header("Reads prompt", "prefill"),
@@ -224,7 +297,7 @@ function entryTable(rows, showModel = true) {
     showModel ? el("td", {}, el("a", { href: `#model/${encode(row.model)}` }, row.model_name)) : null,
     el("td", {}, el("a", { href: `#mac/${encode(row.chip)}/${row.memory_gb}` }, mac(row.chip, row.memory_gb))),
     el("td", {}, row.tuff),
-    el("td", { class: "num" }, rate(row.decode)),
+    speedCell(row.decode, max),
     el("td", { class: "num" }, rate(row.prefill)),
     el("td", { class: "num" }, seconds(row.ttft)),
     el("td", { class: "num" }, seconds(row.followup_ttft)),

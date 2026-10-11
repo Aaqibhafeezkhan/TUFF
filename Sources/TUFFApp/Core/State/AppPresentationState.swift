@@ -205,7 +205,8 @@ public struct AppPresentationState: Equatable, Sendable {
 
         if case .ready = snapshot.loadState {
             if let reason = snapshot.lastStopReason {
-                return Self(label: "Done · \(reason.rawValue)", severity: .success,
+                return Self(label: reason.statusLabel,
+                            severity: reason == .failed ? .warning : .success,
                             secondaryAction: .unload)
             }
             return Self(label: "Ready", severity: .success, secondaryAction: .unload)

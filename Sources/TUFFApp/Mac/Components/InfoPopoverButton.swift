@@ -25,6 +25,9 @@ struct InfoPopoverButton: View {
             Text(text)
                 .appFont(.callout)
                 .frame(width: 280, alignment: .leading)
+                // Without this the popover kept one line's worth of height
+                // and cut longer explanations off mid-sentence.
+                .fixedSize(horizontal: false, vertical: true)
                 .padding()
         }
         .accessibilityLabel("\(subject) information")

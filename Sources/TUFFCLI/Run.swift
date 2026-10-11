@@ -119,7 +119,7 @@ public func run(args: Args,
         guard multimodalMessages != nil || promptIds.count < args.maxContext else {
             return errored(
                 stderr,
-                "context overflow: prompt \(promptIds.count) reaches maxContext \(args.maxContext)",
+                "the prompt is \(promptIds.count) tokens, which fills the \(args.maxContext)-token context; raise --max-context",
                 2)
         }
         func makeConfig(maxNewTokens: Int) -> GenerationConfig {
@@ -144,7 +144,7 @@ public func run(args: Args,
         }
 
         var effectiveArgs = args
-        if args.prefillChunkTokensAuto {
+        if args.prefillChunkTokensAuto, args.prefillPolicy != .off {
             let promptTokens = try estimatedPromptTokens(
                 input: input, tokenizer: tokenizer, device: device,
                 family: modelFamily,
@@ -165,7 +165,8 @@ public func run(args: Args,
         let args = effectiveArgs
         let runtime = try args.resolvedRuntimeConfiguration(
             forceLogitsHead: !makeConfig(maxNewTokens: args.maxNew).isPureGreedy,
-            imagePrompt: input.hasImages)
+            imagePrompt: input.hasImages,
+            chunkedPrefillNeedsSlotFloor: modelFamily != .gptOss)
 
         if !args.quiet {
             let memory = TUFFModelCatalog.all.first {
@@ -254,7 +255,7 @@ public func run(args: Args,
                 return errored(
                     stderr,
                     "context overflow: prompt needs at least \(projected) tokens, "
-                        + "which reaches maxContext \(args.maxContext)",
+                        + "which fills the \(args.maxContext)-token context; raise --max-context",
                     2)
             }
         }
@@ -323,7 +324,7 @@ public func run(args: Args,
             guard promptIds.count < args.maxContext else {
                 return errored(
                     stderr,
-                    "context overflow: prompt \(promptIds.count) reaches maxContext \(args.maxContext)",
+                    "the prompt is \(promptIds.count) tokens, which fills the \(args.maxContext)-token context; raise --max-context",
                     2)
             }
         } else {
@@ -339,10 +340,18 @@ public func run(args: Args,
             promptOpensThinking: StructuredAssistantDecoder.promptOpensThinking(
                 tokenizer: tokenizer, reasoning: effectiveThinking))
         var assistantDecodeError: Error?
+        var lastWritten: Character?
+        var thoughtTokens = false
         func writeAssistantEvents(_ events: [StructuredAssistantEvent]) {
             for event in events {
-                if case .content(let text) = event, !text.isEmpty {
+                switch event {
+                case .content(let text) where !text.isEmpty:
                     stdout.write(Data(text.utf8))
+                    lastWritten = text.last
+                case .thinking(let text) where !text.isEmpty:
+                    thoughtTokens = true
+                default:
+                    break
                 }
             }
         }
@@ -379,6 +388,21 @@ public func run(args: Args,
             }
         if let assistantDecodeError { throw assistantDecodeError }
         try assistantDecoder.finish()
+        if lastWritten != nil, lastWritten != "\n", args.quiet {
+            stdout.write(Data("\n".utf8))
+        }
+        // Said even with --quiet: an empty answer with exit code 0 otherwise
+        // looks like the model had nothing to say.
+        if case .maxTokens = stats.reason {
+            if lastWritten == nil, thoughtTokens {
+                stderr.write(Data(("[no answer: reasoning used all \(stats.newTokens) tokens; "
+                    + "raise --max-new" + (modelFamily == .gptOss
+                        ? " or use --reasoning low" : " or use --thinking off") + "]\n").utf8))
+            } else if effectiveMaxNew < args.maxNew {
+                stderr.write(Data(("[stopped at the context limit of \(args.maxContext) tokens; "
+                    + "raise --max-context for a longer answer]\n").utf8))
+            }
+        }
 
         if ProcessInfo.processInfo.environment["TUFF_PHASES"] == "1" {
             let ms = { (n: UInt64) in String(format: "%.1f", Double(n) / 1e6) }

@@ -60,6 +60,17 @@ import Testing
             .strikethroughStyle, at: strikeRange.location, effectiveRange: nil) != nil)
     }
 
+    /// Every message re-renders each time a token arrives elsewhere in the
+    /// chat, so an unchanged message must come back from the cache as the same
+    /// object rather than being parsed again.
+    @Test func renderingTheSameTextReturnsTheCachedResult() {
+        let renderer = ResponseMarkdownRenderer()
+        let source = "# Cached \(UUID().uuidString)\n\n**bold** and `code`"
+        let first = renderer.render(source).attributedString
+        #expect(renderer.render(source).attributedString === first)
+        #expect(ResponseMarkdownRenderer(scale: 2).render(source).attributedString !== first)
+    }
+
     @Test func unfinishedFenceFallsBackToExactRawText() {
         let source = "Before\n\n```python\nprint('unfinished')"
         let result = ResponseMarkdownRenderer().render(source)
@@ -198,6 +209,36 @@ import Testing
         #expect(controller.response == "Hello")
         #expect((storage.string as NSString).substring(with: second.assistantRange)
             == "Hello")
+    }
+
+    /// Finished paragraphs are formatted while the answer streams; the one
+    /// still being written, and anything inside an open code fence, stays raw.
+    @Test func finishedParagraphsAreFormattedWhileStreaming() {
+        let storage = NSMutableAttributedString()
+        let controller = StreamingResponseDocumentController()
+        _ = controller.synchronize(storage: storage, response: "### Day", isTerminal: false)
+        #expect(storage.string == "### Day")
+
+        let formatted = controller.synchronize(
+            storage: storage, response: "### Day 1\n\n**Morning** walk", isTerminal: false)
+        #expect(formatted.mutation == .rebuilt)
+        #expect(storage.string.hasPrefix("Day 1"))
+        #expect(storage.string.hasSuffix("\n**Morning** walk"))
+        #expect(!storage.string.contains("###"))
+
+        let appended = controller.synchronize(
+            storage: storage, response: "### Day 1\n\n**Morning** walk.", isTerminal: false)
+        #expect(appended.mutation == .appended)
+
+        #expect(StreamingResponseDocumentController.finishedParagraphBoundary(
+            in: "```swift\nlet a = 1\n\nlet b = 2\n") == 0)
+        #expect(StreamingResponseDocumentController.finishedParagraphBoundary(
+            in: "Intro\n\n```swift\nlet a = 1\n\n") == 7)
+
+        let final = controller.synchronize(
+            storage: storage, response: "### Day 1\n\n**Morning** walk.", isTerminal: true)
+        #expect(final.mutation == .finalized)
+        #expect(storage.string == "Day 1\nMorning walk." || !storage.string.contains("**"))
     }
 
     @Test func animatedPrefillPlaceholderIsPresentationOnlyAndFirstResponseRemovesIt() {

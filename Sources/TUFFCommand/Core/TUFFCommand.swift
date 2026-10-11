@@ -32,7 +32,8 @@ public enum TUFFCommandError: Error, Equatable, CustomStringConvertible {
         case .duplicateModel:
             "--model may only be supplied once"
         case .missingPrompt:
-            "prompt text is required"
+            "prompt text is required, for example: tuff prompt \"Hello\" "
+                + "(text that starts with -- goes after --chat-prompt)"
         case .unexpectedArgument(let argument):
             "unexpected argument: \(argument)"
         case .unknownModel(let model):
@@ -64,7 +65,9 @@ public enum TUFFCommand {
       load     Select an installed model, open TUFF, and load it into the app.
       serve    Start the local OpenAI-compatible server in the foreground. Every
                installed model is served and loads when a request names it;
-               `default` means the selected app model.
+               `default` means the selected app model, or --default-model.
+               (The app's Background API has its own default, set on the
+               Server screen.)
       bench    Benchmark installed models and optionally share the result on
                GitHub Discussions.
 
@@ -151,6 +154,8 @@ public enum TUFFCommand {
             fileExists: fileExists)
         var forwarded = extracted.remaining
         if let first = forwarded.first, !first.hasPrefix("-") {
+            guard !first.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            else { throw TUFFCommandError.missingPrompt }
             forwarded.removeFirst()
             guard !containsAny(["--prompt", "--chat-prompt", "--messages-file"], in: forwarded)
             else { throw TUFFCommandError.unexpectedArgument(first) }

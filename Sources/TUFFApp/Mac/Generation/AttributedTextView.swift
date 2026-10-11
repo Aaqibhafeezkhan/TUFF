@@ -71,6 +71,10 @@ struct AttributedTextView: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextViewDelegate {
         var onLink: ((URL) -> Void)?
+        /// The string last applied. The renderer caches its results, so an
+        /// unchanged message hands back the same object and the comparison
+        /// below is skipped on every token of a reply elsewhere in the chat.
+        weak var applied: NSAttributedString?
 
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
             guard let url = link as? URL ?? (link as? String).flatMap(URL.init(string:)) else {
@@ -94,9 +98,11 @@ struct AttributedTextView: NSViewRepresentable {
     func updateNSView(_ textView: MessageTextView, context: Context) {
         context.coordinator.onLink = onLink
         textView.onHeightChange = { measured in height = measured }
+        guard context.coordinator.applied !== attributed else { return }
         if textView.textStorage?.isEqual(to: attributed) != true {
             textView.textStorage?.setAttributedString(attributed)
         }
+        context.coordinator.applied = attributed
         textView.reportHeight()
     }
 }

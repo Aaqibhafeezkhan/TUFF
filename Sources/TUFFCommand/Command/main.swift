@@ -13,6 +13,19 @@ private func run(_ executableURL: URL, arguments: [String]) throws -> Int32 {
     process.standardInput = FileHandle.standardInput
     process.standardOutput = FileHandle.standardOutput
     process.standardError = FileHandle.standardError
+    // Passed on rather than left to kill only this wrapper: `kill <pid>` on
+    // `tuff serve` used to exit here and leave the server holding its port.
+    // Ctrl-C reaches both already; the server ignores a second signal.
+    let forwarded = [SIGINT, SIGTERM, SIGHUP].map { signalNumber in
+        signal(signalNumber, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: signalNumber, queue: .global())
+        source.setEventHandler {
+            if process.isRunning { kill(process.processIdentifier, signalNumber) }
+        }
+        source.resume()
+        return source
+    }
+    defer { forwarded.forEach { $0.cancel() } }
     try process.run()
     process.waitUntilExit()
     return process.terminationStatus
@@ -61,7 +74,11 @@ do {
     }
 } catch {
     writeError("error: \(error)")
-    writeError("")
-    writeError(TUFFCommand.usage)
+    if case TUFFCommandError.unknownCommand = error {
+        writeError("")
+        writeError(TUFFCommand.usage)
+    } else {
+        writeError("Run `tuff --help` for the commands.")
+    }
     exit(2)
 }

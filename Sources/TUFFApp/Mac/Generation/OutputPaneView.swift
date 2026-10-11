@@ -160,8 +160,11 @@ struct OutputPaneView: View {
                 mailbox: model.hasLiveMessage
                     ? model.generationTranscriptMailbox : nil,
                 isTerminal: !model.isRunning,
+                // Only until something comes back: once the model is
+                // thinking, the Thinking row says so.
                 showsPrefillPlaceholder: model.isRunning
                     && model.outputResponsePlainText.isEmpty
+                    && model.outputThinkingText.isEmpty
                     && model.phase != .tools),
             toolEntries: ToolActivityEntry.entries(from: model.outputToolActivities),
             sources: model.outputSources)
@@ -185,7 +188,11 @@ struct OutputPaneView: View {
     private var emptyPlaceholderContent: some View {
         VStack(spacing: 8) {
             if !needsModelLoad {
-                Text("Choose a predefined example or write your own prompt.")
+                // Examples can be turned off in Settings; then there is
+                // nothing to choose from.
+                Text(model.showPromptExamples
+                     ? "Choose a predefined example or write your own prompt."
+                     : "Write a message to start.")
                     .appFont(.headline)
                 Text("Describe the goal, relevant context, and any constraints.")
                     .appFont(.callout)

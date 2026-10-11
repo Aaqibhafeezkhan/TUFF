@@ -33,6 +33,11 @@ public final class StreamingResponseDocumentController {
     public private(set) var assistantRange = NSRange(location: 0, length: 0)
     private var prefillPlaceholderRange: NSRange?
     private var prefillDotCount = 0
+    /// How many characters of `response` are shown formatted. Paragraphs
+    /// that are finished are rendered as they complete; only the one still
+    /// being written stays raw, so headings and bold no longer show their
+    /// `###` and `**` until the very end.
+    private var formattedCharacterCount = 0
 
     private let renderer: ResponseMarkdownRenderer
     /// The zoom this document is set at. The streamed text is an
@@ -100,6 +105,10 @@ public final class StreamingResponseDocumentController {
                 attributes: Self.responseAttributes(scale: scale)))
             assistantRange.length += (delta as NSString).length
             mutation = .appended
+            if !isTerminal, delta.contains("\n"),
+               formatFinishedParagraphs(storage: storage, response: response) {
+                mutation = .rebuilt
+            }
         }
 
         self.response = response
@@ -135,11 +144,60 @@ public final class StreamingResponseDocumentController {
         return true
     }
 
+    /// Renders everything up to the last finished paragraph and keeps the rest
+    /// raw. Returns whether the storage changed. A paragraph inside an open
+    /// code fence or display math isn't finished, since rendering half of one
+    /// would show it wrong until the rest arrived.
+    private func formatFinishedParagraphs(
+        storage: NSMutableAttributedString,
+        response: String
+    ) -> Bool {
+        let boundary = Self.finishedParagraphBoundary(in: response)
+        guard boundary > formattedCharacterCount else { return false }
+        let finished = String(response.prefix(boundary))
+            .trimmingCharacters(in: .newlines)
+        let document = NSMutableAttributedString(
+            attributedString: renderer.render(finished).attributedString)
+        document.append(NSAttributedString(
+            string: "\n" + String(response.dropFirst(boundary)),
+            attributes: Self.responseAttributes(scale: scale)))
+        storage.replaceCharacters(in: assistantRange, with: document)
+        assistantRange.length = document.length
+        formattedCharacterCount = boundary
+        return true
+    }
+
+    /// The character offset just past the last blank line that closes a
+    /// paragraph outside code fences and `$$` math, or 0 when there is none.
+    static func finishedParagraphBoundary(in response: String) -> Int {
+        var boundary = 0
+        var offset = 0
+        var inFence = false
+        var inMath = false
+        var previousLineBlank = false
+        for line in response.split(separator: "\n", omittingEmptySubsequences: false)
+            .dropLast() {
+            offset += line.count + 1
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") { inFence.toggle() }
+            if !inFence, trimmed.components(separatedBy: "$$").count % 2 == 0 {
+                inMath.toggle()
+            }
+            let blank = trimmed.isEmpty
+            if blank, !previousLineBlank, !inFence, !inMath, offset > 1 {
+                boundary = offset
+            }
+            previousLineBlank = blank
+        }
+        return boundary
+    }
+
     private func rebuild(
         storage: NSMutableAttributedString,
         response: String,
         showsPrefillPlaceholder: Bool
     ) {
+        formattedCharacterCount = 0
         let document = NSMutableAttributedString()
         assistantRange = NSRange(location: 0, length: 0)
         document.append(NSAttributedString(

@@ -55,7 +55,30 @@ public struct ResponseMarkdownRenderer {
     /// The scheme `AppCitations` gives a validated citation.
     public static let citationScheme = "tuff-source"
 
+    /// Rendered results by zoom, appearance and source. SwiftUI rebuilds
+    /// every message in the transcript each time a token arrives, so without
+    /// this a chat with a few long answers re-parsed all of them per token,
+    /// and the app fell minutes behind the model. Math is drawn as images for
+    /// the current appearance, which is why that is part of the key.
+    private static var cache: [String: Result] = [:]
+    private static var cacheOrder: [String] = []
+    private static let cacheLimit = 256
+
     public func render(_ source: String) -> Result {
+        guard !source.isEmpty else { return renderUncached(source) }
+        let appearance = NSApp?.effectiveAppearance.name.rawValue ?? ""
+        let key = "\(scale)|\(appearance)|\(source)"
+        if let cached = Self.cache[key] { return cached }
+        let result = renderUncached(source)
+        if Self.cacheOrder.count >= Self.cacheLimit {
+            Self.cache.removeValue(forKey: Self.cacheOrder.removeFirst())
+        }
+        Self.cache[key] = result
+        Self.cacheOrder.append(key)
+        return result
+    }
+
+    private func renderUncached(_ source: String) -> Result {
         guard !source.isEmpty else {
             return Result(attributedString: NSAttributedString(), usedFallback: false)
         }

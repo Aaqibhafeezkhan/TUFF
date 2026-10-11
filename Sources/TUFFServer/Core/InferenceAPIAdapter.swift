@@ -228,6 +228,16 @@ enum InferenceAPI: String, Sendable {
                 guard let value = value as? [String: Any], value.count == 1, value["type"] as? String == "text" else { throw Self.invalid("only plain text output is supported", "text.format") }
             }
         }
+        // Checked under the Responses names: once mapped, a bad value was
+        // reported against max_completion_tokens, which the client never sent.
+        if let limit = root["max_output_tokens"] as? NSNumber, limit.intValue < 1 {
+            throw Self.invalid("max_output_tokens must be at least 1", "max_output_tokens")
+        }
+        if let input = root["input"] {
+            let empty = (input as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ?? (input as? [Any])?.isEmpty ?? false
+            if empty { throw Self.invalid("input must not be empty", "input") }
+        }
         var output = try base(root)
         output["max_completion_tokens"] = root["max_output_tokens"]
         output["tool_choice"] = root["tool_choice"]

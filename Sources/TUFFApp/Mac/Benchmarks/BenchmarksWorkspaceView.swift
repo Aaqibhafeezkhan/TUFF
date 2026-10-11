@@ -36,8 +36,10 @@ struct BenchmarksWorkspaceView: View {
             }
             .frame(maxWidth: 920, alignment: .leading)
             .padding(28)
+            // Centred in a wide window rather than pinned to the sidebar.
+            .frame(maxWidth: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color(nsColor: .windowBackgroundColor))
         .task { controller.refresh() }
     }

@@ -109,7 +109,13 @@ public enum ArgsError: Error, Equatable, CustomStringConvertible {
         case .helpRequested: return "help requested"
         case .unknownFlag(let flag): return "unknown flag: \(flag)"
         case .missingValue(let flag): return "missing value for \(flag)"
-        case .invalidValue(let flag, let value): return "invalid value for \(flag): \(value)"
+        case .invalidValue(let flag, let value):
+            if flag == "--expert-cache-slots", Int(value) != nil {
+                let allowed = RuntimeConfiguration.allowedExpertCacheSlots.sorted()
+                    .map(String.init).joined(separator: ", ")
+                return "invalid value for \(flag): \(value) (use one of \(allowed))"
+            }
+            return "invalid value for \(flag): \(value)"
         case .requiredMissing(let flag): return "required flag missing: \(flag)"
         case .mutuallyExclusive(let a, let b): return "\(a) and \(b) are mutually exclusive"
         case .unsupported(let flag, let context):
@@ -131,6 +137,11 @@ extension Args {
     usage: TUFFCLI --model <dir>
            (--prompt <string> | --chat-prompt <string> | --messages-file <path>) [options]
 
+    `tuff prompt <text> [--model <name|path>]` runs this with the text as the
+    chat prompt, takes model names as well as paths, and fills in each
+    model's own context, cache, temperature, top-k and top-p, so the defaults
+    below apply only where neither you nor the model set them.
+
     required:
       --model <dir>             Path to a .gturbo model directory.
       --prompt <string>         Raw-completion prompt.
@@ -148,8 +159,10 @@ extension Args {
       --max-context <int>        Context limit in tokens (default 8192).
       --thinking <off|on>        Native chat reasoning (default off).
       --reasoning <low|medium|high>
-                                GPT-OSS reasoning effort (default medium).
-      --temperature <float>      Sampling temperature (default 0.2; 0 = greedy).
+                                GPT-OSS only: reasoning effort (default medium).
+                                 Reasoning counts toward the --max-new limit
+      --temperature <float>      Sampling temperature (default 0.2, or the model's
+                                 setting through tuff prompt; 0 = greedy).
       --top-k <int>              Top-k truncation, 1...256 (default 64; 0 = off).
       --top-p <float>            Nucleus truncation (default 0.95).
       --repetition-penalty <f>   Repetition penalty (default 1.0).
@@ -162,7 +175,8 @@ extension Args {
                                  Chunked prefill requires 16 or more cache slots.
       --prefill-chunk-tokens <n|auto>
                                  Prefill chunk size: 32, 64, 128, 256, 512, 1024,
-                                 2048, or auto (default 128). Each chunk re-reads
+                                 2048, or auto (default 128; tuff prompt uses auto
+                                 up to the model's size for this Mac). Each chunk re-reads
                                  the routed expert pool, so larger chunks read
                                  less but hold more memory; auto picks the
                                  smallest size that covers the prompt.
@@ -177,9 +191,14 @@ extension Args {
       --help                     Show this message.
     """
 
+    /// `chunkedPrefillNeedsSlotFloor` is false for GPT-OSS, which reads each
+    /// cache-sized expert group in turn and so prefills in chunks with any
+    /// cache size, as `tuff serve` already runs it. Argument parsing doesn't
+    /// know the model yet, so it passes false and the run checks again.
     public func resolvedRuntimeConfiguration(
         forceLogitsHead: Bool,
-        imagePrompt: Bool = false) throws -> RuntimeConfiguration {
+        imagePrompt: Bool = false,
+        chunkedPrefillNeedsSlotFloor: Bool = true) throws -> RuntimeConfiguration {
         // Images reach the runtime two ways, `--image` and `image_file` parts
         // inside `--messages-file`, and only the first fills `images`. Asking
         // the caller keeps the second from surviving validation and dying in
@@ -201,7 +220,8 @@ extension Args {
         }
         let chunkedPrefillSupported = expertCacheSlots >=
             RuntimeConfiguration.minimumExpertCacheSlotsForChunkedPrefill
-        guard prefillPolicy == .off || chunkedPrefillSupported else {
+        guard prefillPolicy == .off || chunkedPrefillSupported
+                || !chunkedPrefillNeedsSlotFloor else {
             throw ArgsError.invalidValue(
                 flag: "--expert-cache-slots",
                 value: "\(expertCacheSlots) requires --prefill off")
@@ -467,7 +487,8 @@ extension Args {
                              rdadvisePolicy: rdadvisePolicy,
                              speculativeMode: speculativeMode,
                              speculativeDraftTokens: speculativeDraftTokens)
-        _ = try arguments.resolvedRuntimeConfiguration(forceLogitsHead: false)
+        _ = try arguments.resolvedRuntimeConfiguration(
+            forceLogitsHead: false, chunkedPrefillNeedsSlotFloor: false)
         return arguments
     }
 
@@ -476,6 +497,12 @@ extension Args {
                                   flag: String) throws -> String {
         guard index + 1 < argv.count else { throw ArgsError.missingValue(flag: flag) }
         let value = argv[index + 1]
+        // `--max-new --max-context 4096` meant a forgotten value, not a value
+        // of "--max-context". Text flags may legitimately start with dashes.
+        let takesText = ["--prompt", "--chat-prompt", "--system-prompt", "--stop"]
+        if value.hasPrefix("--"), !takesText.contains(flag) {
+            throw ArgsError.missingValue(flag: flag)
+        }
         index += 2
         return value
     }

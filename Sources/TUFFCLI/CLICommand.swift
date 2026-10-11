@@ -11,9 +11,10 @@ public enum CLICommand {
             print(Args.usage)
             return 0
         } catch {
-            FileHandle.standardError.write(Data("error: \(error)\n\n".utf8))
-            FileHandle.standardError.write(Data(Args.usage.utf8))
-            FileHandle.standardError.write(Data("\n".utf8))
+            // One line and a pointer: the whole usage after every typo
+            // pushed the actual error off the screen.
+            FileHandle.standardError.write(Data(
+                "error: \(error)\nRun with --help for the options.\n".utf8))
             return 2
         }
         return drive(parsedArgs)

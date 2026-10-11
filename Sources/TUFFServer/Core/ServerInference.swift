@@ -1249,12 +1249,20 @@ public actor ServerModelSession: ServerInferenceBackend {
             positions.append(instructions)
         }
         // Without that rewrite a follow-up already continues from the end of
-        // the KV, so the copy would only cost memory.
-        if request.messages.last?.role == .user, !request.allowsTextBridge,
-           let turn = agreeingTokens(
+        // the KV. The copy is still what a retry of the same request, or a
+        // changed answer to it, goes back to: those render the conversation
+        // only up to here, short of the KV's end. So it is kept for prompts
+        // long enough that reading them again costs more than the copy.
+        // One short of the prompt's end at most: a retry renders exactly this
+        // prompt, and a checkpoint is only used with at least one token left
+        // to read for the next token's logits.
+        if request.messages.last?.role == .user,
+           let agreeing = agreeingTokens(
             with: effectivePromptIDs, request: request,
             probe: request.messages + [.init(role: .assistant, content: Self.probeText)]),
-           turn > (positions.last ?? 0) {
+           case let turn = min(agreeing, effectivePromptIDs.count - 1),
+           turn > (positions.last ?? 0),
+           !request.allowsTextBridge || turn >= Self.minimumSharedPrefixTokens {
             positions.append(turn)
         }
         return positions
@@ -1387,7 +1395,12 @@ extension ServerModelSession {
             for event in events {
                 switch event {
                 case .content(let text):
-                    let visible = state.stopMatcher.push(text)
+                    var visible = state.stopMatcher.push(text)
+                    // Qwen opens its answer with blank lines after reasoning;
+                    // they reached clients as the start of `content`.
+                    if state.content.isEmpty {
+                        visible = String(visible.drop { $0.isNewline })
+                    }
                     if !visible.isEmpty {
                         state.content += visible
                         onEvent(.content(visible))

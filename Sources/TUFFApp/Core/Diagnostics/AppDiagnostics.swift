@@ -9,6 +9,17 @@ public enum AppStopReason: String, Equatable, Sendable {
     case endOfTurn
     case stopString
     case toolCalls
+
+    /// How the end of a reply reads in the status line. A finished answer is
+    /// just "Done"; the raw case names leaked words like "endOfTurn".
+    public var statusLabel: String {
+        switch self {
+        case .eos, .endOfTurn, .stopString, .toolCalls: "Done"
+        case .maxTokens: "Stopped at the length limit"
+        case .cancelled: "Stopped"
+        case .failed: "Failed"
+        }
+    }
 }
 
 public struct AppRunnerDiagnostics: Equatable, Sendable {

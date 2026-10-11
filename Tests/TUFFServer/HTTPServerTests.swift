@@ -694,6 +694,23 @@ struct HTTPServerTests {
         #expect(await !server.hasActiveRequest)
     }
 
+    /// A body that is valid JSON but the wrong shape names the field.
+    @Test func wrongShapeNamesTheField() {
+        func envelope(_ json: String) -> OpenAIErrorEnvelope {
+            do {
+                _ = try InferenceAPI.chat.request(Data(json.utf8))
+                return OpenAIErrorEnvelope(message: "decoded", code: "none")
+            } catch {
+                return OpenAIErrorEnvelope.decoding(error)
+            }
+        }
+        #expect(envelope(#"{"model":"m"}"#).error.param == "messages")
+        #expect(envelope(#"{"model":"m","messages":[],"max_tokens":"ten"}"#).error.param
+            == "max_tokens")
+        #expect(envelope(#"[1]"#).error.message == "the request body must be a JSON object")
+        #expect(envelope(#"{"model":"#).error.code == "invalid_json")
+    }
+
     /// A non-streamed answer writes nothing until it is done, so the server
     /// only learns the client left by reading. It must stop generating.
     @Test func clientLeavingANonStreamedRequestCancelsIt() async throws {
