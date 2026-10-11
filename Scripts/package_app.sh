@@ -307,6 +307,10 @@ done
   | grep -F 'usage: TUFFCLI' >/dev/null
 "$extracted/TUFF.app/Contents/Resources/bin/TUFFServer" --help \
   | grep -F 'usage: TUFFServer' >/dev/null
+# Homebrew links `tuff` onto the PATH, where the shell passes it the bare
+# name. Run it that way from elsewhere: it must still find TUFFCLI.
+(cd / && PATH="$extracted/TUFF.app/Contents/Resources/bin:$PATH" \
+  tuff prompt --help < /dev/null) | grep -F 'usage: TUFFCLI' >/dev/null
 otool -L "$extracted/TUFF.app/Contents/MacOS/TUFF" \
   | grep -F '@rpath/Sparkle.framework/Versions/B/Sparkle' >/dev/null
 

@@ -26,10 +26,12 @@ let applicationSupportURL = (try? fileManager.url(
     in: .userDomainMask,
     appropriateFor: nil,
     create: false)) ?? fileManager.homeDirectoryForCurrentUser
-let rawExecutableURL = URL(fileURLWithPath: CommandLine.arguments[0])
-let executableURL = CommandLine.arguments[0].hasPrefix("/")
-    ? rawExecutableURL
-    : currentDirectoryURL.appendingPathComponent(CommandLine.arguments[0])
+// A shell that finds `tuff` on the PATH passes the bare name as argv[0], so
+// argv[0] can't locate the bundled executables. The path the kernel ran can.
+let executableURL = Bundle.main.executableURL
+    ?? (CommandLine.arguments[0].hasPrefix("/")
+        ? URL(fileURLWithPath: CommandLine.arguments[0])
+        : currentDirectoryURL.appendingPathComponent(CommandLine.arguments[0]))
 let preferences = UserDefaults(suiteName: "TUFF")
 
 do {
