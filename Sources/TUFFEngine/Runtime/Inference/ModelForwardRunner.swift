@@ -424,3 +424,12 @@ extension ModelForwardRunner: PrefixCheckpointingRunner {
         }
     }
 }
+
+extension ModelForwardRunner: PrefillPhaseReporting {
+    public var prefillPhaseTimes: PrefillPhaseTimes {
+        switch backend {
+        case .affine(let runner): return runner.prefillPhaseTimes
+        case .gptOss(let runner): return runner.prefillPhaseTimes
+        }
+    }
+}

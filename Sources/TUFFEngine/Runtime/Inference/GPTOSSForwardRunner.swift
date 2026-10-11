@@ -56,6 +56,8 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
     private let prefillProjection: MPPPrefillBF16MM?
     /// Decode lookahead: the next layer's predicted experts, read ahead.
     private var lookahead = ExpertLookahead()
+    private var prefillClock = PrefillPhaseClock()
+    var prefillPhaseTimes: PrefillPhaseTimes { prefillClock.times }
     private lazy var lookaheadIndices: MTLBuffer = context.device.makeBuffer(
         length: max(1, config.topKExperts) * MemoryLayout<UInt32>.stride,
         options: .storageModeShared)!
@@ -535,6 +537,8 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
             throw PrefillError.chunkedUnsupported(
                 "GPT-OSS logits buffer is smaller than the model vocabulary")
         }
+        prefillClock.active = speculativeTargetTokens == nil
+        defer { prefillClock.active = false }
 
         _ = lookahead.drain()
         let floatBytes = MemoryLayout<Float>.stride
@@ -552,6 +556,7 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
                 outputOffset: row * config.hiddenSize * floatBytes,
                 hiddenSize: config.hiddenSize)
         }
+        embeddingCB.label = "gptoss prefill phase=embed_attention"
         embeddingCB.commit()
         try waitForCompletion(embeddingCB)
         for layer in 0..<config.numLayers {
@@ -737,6 +742,7 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
             outputWeights: expertScratch.routeWeights,
             numExperts: UInt32(config.numExperts),
             rows: queryCount)
+        cb1.label = "gptoss prefill layer=\(layer) phase=attention"
         cb1.commit()
         try waitForCompletion(cb1)
 
@@ -805,12 +811,14 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
                 recordDecodeExpertFetch(layer: layer, plan: plannedFetch)
             }
             let blobs: [TensorView]
+            let readStart = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
             if let plannedFetch {
                 blobs = try await model.fetchRoutedExperts(plan: plannedFetch)
             } else {
                 blobs = try await model.fetchRoutedExperts(
                     layer: layer, experts: expertIDs)
             }
+            prefillClock.expertRead(nanos: clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - readStart)
             var blobByExpert: [Int: TensorView] = [:]
             for (expert, blob) in zip(expertIDs, blobs) {
                 blobByExpert[expert] = blob
@@ -857,6 +865,7 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
                     output: hidden,
                     queryCount: queryCount)
             }
+            cb2.label = "gptoss prefill layer=\(layer) phase=routed_tile"
             cb2.commit()
             try withExtendedLifetime(blobs) {
                 try waitForCompletion(cb2)
@@ -1285,7 +1294,9 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
     private nonisolated func waitForCompletion(
         _ commandBuffer: MTLCommandBuffer
     ) throws {
+        let start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
         commandBuffer.waitUntilCompleted()
+        prefillClock.waited(commandBuffer, wallNanos: clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - start)
         try checkCommandBufferError(commandBuffer)
     }
 }

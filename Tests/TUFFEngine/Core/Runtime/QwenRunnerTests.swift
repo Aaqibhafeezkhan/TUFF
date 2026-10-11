@@ -149,6 +149,20 @@ import TUFFValidationSupport
         #expect(resumed == Fp16Buffer.read(logits, count: 1024))
     }
 
+    @Test func prefillReportsItsPhases() async throws {
+        let (dir, ctx, runner) = try makeRunner()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let logits = try makeLogits(ctx, vocab: 1024)
+        let tokens: [Int32] = [1, 2, 3, 4, 5, 6, 7, 8]
+        _ = try await runner.prefillChunked(tokens: tokens[...], startPosition: 0,
+            outputMode: .greedyIfAvailable, config: .production(chunkTokens: 32),
+            into: logits, onProgress: { _ in })
+        let phases = runner.prefillPhaseTimes
+        #expect(phases.attentionGPU > 0)
+        #expect(phases.routedExpertGPU > 0)
+        #expect(phases.gpuWait > 0)
+    }
+
     /// Chunked prefill smoke: one chunk through the qwen prefill path
     /// (batched GDN projections + conv tail carry, packed q_proj split,
     /// sub-dim RoPE, no V norm, ones router scales, residual-add tail),

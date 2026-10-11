@@ -328,6 +328,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
     /// has no auxiliary scale tensors.
     private let onesPerExpertScale: MTLBuffer?
     private var prefillChunkState = PrefillChunkCommitState()
+    private var prefillClock = PrefillPhaseClock()
+    public var prefillPhaseTimes: PrefillPhaseTimes { prefillClock.times }
     private var prefillScratch: PrefillChunkScratchBuffers?
     /// Largest text chunk the KV ring was sized for at load. A later request
     /// for more is run at this size rather than refused mid-prefill.
@@ -1447,6 +1449,10 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
         guard kv != nil else {
             throw PrefillError.chunkedUnsupported("chunked prefill attention requires FP16 KV")
         }
+        // Speculative verification reuses this path during decode; only a
+        // prompt is timed as prefill.
+        prefillClock.active = speculativeTargetTokens == nil
+        defer { prefillClock.active = false }
         let kvPosition = kv?.position ?? 0
         guard kvPosition == startPosition else {
             throw PrefillError.chunkedUnsupported(
@@ -2739,6 +2745,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                         }
                         try Task.checkCancellation()
                         try routedPhaseObserver?(.fetchStarting(layer: L, tile: tileIndex))
+                        let readStart = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+                        defer { prefillClock.expertRead(nanos: clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - readStart) }
                         let fetch = try await PrefillStreamedTileBinding.fetchBindingForTile(
                             model: model,
                             layer: L,
@@ -4483,7 +4491,9 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
     }
 
     private nonisolated func waitForCompletion(_ cb: MTLCommandBuffer) throws {
+        let start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
         waitUntilCompleted(cb)
+        prefillClock.waited(cb, wallNanos: clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - start)
         try checkCommandBufferError(cb)
     }
 
