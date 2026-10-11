@@ -252,8 +252,16 @@ public final class RoutedServerModelProvider: ServerModelProvider {
         })
     }
 
-    public func health() -> [String: String] {
-        ["status": "ok", "mode": "router", "vision": parserVisionCapability]
+    public func health() async -> ServerHealth {
+        let activity = await scheduler.activity
+        return ServerHealth(
+            mode: "router", vision: parserVisionCapability,
+            // The name a client would send, not the catalog's internal one.
+            loadedModel: activity.residentModel.map {
+                ServerInstalledModels.descriptor(named: $0)?.apiModelID ?? $0
+            },
+            activeRequests: activity.activeRequests,
+            queuedRequests: activity.queuedRequests)
     }
 
     public func route(_ requestedModel: String) throws -> ServerRoutedModel {
