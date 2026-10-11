@@ -4630,6 +4630,10 @@ extension RealForwardRunner: PrefixCheckpointingRunner {
         kv != nil && qwenMultimodalRopeDelta == 0
     }
 
+    public var prefixCheckpointByteEstimate: Int {
+        checkpointBuilder(position: continuationPosition).byteCount
+    }
+
     private func checkpointBuilder(position: Int) -> RunnerStateSnapshotBuilder {
         var builder = RunnerStateSnapshotBuilder()
         if let kv {

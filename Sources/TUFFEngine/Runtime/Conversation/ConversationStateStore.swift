@@ -73,7 +73,13 @@ public final class ConversationStateStore {
 
     public let budgetBytes: Int
     public let maximumRetained: Int
-    public private(set) var active: ConversationCacheEntry?
+    public private(set) var active: ConversationCacheEntry? {
+        didSet { if active != oldValue { activeIsPrefixOnly = false } }
+    }
+    /// The runner holds only a prefix of the active entry: a cancelled request
+    /// was rewound to where it started rather than reset. Only the entry's
+    /// checkpoints at or before that point can be resumed from.
+    private var activeIsPrefixOnly = false
     private var retained: [Retained] = []
     private var clock: UInt64 = 0
     private var counters = Statistics(budgetBytes: 0, retainedConversations: 0, retainedBytes: 0)
@@ -136,13 +142,22 @@ public final class ConversationStateStore {
             active?.prefixCheckpoints = []
         }
         // An active entry is only as good as the runner's agreement with it.
-        if let entry = active, runner.continuationPosition != entry.kvPosition {
+        if let entry = active, runner.continuationPosition != entry.kvPosition,
+           !activeIsPrefixOnly {
             active = nil
         }
-        let activeMatch = ConversationCache.match(
-            entry: active, domain: domain, transcript: transcript,
-            renderedPromptIDs: renderedPromptIDs, tokenizer: tokenizer,
-            modelVariant: modelVariant, allowsTextBridge: allowsTextBridge)
+        let activeMatch: ConversationCacheMatch
+        if activeIsPrefixOnly {
+            activeMatch = ConversationCache.matchCheckpoint(
+                entry: active, domain: domain, transcript: transcript,
+                renderedPromptIDs: renderedPromptIDs,
+                maximumPosition: runner.continuationPosition) ?? .miss(.unusableEntry)
+        } else {
+            activeMatch = ConversationCache.match(
+                entry: active, domain: domain, transcript: transcript,
+                renderedPromptIDs: renderedPromptIDs, tokenizer: tokenizer,
+                modelVariant: modelVariant, allowsTextBridge: allowsTextBridge)
+        }
         // Continuing the active conversation where it stopped beats anything.
         if activeMatch.isHit, let entry = active,
            Self.cachedTokens(activeMatch) == entry.kvPosition {
@@ -276,6 +291,15 @@ public final class ConversationStateStore {
         active = nil
     }
 
+    /// Keeps `entry` after a cancelled request that continued it, once the
+    /// runner has been rewound to where that request started. At the entry's
+    /// own end the entry is whole again; before it, as after a checkpoint
+    /// hit, only its checkpoints up to the runner's position are usable.
+    public func restoreAfterCancel(_ entry: ConversationCacheEntry, runnerPosition: Int) {
+        active = entry
+        activeIsPrefixOnly = runnerPosition != entry.kvPosition
+    }
+
     /// Drops every retained conversation and the active claim, for example
     /// when the model or its runtime changes.
     public func clear() {
@@ -332,6 +356,9 @@ public final class ConversationStateStore {
     private func displaceActive(runner: any StateSnapshottingRunner & ContinuableLogitProducer,
                                 reservedBytes: Int) {
         defer { active = nil }
+        // The runner holds less than the entry describes, so a copy of it
+        // could not be resumed as that entry.
+        guard !activeIsPrefixOnly else { return }
         guard let entry = active, maximumRetained > 0, budgetBytes > 0 else { return }
         guard !memoryIsPressured() else { return }
         guard let stateBytes = runner.stateSnapshotByteEstimate,

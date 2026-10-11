@@ -42,6 +42,7 @@ extension RawCompletionLoopTests {
         }
 
         var supportsPrefixCheckpoints: Bool { true }
+        var prefixCheckpointByteEstimate: Int { 0 }
         func capturePrefixCheckpoint() throws -> RunnerStateSnapshot {
             checkpointPositions.append(continuationPosition)
             return RunnerStateSnapshot(

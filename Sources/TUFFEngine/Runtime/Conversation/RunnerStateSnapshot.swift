@@ -97,6 +97,8 @@ extension StateSnapshottingRunner {
 public protocol PrefixCheckpointingRunner: AnyObject {
     /// Whether this runner can take checkpoints at all.
     var supportsPrefixCheckpoints: Bool { get }
+    /// Bytes a checkpoint taken now would occupy, without allocating it.
+    var prefixCheckpointByteEstimate: Int { get }
     /// Copies what returning to the current position later needs. The runner
     /// is unchanged.
     func capturePrefixCheckpoint() throws -> RunnerStateSnapshot
