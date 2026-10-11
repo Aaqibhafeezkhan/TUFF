@@ -292,7 +292,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                                   omittingEmptySubsequences: false).first.map(String.init) ?? head.uri
         switch (head.method, path) {
         case (.GET, "/health"):
-            writeJSON(context, status: .ok, object: provider.health())
+            respondToHealth(context)
         case (.GET, "/v1/models"):
             writeCodable(context, status: .ok, provider.modelList())
         case (.GET, ServerControl.statusPath) where control != nil:
@@ -342,6 +342,18 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
             let unloaded = unload ? await control.unloadIfIdle() : true
             let status = await control.status()
             self.writeCodable(contextBox.value, status: unloaded ? .ok : .conflict, status)
+        }
+    }
+
+    private func respondToHealth(_ context: ChannelHandlerContext) {
+        let contextBox = SendableContext(context)
+        inFlightRequests += 1
+        activeTask = childChannels.startTask {
+            defer {
+                contextBox.value.eventLoop.execute { self.inFlightRequests -= 1 }
+            }
+            let health = await self.provider.health()
+            self.writeCodable(contextBox.value, status: .ok, health)
         }
     }
 

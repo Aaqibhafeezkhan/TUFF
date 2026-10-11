@@ -30,7 +30,7 @@ public protocol ServerModelProvider: Sendable {
     /// models could take images; the routed model is checked afterwards.
     var parserVisionCapability: String { get }
     func modelList() -> OpenAIModelList
-    func health() -> [String: String]
+    func health() async -> ServerHealth
     func route(_ requestedModel: String) throws -> ServerRoutedModel
     func run<Prepared: Sendable, T: Sendable>(
         _ model: ServerRoutedModel,
@@ -41,4 +41,44 @@ public protocol ServerModelProvider: Sendable {
     var queuedCount: Int { get async }
     var isActive: Bool { get async }
     func shutdown() async
+}
+
+/// What `GET /health` reports. A client can tell a running server from a
+/// loaded model here, and so avoid triggering an expensive load, or a second
+/// heavyweight engine, by accident.
+public struct ServerHealth: Encodable, Equatable, Sendable {
+    public var status = "ok"
+    public var mode: String?
+    public var vision: String
+    /// The API ID of the model in memory, or nil when none is loaded.
+    public var loadedModel: String?
+    public var activeRequests: Int
+    public var queuedRequests: Int
+
+    public init(mode: String? = nil, vision: String, loadedModel: String?,
+                activeRequests: Int, queuedRequests: Int) {
+        self.mode = mode
+        self.vision = vision
+        self.loadedModel = loadedModel
+        self.activeRequests = activeRequests
+        self.queuedRequests = queuedRequests
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case status, mode, vision
+        case loadedModel = "loaded_model"
+        case activeRequests = "active_requests"
+        case queuedRequests = "queued_requests"
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(status, forKey: .status)
+        try container.encodeIfPresent(mode, forKey: .mode)
+        try container.encode(vision, forKey: .vision)
+        // Present as null rather than missing, so "nothing loaded" is explicit.
+        try container.encode(loadedModel, forKey: .loadedModel)
+        try container.encode(activeRequests, forKey: .activeRequests)
+        try container.encode(queuedRequests, forKey: .queuedRequests)
+    }
 }

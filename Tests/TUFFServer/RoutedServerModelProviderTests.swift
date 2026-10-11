@@ -176,6 +176,39 @@ private actor RoutedHTTPBackend: ServerInferenceBackend {
         #expect(await backend.started == false)
         await p.shutdown()
     }
+    /// A client can tell a running server from a loaded model: `/health`
+    /// names the resident model, or reports null, and says whether a request
+    /// is running, without a control token.
+    @Test func healthReportsTheLoadedModelAndRunningRequests() async throws {
+        let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
+        try install(TUFFModelCatalog.gemma4_E2B, root: root)
+        let backend = RoutedHTTPBackend(hold: true), p = provider(root, backend: backend)
+        let idle = await p.health()
+        #expect(idle.loadedModel == nil)
+        #expect(idle.activeRequests == 0)
+        let json = String(decoding: try JSONEncoder().encode(idle), as: UTF8.self)
+        #expect(json.contains(#""loaded_model":null"#))
+
+        let server = TUFFHTTPServer(provider: p)
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        let task = Task { try await p.run(p.route("default"), onQueued: {}, prepare: { _ in 1 }, operation: { _, _ in
+            try await backend.waitForRelease()
+            return 1
+        }) }
+        for _ in 0..<1000 { if await backend.started { break }; try await Task.sleep(for: .milliseconds(1)) }
+        let data = try await URLSession.shared.data(
+            from: URL(string: "http://127.0.0.1:\(port)/health")!).0
+        let body = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(body["loaded_model"] as? String == TUFFModelCatalog.gemma4_E2B.apiModelID)
+        #expect(body["active_requests"] as? Int == 1)
+        #expect(body["status"] as? String == "ok")
+        await backend.finish()
+        _ = try await task.value
+        try await channel.close()
+        await p.shutdown()
+    }
+
     @Test func httpJSONStreamingAndControlAuthorization() async throws {
         let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
         try install(TUFFModelCatalog.gemma4_E2B, root: root)

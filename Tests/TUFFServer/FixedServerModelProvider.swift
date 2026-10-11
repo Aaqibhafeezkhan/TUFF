@@ -36,8 +36,9 @@ struct FixedServerModelProvider: ServerModelProvider {
         ])
     }
 
-    func health() -> [String: String] {
-        ["status": "ok", "vision": visionCapability]
+    func health() async -> ServerHealth {
+        ServerHealth(vision: visionCapability, loadedModel: modelID,
+                     activeRequests: 0, queuedRequests: 0)
     }
 
     func route(_ requestedModel: String) throws -> ServerRoutedModel {

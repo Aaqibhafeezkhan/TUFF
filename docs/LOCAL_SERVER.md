@@ -32,7 +32,7 @@ support loaded, the API answers 503 instead of loading a second model.
 
 | Endpoint | |
 | --- | --- |
-| `GET /health` | Is it up |
+| `GET /health` | Is it up, and which model is loaded |
 | `GET /v1/models` | Installed models and limits |
 | `POST /v1/chat/completions` | The main route, with everything below |
 | `POST /v1/messages` | Messages format, text and function tools |
@@ -88,11 +88,55 @@ version.
 current conversation), `TUFF_PREFIX_DISK_CACHE_MB` lowers the disk budget
 (`0` turns it off), and `TFF_LOG_CACHE=1` logs each reuse decision.
 
+## Health
+
+`GET /health` answers without loading anything:
+
+```json
+{"status": "ok", "mode": "router", "vision": "ready",
+ "loaded_model": "gpt-oss-20b", "active_requests": 1, "queued_requests": 0}
+```
+
+`loaded_model` is the ID of the model in memory, the same one you'd send as
+`model`, or `null` when none is loaded. Check it before sending a request if
+you'd rather not trigger a load, or start a second large model, by accident.
+
 ## Timings
 
-Every response includes `tuff_timings_seconds`: validation, queueing and
-loading, prefill, decode, and time to the first visible output. The engine
-spans overlap, so don't add them up.
+Every response includes `tuff_timings_seconds`. All values are seconds,
+measured inside TUFF, so they don't include the network or how your client
+displays the reply. Some spans contain others, so don't add them all up.
+
+The request, in order:
+
+| Field | What it covers |
+| --- | --- |
+| `body_and_validation` | Reading and checking the request |
+| `queue_and_model_load` | Waiting for earlier requests, plus loading the model if it wasn't in memory |
+| `preparation` | Preparing the request for the model |
+| `stream_setup` | Starting the streamed response |
+| `generation_to_first_event` | From the start of generation to the first visible output: reasoning, text or a tool call |
+| `time_to_first_event` | From the request arriving to the first visible output. This is the wait a user sees |
+
+Inside generation:
+
+| Field | What it covers |
+| --- | --- |
+| `prompt_render_and_tokenization` | Turning the messages into tokens |
+| `cache_plan` | Deciding how much saved state to reuse, including the three below |
+| `cache_lookup_and_bridge` | Comparing the request with saved conversations |
+| `cache_capture` | Copying another conversation's state out of the way |
+| `cache_restore` | Restoring a saved conversation |
+| `prefix_snapshot_load` | Loading a saved system prompt from disk |
+| `prefill` | Reading the prompt tokens that weren't reused |
+| `decode` | Writing every output token, after the prompt is read |
+
+Image requests also report `image_admission` and
+`multimodal_render_and_encode`. The cache fields are 0 when that step didn't
+run.
+`usage.prompt_tokens_details.cached_tokens` says how many prompt tokens were
+reused, and `usage.completion_tokens` is the count `decode` produced, so
+tokens per second is `completion_tokens / decode`.
 
 ## Agents
 
