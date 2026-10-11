@@ -229,8 +229,9 @@ struct AppSettingsView: View {
                             let eligibility = contextEligibility(
                                 tokens: selectedProfile.contextTokens,
                                 slots: slots)
-                            Text("\(slots) slots · "
-                                + MetricFormat.storage(eligibility.estimatedWorkingSetBytes))
+                            Text("\(slots) slots ("
+                                + MetricFormat.storage(eligibility.estimatedWorkingSetBytes)
+                                + " total)")
                                 .tag(slots)
                                 .disabled(!eligibility.isCompatible)
                         }
@@ -499,8 +500,11 @@ struct AppSettingsView: View {
         _ option: AppContextLengthOption,
         eligibility: AppModelContextEligibility
     ) -> String {
-        option.shortLabel + " · "
-            + MetricFormat.storage(eligibility.estimatedWorkingSetBytes)
+        // The total with this option, not the option's own share: the
+        // selected row always equals the working set below, which read as
+        // three settings that each cost the same.
+        option.shortLabel + " (" + MetricFormat.storage(eligibility.estimatedWorkingSetBytes)
+            + " total)"
     }
 
     private func automaticMemorySummary(_ plan: AppAutomaticMemoryPlan) -> String {

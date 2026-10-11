@@ -673,7 +673,9 @@ public enum OpenAIRequestValidator {
                          attachmentLease: ServerAttachmentLease?) throws -> ValidatedChatRequest {
         guard request.model == modelID else { throw ServerRequestError.unknownModel }
         guard request.n == nil || request.n == 1 else {
-            throw invalid("only n=1 is supported", "n", "unsupported_value")
+            throw request.n.map { $0 < 1 } == true
+                ? invalid("n must be at least 1", "n", "invalid_value")
+                : invalid("only n=1 is supported", "n", "unsupported_value")
         }
         guard request.logprobs != true else {
             throw invalid("logprobs are not supported", "logprobs", "unsupported_value")

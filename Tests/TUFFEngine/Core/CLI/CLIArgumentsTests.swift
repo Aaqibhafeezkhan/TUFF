@@ -271,7 +271,7 @@ import TUFFEngine
         ]).prefillPolicy == .off)
     }
 
-    @Test func unsupportedRuntimeOptionValuesAreRejected() {
+    @Test func unsupportedRuntimeOptionValuesAreRejected() throws {
         let invalidValues = [
             ("--expert-cache-slots", "7"),
             ("--expert-cache-policy", "fifo"),
@@ -288,13 +288,21 @@ import TUFFEngine
             }
         }
 
+        // Parsing doesn't know the model, so a small cache with chunked
+        // prefill passes it; the run rejects it unless the model is GPT-OSS,
+        // which prefills in chunks with any cache size. `tuff prompt` used to
+        // fail on GPT-OSS's own defaults here.
+        let small = try Args.parse([
+            "--model", "m.gturbo", "--prompt", "hi",
+            "--expert-cache-slots", "4", "--prefill", "on",
+        ])
         #expect(throws: ArgsError.invalidValue(
-            flag: "--expert-cache-slots", value: "8 requires --prefill off")) {
-            _ = try Args.parse([
-                "--model", "m.gturbo", "--prompt", "hi",
-                "--expert-cache-slots", "8", "--prefill", "on",
-            ])
+            flag: "--expert-cache-slots", value: "4 requires --prefill off")) {
+            _ = try small.resolvedRuntimeConfiguration(forceLogitsHead: false)
         }
+        let gptOSS = try small.resolvedRuntimeConfiguration(
+            forceLogitsHead: false, chunkedPrefillNeedsSlotFloor: false)
+        #expect(gptOSS.prefillPolicy == .chunked && gptOSS.expertCacheSlots == 4)
     }
 
     @Test func programmaticArgumentsCannotReachRuntimePreconditions() {

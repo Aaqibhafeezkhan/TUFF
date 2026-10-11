@@ -220,6 +220,12 @@ struct TranscriptMessageView: View {
                 height: $responseHeight,
                 onLink: openCitation)
                 .frame(height: max(responseHeight, 1))
+        } else if !thinking.isEmpty, live?.isTerminal != false {
+            // Stopped while still thinking: say so rather than leave an
+            // empty answer under a collapsed row.
+            Text("Stopped before answering. The reasoning so far is under Thinking.")
+                .appFont(.callout)
+                .foregroundStyle(.secondary)
         }
     }
 

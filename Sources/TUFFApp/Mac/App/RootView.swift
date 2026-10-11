@@ -37,6 +37,9 @@ struct RootView: View {
     @State private var benchmarks = BenchmarkController()
     @State private var renameTarget: AppConversationRecord?
     @State private var renameText = ""
+    /// The chat a Delete is waiting on confirmation for. Deleting has no
+    /// undo, so one stray click in a context menu used to lose a chat.
+    @State private var deletionTarget: AppConversationRecord?
     @State private var isFullScreen = false
 
     var body: some View {
@@ -74,7 +77,6 @@ struct RootView: View {
                 endPoint: .bottom)
         }
         .tint(TUFFMacTheme.accentColor)
-        .animation(.smooth(duration: 0.25), value: navigation.destination)
         .animation(.smooth(duration: 0.3), value: model.requiresModelInstallation)
         .animation(.smooth(duration: 0.25), value: model.error)
         .transaction { transaction in
@@ -90,6 +92,27 @@ struct RootView: View {
                 renameTarget = nil
             }
             .disabled(renameText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .confirmationDialog(
+            "Delete \u{201C}\(deletionTarget?.title ?? "")\u{201D}?",
+            isPresented: deletionDialogIsPresented,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let deletionTarget { model.deleteConversation(deletionTarget) }
+                deletionTarget = nil
+            }
+            Button("Cancel", role: .cancel) { deletionTarget = nil }
+        } message: {
+            Text("This chat is removed from this Mac and can't be restored.")
+        }
+    }
+
+    private var deletionDialogIsPresented: Binding<Bool> {
+        Binding {
+            deletionTarget != nil
+        } set: { presented in
+            if !presented { deletionTarget = nil }
         }
     }
 
@@ -174,14 +197,25 @@ struct RootView: View {
             // is for; hiding them behind the destination meant leaving Chat to
             // check a download made every conversation disappear, and coming
             // back was a two-step trip.
-            Section {
+            // Always expanded: a sidebar section collapses when its heading is
+            // clicked, and with no disclosure arrow that looked like the
+            // chats had vanished.
+            Section(isExpanded: .constant(true)) {
                 if model.conversationStore.conversations.isEmpty {
-                    Text("No saved chats")
-                        .appFont(.caption)
-                        .foregroundStyle(.tertiary)
+                    chatsEmptyState
+                        .listRowBackground(Color.clear)
                 } else {
-                    ForEach(model.conversationStore.conversations) { conversation in
-                        conversationRow(conversation)
+                    ForEach(AppConversationDateGroup.grouped(
+                        model.conversationStore.conversations), id: \.group) { section in
+                        Text(section.group.rawValue)
+                            .appFont(.caption2.weight(.semibold))
+                            .foregroundStyle(.tertiary)
+                            .padding(.top, section.group == .today ? 0 : 6)
+                            .listRowBackground(Color.clear)
+                            .accessibilityAddTraits(.isHeader)
+                        ForEach(section.conversations) { conversation in
+                            conversationRow(conversation)
+                        }
                     }
                 }
             } header: {
@@ -212,24 +246,58 @@ struct RootView: View {
 
     /// "Chats", with New Chat beside it rather than as a row of its own.
     private var chatsHeader: some View {
-        HStack {
+        HStack(spacing: 6) {
             Text("Chats")
+            if !model.conversationStore.conversations.isEmpty {
+                Text("\(model.conversationStore.conversations.count)")
+                    .appFont(.caption2.weight(.medium))
+                    .monospacedDigit()
+                    .foregroundStyle(.tertiary)
+            }
             Spacer()
-            Button {
+            SidebarIconButton(
+                systemImage: "square.and.pencil",
+                help: "New Chat (⌘N)",
+                isEnabled: canStartNewChat
+            ) {
                 navigation.select(.chat)
                 model.clearOutput()
-            } label: {
-                Image(systemName: "square.and.pencil")
-                    .appFont(.callout.weight(.medium))
-                    .frame(width: 22, height: 22)
-                    .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(canStartNewChat ? .secondary : .quaternary)
-            .disabled(!canStartNewChat)
-            .help("New Chat (⌘N)")
             .accessibilityLabel("New Chat")
         }
+    }
+
+    /// Where the chats will be, with the way to start one. A grey line of
+    /// text read as an error rather than as a place.
+    private var chatsEmptyState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "bubble.left.and.bubble.right")
+                .appFont(.title3)
+                .foregroundStyle(TUFFMacTheme.accentColor.opacity(0.8))
+                .accessibilityHidden(true)
+            Text("No chats yet")
+                .appFont(.callout.weight(.medium))
+            Text("Your chats are saved here, on this Mac.")
+                .appFont(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .lineLimit(3)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("New Chat") {
+                navigation.select(.chat)
+                model.clearOutput()
+            }
+            .controlSize(.small)
+            .disabled(!canStartNewChat)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 14)
+        .padding(.horizontal, 10)
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(.separator, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+        }
+        .padding(.vertical, 4)
     }
 
     /// Whether the New Chat button does anything. A chat that has not been
@@ -253,44 +321,28 @@ struct RootView: View {
     }
 
     private func conversationRow(_ conversation: AppConversationRecord) -> some View {
-        Button {
+        SidebarChatRow(
+            title: conversation.title,
+            subtitle: modelName(for: conversation.modelID),
+            timestamp: AppConversationDateGroup.shortTimestamp(for: conversation.updatedAt),
+            isSelected: isOpen(conversation)
+        ) {
             // Opening a chat means showing it. Selecting one from Models or
             // Settings used to load it silently behind whatever screen was up,
             // so the click looked like it had done nothing.
             navigation.select(.chat)
             model.selectConversation(conversation)
-        } label: {
-            HStack(spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(conversation.title)
-                        .appFont(.body)
-                        .lineLimit(1)
-                    Text(modelName(for: conversation.modelID))
-                        .appFont(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 4)
-            }
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        // The same treatment the destinations get, rather than a 6pt dot: with
-        // the list always on screen, which chat is open has to be readable at a
-        // glance.
         .listRowBackground(SidebarSelection(isSelected: isOpen(conversation)))
-        .foregroundStyle(isOpen(conversation)
-                         ? TUFFMacTheme.accentColor
-                         : .primary)
         .disabled(!canOpen(conversation))
         .contextMenu {
-            Button("Rename") {
+            Button("Rename…") {
                 renameText = conversation.title
                 renameTarget = conversation
             }
             Divider()
-            Button("Delete", role: .destructive) {
-                model.deleteConversation(conversation)
+            Button("Delete…", role: .destructive) {
+                deletionTarget = conversation
             }
             .disabled(!model.canDeleteConversation(conversation))
         }
@@ -303,7 +355,7 @@ struct RootView: View {
             renameTarget = conversation
         }
         .accessibilityAction(named: "Delete chat") {
-            model.deleteConversation(conversation)
+            deletionTarget = conversation
         }
     }
 
@@ -400,6 +452,83 @@ struct RootView: View {
 
 /// The selected-row highlight: an inset rounded pill, as in Finder and
 /// Mail, rather than a band running edge to edge.
+/// One saved chat: its title, the model it was with, and when it was last
+/// used, with a hover highlight so the list reads as clickable.
+private struct SidebarChatRow: View {
+    let title: String
+    let subtitle: String
+    let timestamp: String
+    let isSelected: Bool
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            // The time sits under the title, beside the model, so a narrow
+            // sidebar gives the title the whole width.
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .appFont(.body)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                HStack(spacing: 4) {
+                    Text(subtitle)
+                        .lineLimit(1)
+                    Text("·")
+                    Text(timestamp)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .layoutPriority(1)
+                }
+                .appFont(.caption2)
+                .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isSelected ? TUFFMacTheme.accentColor : .primary)
+        .background {
+            if isHovered && !isSelected {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Color.primary.opacity(0.06))
+                    .padding(.horizontal, -8)
+                    .padding(.vertical, -2)
+            }
+        }
+        .onHover { isHovered = $0 }
+        .help(title)
+    }
+}
+
+/// A small icon button for the sidebar, with a hover state.
+private struct SidebarIconButton: View {
+    let systemImage: String
+    let help: String
+    let isEnabled: Bool
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .appFont(.callout.weight(.medium))
+                .frame(width: 24, height: 22)
+                .background {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(isHovered && isEnabled ? Color.primary.opacity(0.08) : Color.clear)
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isEnabled ? .secondary : .quaternary)
+        .disabled(!isEnabled)
+        .onHover { isHovered = $0 }
+        .help(help)
+    }
+}
+
 private struct SidebarSelection: View {
     let isSelected: Bool
 

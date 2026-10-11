@@ -12,6 +12,7 @@ struct ServerWorkspaceView: View {
     @Bindable var controller: AppBackgroundAPIController
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var portText = ""
+    @State private var copiedURL = false
     @FocusState private var portIsFocused: Bool
 
     var body: some View {
@@ -30,8 +31,10 @@ struct ServerWorkspaceView: View {
             }
             .frame(maxWidth: 920, alignment: .leading)
             .padding(28)
+            // Centred in a wide window rather than pinned to the sidebar.
+            .frame(maxWidth: .infinity)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background(Color(nsColor: .windowBackgroundColor))
         .task {
             guard controller.isAvailable else { return }
@@ -98,10 +101,18 @@ struct ServerWorkspaceView: View {
                 Spacer()
                 Button {
                     copy(controller.endpoint)
+                    copiedURL = true
                 } label: {
-                    Label("Copy URL", systemImage: "doc.on.doc")
+                    Label(copiedURL ? "Copied" : "Copy URL",
+                          systemImage: copiedURL ? "checkmark" : "doc.on.doc")
+                        .contentTransition(.symbolEffect(.replace))
                 }
                 .accessibilityHint("Copies the loopback endpoint")
+                .task(id: copiedURL) {
+                    guard copiedURL else { return }
+                    try? await Task.sleep(for: .seconds(1.5))
+                    copiedURL = false
+                }
             }
         }
         .padding(18)
@@ -129,6 +140,9 @@ struct ServerWorkspaceView: View {
                     }
                 }
                 .accessibilityHint("The model used by requests that name default")
+                Text("Used when a request names \"default\". Separate from the model chosen in Chat.")
+                    .appFont(.caption)
+                    .foregroundStyle(.secondary)
             }
             Picker("Unload model", selection: Binding(
                 get: { controller.settings.unloadDelay },

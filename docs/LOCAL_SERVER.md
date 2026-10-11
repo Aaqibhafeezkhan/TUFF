@@ -22,8 +22,9 @@ From a clone: `swift run -c release TUFFServer --models-root scratch`.
 
 Point your client at `http://127.0.0.1:8080/v1`. `GET /v1/models` lists the
 installed models and their context and output limits. A request for
-`default` uses the default model; a model ID loads that one. Requests run one
-at a time.
+`default` uses the default model; a model ID loads that one. The short names
+`tuff prompt` takes, such as `gemma4` or `qwen36`, work too. Requests run one
+at a time, and a full queue answers 429 with `Retry-After`.
 
 Chat and the API share one memory budget. If Chat has a model with image
 support loaded, the API answers 503 instead of loading a second model.
@@ -148,7 +149,8 @@ large share of `prefill` is usually `prefill_expert_read_wait`.
 
 Image requests also report `image_admission` and
 `multimodal_render_and_encode`. The cache fields are 0 when that step didn't
-run.
+run, except `prefix_snapshot_load`, which is left out unless a saved system
+prompt was loaded from disk.
 `usage.prompt_tokens_details.cached_tokens` says how many prompt tokens were
 reused, and `usage.completion_tokens` is the count `decode` produced, so
 tokens per second is `completion_tokens / decode`.

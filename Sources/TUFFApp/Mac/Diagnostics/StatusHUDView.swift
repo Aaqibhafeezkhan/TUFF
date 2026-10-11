@@ -12,6 +12,23 @@ struct StatusHUDView: View {
             // Room for the traffic lights, which full screen does not have.
             .padding(.leading, isFullScreen ? 20 : 84)
             .padding(.trailing, 20)
+            .padding(.bottom, 6)
+            // The transcript scrolls under this strip. Without a surface the
+            // answer showed through around the capsule and its lines ran
+            // into the model name; the fade keeps the edge soft.
+            .background(alignment: .top) {
+                Color(nsColor: .windowBackgroundColor)
+                    .ignoresSafeArea(edges: .top)
+                    .overlay(alignment: .bottom) {
+                        LinearGradient(
+                            colors: [Color(nsColor: .windowBackgroundColor),
+                                     Color(nsColor: .windowBackgroundColor).opacity(0)],
+                            startPoint: .top, endPoint: .bottom)
+                            .frame(height: 14)
+                            .offset(y: 14)
+                            .allowsHitTesting(false)
+                    }
+            }
     }
 
     private var strip: some View {

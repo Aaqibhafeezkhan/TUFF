@@ -66,7 +66,7 @@ enum ModelCatalogGroup: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .streaming: "Streamed from SSD"
-        case .resident: "Held in Memory"
+        case .resident: "Loaded Fully into Memory"
         }
     }
 }
@@ -384,9 +384,18 @@ struct ModelCatalogRow: View {
             }
             Spacer(minLength: 8)
             if !isSelected {
-                Button("Use This Model") { model.selectModel(install) }
-                    .disabled(!model.canSelectModel(install))
-                    .help(selectionHelp)
+                VStack(alignment: .trailing, spacing: 3) {
+                    Button("Use This Model") { model.selectModel(install) }
+                        .disabled(!model.canSelectModel(install))
+                        .help(selectionHelp)
+                    // Said, not only greyed out: the disabled button gave no
+                    // reason while a reply was being written.
+                    if model.isRunning, install.isInstalled {
+                        Text("Stop the reply to switch")
+                            .appFont(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
         }
         .controlSize(compact ? .small : .regular)
@@ -534,6 +543,9 @@ struct ModelCatalogRow: View {
     private var selectionHelp: String {
         if !requirementsSatisfied, let explanation = hardwareEligibility.explanation {
             return explanation
+        }
+        if model.isRunning {
+            return "Stop the current reply to switch models"
         }
         return install.isInstalled
             ? "Load and generate with this model"
