@@ -127,7 +127,8 @@
   .slower { color: var(--amber); }
 
   /* Footer */
-  footer { padding: 36px 0 60px; margin-top: 44px; border-top: 1px solid var(--border); }
+  footer { padding: 28px 0 56px; margin-top: 40px; border-top: 1px solid var(--border); }
+  footer p { font-size: 13.5px; max-width: 760px; }
   .steps { display: grid; gap: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .step { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; }
   .step h3 { margin: 0 0 6px; font-size: 15px; }
@@ -154,34 +155,15 @@
 <div class="wrap">
   <header>
     <div class="crumbs"><img src="../assets/tuff-icon.png" alt=""><a href="../">TUFF</a> / <a href="#">Benchmarks</a><span id="crumb-extra"></span></div>
-    <p class="eyebrow">Community results</p>
     <h1 id="title">Benchmarks</h1>
-    <p class="lead" id="lead">How fast models run in TUFF on real Macs, measured by the people who own them. Every result comes from TUFF's built-in benchmark and links to the post it came from.</p>
+    <p class="lead" id="lead">How fast models run in TUFF on real Macs, measured by the people who own them.</p>
   </header>
   <main id="view" aria-live="polite">
     <div class="state">Loading results…</div>
   </main>
   <footer>
-    <div class="steps">
-      <div class="step">
-        <div class="num">1</div>
-        <h3>Add your Mac</h3>
-        <p>In TUFF, open Benchmarks, pick models and press Run, then Share on GitHub. Or run <code>tuff bench --models gemma4 --share</code>.</p>
-        <p>You need a GitHub account to post.</p>
-      </div>
-      <div class="step">
-        <div class="num">2</div>
-        <h3>What the numbers mean</h3>
-        <p><strong>Writes</strong> is decode speed on a short prompt. <strong>Reads prompt</strong> is how fast a ~1,500-token prompt is processed. <strong>First token</strong> is the wait for that prompt; <strong>follow-up</strong> is the same wait when TUFF reuses the earlier conversation.</p>
-        <p>Grouped rows count each person once, using their median.</p>
-      </div>
-      <div class="step">
-        <div class="num">3</div>
-        <h3>Trust</h3>
-        <p><span class="badge">community</span> passed the automatic checks. <span class="badge verified">verified</span> was checked by a maintainer. <span class="badge held">held</span> is waiting for a person to look.</p>
-        <p>See <a href="https://github.com/rexmhall09/TUFF/blob/main/docs/BENCHMARKS.md">how benchmarks work</a> and <a href="https://github.com/rexmhall09/TUFF/discussions/categories/benchmarks">every post</a>.</p>
-      </div>
-    </div>
+    <p>Add your Mac: in TUFF, open Benchmarks, run it, and share. Writes is decode speed; reads prompt is how fast a ~1,500-token prompt is processed.
+      <a href="https://github.com/rexmhall09/TUFF/blob/main/docs/BENCHMARKS.md">How benchmarks work</a>.</p>
   </footer>
 </div>
 <script src="benchmarks.js"></script>

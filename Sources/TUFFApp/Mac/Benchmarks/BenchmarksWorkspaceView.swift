@@ -84,11 +84,7 @@ struct BenchmarksWorkspaceView: View {
                 .labelsHidden()
                 .fixedSize()
                 .disabled(controller.isRunning)
-                Text(controller.mode == .quick
-                     ? "One trial of each test. Good for a first look."
-                     : "Three trials of each test, for a median the leaderboard can trust.")
-                    .appFont(.caption)
-                    .foregroundStyle(.secondary)
+                .help("Quick runs each test once. Standard runs each three times, which the leaderboard uses.")
                 Spacer(minLength: 8)
                 if controller.isRunning {
                     Button("Stop", role: .cancel) { controller.stop() }
@@ -101,14 +97,12 @@ struct BenchmarksWorkspaceView: View {
                     } label: {
                         Label("Run Benchmark", systemImage: "play.fill")
                     }
+                    .help("Chat's model is unloaded first. Avoid chatting while it runs.")
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
                     .disabled(!controller.canStart || model.isRunning)
                 }
             }
-            Text("Models run one at a time with the settings chat uses. Chat's model is unloaded first. Keep other heavy apps closed, and avoid chatting while it runs; both change the numbers.")
-                .appFont(.caption)
-                .foregroundStyle(.secondary)
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)

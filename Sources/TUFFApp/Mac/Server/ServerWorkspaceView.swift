@@ -140,9 +140,7 @@ struct ServerWorkspaceView: View {
                     }
                 }
                 .accessibilityHint("The model used by requests that name default")
-                Text("Used when a request names \"default\". Separate from the model chosen in Chat.")
-                    .appFont(.caption)
-                    .foregroundStyle(.secondary)
+                .help("Used when a request names \"default\". Separate from the model chosen in Chat.")
             }
             Picker("Unload model", selection: Binding(
                 get: { controller.settings.unloadDelay },

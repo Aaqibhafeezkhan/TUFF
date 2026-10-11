@@ -197,20 +197,24 @@ struct RootView: View {
             // is for; hiding them behind the destination meant leaving Chat to
             // check a download made every conversation disappear, and coming
             // back was a two-step trip.
-            // Always expanded: a sidebar section collapses when its heading is
-            // clicked, and with no disclosure arrow that looked like the
-            // chats had vanished.
-            Section(isExpanded: .constant(true)) {
+            // No section header: a sidebar list gives one a collapse arrow on
+            // hover, and a heading plus a small pencil icon read as a label
+            // rather than a way to start a chat.
+            Section {
+                newChatButton
+                    .listRowBackground(Color.clear)
+                    .padding(.top, 6)
                 if model.conversationStore.conversations.isEmpty {
                     chatsEmptyState
                         .listRowBackground(Color.clear)
                 } else {
                     ForEach(AppConversationDateGroup.grouped(
                         model.conversationStore.conversations), id: \.group) { section in
-                        Text(section.group.rawValue)
+                        Text(section.group.rawValue.uppercased())
                             .appFont(.caption2.weight(.semibold))
+                            .tracking(0.6)
                             .foregroundStyle(.tertiary)
-                            .padding(.top, section.group == .today ? 0 : 6)
+                            .padding(.top, 8)
                             .listRowBackground(Color.clear)
                             .accessibilityAddTraits(.isHeader)
                         ForEach(section.conversations) { conversation in
@@ -218,8 +222,6 @@ struct RootView: View {
                         }
                     }
                 }
-            } header: {
-                chatsHeader
             }
         }
         .listStyle(.sidebar)
@@ -244,60 +246,34 @@ struct RootView: View {
         .navigationTitle("TUFF")
     }
 
-    /// "Chats", with New Chat beside it rather than as a row of its own.
-    private var chatsHeader: some View {
-        HStack(spacing: 6) {
-            Text("Chats")
-            if !model.conversationStore.conversations.isEmpty {
-                Text("\(model.conversationStore.conversations.count)")
-                    .appFont(.caption2.weight(.medium))
-                    .monospacedDigit()
-                    .foregroundStyle(.tertiary)
-            }
-            Spacer()
-            SidebarIconButton(
-                systemImage: "square.and.pencil",
-                help: "New Chat (⌘N)",
-                isEnabled: canStartNewChat
-            ) {
-                navigation.select(.chat)
-                model.clearOutput()
-            }
-            .accessibilityLabel("New Chat")
+    /// Starting a chat is the main thing the sidebar does, so it is a full
+    /// button with its shortcut rather than an icon beside a heading.
+    private var newChatButton: some View {
+        SidebarNewChatButton(isEnabled: canStartNewChat) {
+            navigation.select(.chat)
+            model.clearOutput()
         }
     }
 
-    /// Where the chats will be, with the way to start one. A grey line of
-    /// text read as an error rather than as a place.
+    /// Where the chats will be. The New Chat button sits just above it.
     private var chatsEmptyState: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 6) {
             Image(systemName: "bubble.left.and.bubble.right")
                 .appFont(.title3)
-                .foregroundStyle(TUFFMacTheme.accentColor.opacity(0.8))
+                .foregroundStyle(.tertiary)
                 .accessibilityHidden(true)
             Text("No chats yet")
                 .appFont(.callout.weight(.medium))
+                .foregroundStyle(.secondary)
             Text("Your chats are saved here, on this Mac.")
                 .appFont(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
                 .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
-            Button("New Chat") {
-                navigation.select(.chat)
-                model.clearOutput()
-            }
-            .controlSize(.small)
-            .disabled(!canStartNewChat)
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 14)
-        .padding(.horizontal, 10)
-        .background {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(.separator, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
-        }
-        .padding(.vertical, 4)
+        .padding(.vertical, 18)
     }
 
     /// Whether the New Chat button does anything. A chat that has not been
@@ -378,18 +354,14 @@ struct RootView: View {
         HStack(spacing: 10) {
             TUFFMarkView()
                 .padding(3)
-                .frame(width: 28, height: 28)
+                .frame(width: 32, height: 32)
                 .background(
                     TUFFMacTheme.surfaceStyle(
                         reduceTransparency: reduceTransparency,
                         material: .thin),
                     in: RoundedRectangle(cornerRadius: 8))
-            VStack(alignment: .leading, spacing: 1) {
-                Text("TUFF").appFont(.headline)
-                Text("Runs on this Mac")
-                    .appFont(.caption2)
-                    .foregroundStyle(.secondary)
-            }
+            Text("TUFF")
+                .appFont(.title2.weight(.bold))
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 12)
@@ -502,30 +474,49 @@ private struct SidebarChatRow: View {
     }
 }
 
-/// A small icon button for the sidebar, with a hover state.
-private struct SidebarIconButton: View {
-    let systemImage: String
-    let help: String
+/// The sidebar's New Chat control: an accent tile with the icon, the label,
+/// and the shortcut, across the sidebar's width.
+private struct SidebarNewChatButton: View {
     let isEnabled: Bool
     let action: () -> Void
     @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: systemImage)
-                .appFont(.callout.weight(.medium))
-                .frame(width: 24, height: 22)
-                .background {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(isHovered && isEnabled ? Color.primary.opacity(0.08) : Color.clear)
-                }
-                .contentShape(Rectangle())
+            HStack(spacing: 10) {
+                Image(systemName: "plus")
+                    .appFont(.callout.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 24, height: 24)
+                    .background(TUFFMacTheme.accentColor,
+                                in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                Text("New Chat")
+                    .appFont(.body.weight(.medium))
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 4)
+                Text("⌘N")
+                    .appFont(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .background {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(TUFFMacTheme.accentColor.opacity(isHovered && isEnabled ? 0.20 : 0.11))
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(TUFFMacTheme.accentColor.opacity(0.28), lineWidth: 1)
+            }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(isEnabled ? .secondary : .quaternary)
+        .opacity(isEnabled ? 1 : 0.5)
         .disabled(!isEnabled)
         .onHover { isHovered = $0 }
-        .help(help)
+        .animation(.easeOut(duration: 0.12), value: isHovered)
+        .help("New Chat (⌘N)")
+        .accessibilityLabel("New Chat")
     }
 }
 

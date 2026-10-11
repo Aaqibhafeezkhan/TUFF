@@ -121,14 +121,12 @@
 
   <section aria-labelledby="big-models">
     <h2 id="big-models">A 111 GB model on a 16 GB MacBook Air</h2>
-    <p>Most apps need the whole model in memory. TUFF keeps a
-       mixture-of-experts model's experts on the SSD and loads only the few
-       each token needs. That's how Qwen3.8 Flash Next runs on a 16 GB
-       MacBook Air, along with GPT-OSS 120B and MiniMax M2.7.</p>
-    <p>It has a cost: on that Air, Flash Next writes about 1.7 tokens a
-       second. Smaller models are quick, and bigger Macs do better.
-       <a href="benchmarks/">See how every model runs on real Macs</a>
-       · <a href="https://github.com/rexmhall09/TUFF/blob/main/docs/HOW_TUFF_WORKS.md">How it works</a></p>
+    <p>TUFF keeps a mixture-of-experts model's experts on the SSD and reads
+       only the few each token needs, so Qwen3.8 Flash Next, GPT-OSS 120B and
+       MiniMax M2.7 run on a 16 GB MacBook Air. The biggest ones are slow
+       there, about 1.7 tokens a second for Flash Next. Smaller models are
+       quick, and Macs with more memory do better.
+       <a href="benchmarks/">See the benchmarks</a>.</p>
   </section>
   <section aria-labelledby="features">
     <h2 id="features">What's in it</h2>
@@ -156,35 +154,18 @@
     </div>
   </section>
 
-  <section aria-labelledby="local-models">
-    <h2 id="local-models">Private, and built for the Mac</h2>
-    <p>Nine models across Gemma 4, Qwen, GPT-OSS and MiniMax, each with its
-       own tested runtime in an engine written in Swift and Metal for Apple
-       Silicon only. Everything runs on your Mac. Web search, when you turn it
-       on, sends only the query to the provider you choose.</p>
-    <p><a href="https://github.com/rexmhall09/TUFF/releases">Release notes</a>
-       · <a href="https://github.com/rexmhall09/TUFF#how-tuff-compares">How TUFF compares</a></p>
-  </section>
-
   <section aria-labelledby="install">
     <h2 id="install">Install with Homebrew</h2>
     <pre><code>brew tap rexmhall09/tuff https://github.com/rexmhall09/TUFF.git
 brew install --cask rexmhall09/tuff/tuff</code></pre>
-    <p>That installs the app and the <code>tuff</code> command. Or download the
-       ZIP above and move TUFF.app to Applications. You need Apple Silicon and
-       macOS 15 or newer. TUFF isn't notarized, so the first time, Control-click
-       it and choose Open.</p>
+    <p>That installs the app and the <code>tuff</code> command. TUFF isn't
+       notarized, so the first time, Control-click it and choose Open.</p>
   </section>
 
   <section aria-labelledby="contribute">
     <h2 id="contribute">Help out</h2>
-    <p>TUFF is a small open-source project, so help really counts. The easiest
-       thing: run the benchmark on your Mac and share it. I only have one Mac
-       to test on. Bug reports, docs, design and code are all welcome too, and
-       AI-assisted PRs are fine as long as you've checked them yourself.</p>
-    <p><a href="benchmarks/">Leaderboard</a>
-       · <a href="https://github.com/rexmhall09/TUFF/blob/main/CONTRIBUTING.md">How to contribute</a>
-       · <a href="https://github.com/rexmhall09/TUFF/blob/main/docs/ROADMAP.md">Roadmap</a>
+    <p>Running the benchmark on your Mac and sharing it helps the most.
+       <a href="https://github.com/rexmhall09/TUFF/blob/main/CONTRIBUTING.md">Contributing</a>
        · <a href="https://github.com/rexmhall09/TUFF/discussions">Discussions</a></p>
   </section>
 
