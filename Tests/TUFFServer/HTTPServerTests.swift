@@ -694,6 +694,36 @@ struct HTTPServerTests {
         #expect(await !server.hasActiveRequest)
     }
 
+    /// A non-streamed answer writes nothing until it is done, so the server
+    /// only learns the client left by reading. It must stop generating.
+    @Test func clientLeavingANonStreamedRequestCancelsIt() async throws {
+        let backend = CancellableServerBackend()
+        let server = TUFFHTTPServer(
+            modelID: "test-model",
+            queueLimit: 1,
+            backend: backend)
+        let channel = try await server.start(port: 0)
+        let port = try #require(channel.localAddress?.port)
+        let socket = try connectedSocket(port: port)
+        let body = #"{"model":"test-model","messages":[{"role":"user","content":"wait"}]}"#
+        try writeAll(socket: socket, text: httpRequest(
+            port: port, body: body, connection: "keep-alive"))
+
+        let startDeadline = ContinuousClock.now + .seconds(2)
+        while await backend.startedCount != 1, ContinuousClock.now < startDeadline {
+            await Task.yield()
+        }
+        #expect(await backend.startedCount == 1)
+        Darwin.close(socket)
+
+        let cancelDeadline = ContinuousClock.now + .seconds(2)
+        while await backend.cancellationCount != 1, ContinuousClock.now < cancelDeadline {
+            await Task.yield()
+        }
+        #expect(await backend.cancellationCount == 1)
+        try await server.shutdown()
+    }
+
     @Test func shutdownDuringPreparationNeverStartsGeneration() async throws {
         let backend = CancellationIgnoringPreparationBackend()
         let server = TUFFHTTPServer(

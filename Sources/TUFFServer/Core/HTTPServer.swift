@@ -59,6 +59,7 @@ public actor TUFFHTTPServer {
             .childChannelInitializer { channel in
                 childChannels.insert(channel)
                 do {
+                    try channel.pipeline.syncOperations.addHandler(ConnectionCloseWatcher())
                     try channel.pipeline.syncOperations.addHandler(
                         IdleStateHandler(readTimeout: idleTimeout))
                 } catch {
@@ -413,6 +414,7 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                 startStream()
             }
             inFlightRequests += 1
+            ConnectionCloseWatcher.watch(context)
             activeTask = childChannels.startTask {
                 defer { streamState.stop() }
                 // Back on the event loop, where `inFlightRequests` lives. The hop
@@ -1090,5 +1092,22 @@ private final class StreamState: @unchecked Sendable {
             defer { toolIndex += 1 }
             return toolIndex
         }
+    }
+}
+
+/// Sits nearest the socket so a read can be issued from below NIO's
+/// pipelining handler. That handler holds reads while a response is pending,
+/// so a client that left before a non-streamed answer went unnoticed and the
+/// model kept generating for nobody. Streamed answers write as they go and
+/// see the close that way.
+final class ConnectionCloseWatcher: ChannelInboundHandler {
+    typealias InboundIn = ByteBuffer
+    typealias InboundOut = ByteBuffer
+
+    /// Reads once from the socket. A close ends the channel, which cancels the
+    /// request; anything else that arrives is buffered as a pipelined request.
+    static func watch(_ context: ChannelHandlerContext) {
+        (try? context.pipeline.syncOperations.context(
+            handlerType: ConnectionCloseWatcher.self))?.read()
     }
 }
