@@ -64,7 +64,13 @@ struct RootView: View {
         }
         .focusedSceneValue(
             \.appNavigationAction,
-            AppNavigationAction { navigation.select($0) })
+            AppNavigationAction(
+                select: { navigation.select($0) },
+                stepChat: canStepChat ? { stepChat(by: $0) } : nil,
+                focusComposer: {
+                    navigation.select(.chat)
+                    NotificationCenter.default.post(name: .tuffFocusComposer, object: nil)
+                }))
         .containerBackground(for: .window) {
             LinearGradient(
                 colors: [
@@ -274,6 +280,28 @@ struct RootView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 18)
+    }
+
+    /// Next and previous chat need another chat to go to, and follow the
+    /// same rule as clicking one in the sidebar.
+    private var canStepChat: Bool {
+        let chats = model.conversationStore.conversations
+        guard let first = chats.first else { return false }
+        return model.canSelectConversation(first)
+            && (chats.count > 1 || model.conversationStore.selectedConversationID != first.id
+                || navigation.destination != .chat)
+    }
+
+    /// Moves through the chats in sidebar order. From another screen, the
+    /// step starts as if no chat were open.
+    private func stepChat(by offset: Int) {
+        let current = navigation.destination == .chat
+            ? model.conversationStore.selectedConversationID : nil
+        guard let target = AppConversationStepping.target(
+            in: model.conversationStore.conversations, from: current, offset: offset)
+        else { return }
+        navigation.select(.chat)
+        model.selectConversation(target)
     }
 
     /// Whether the New Chat button does anything. A chat that has not been
