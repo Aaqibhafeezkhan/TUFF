@@ -37,6 +37,10 @@ struct PromptComposerView: View {
             if hasAttachments { attachmentStrip }
             if let notice = attachmentNotice { attachmentNoticeText(notice) }
             editor
+                // Navigate > Message Box (Command-L).
+                .onReceive(NotificationCenter.default.publisher(for: .tuffFocusComposer)) { _ in
+                    promptFocused = true
+                }
             footer
             if let contextNotice { contextNoticeText(contextNotice) }
         }
