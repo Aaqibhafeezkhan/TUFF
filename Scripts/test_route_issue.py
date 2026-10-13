@@ -12,9 +12,14 @@ class IssueRoutingTests(unittest.TestCase):
             self.assertEqual(labels_for('### Area\n\n' + area + '\n\n### Steps\nAnything', self.routing), sorted(labels))
 
     def test_multiple_choices_including_commas_and_crlf(self):
-        choices = list(self.routing['areas'])[:4]
-        expected = sorted(set(label for c in choices for label in self.routing['areas'][c]))
-        self.assertEqual(labels_for('### Area\r\n' + ', '.join(choices) + '\r\n### Other\r\nSettings', self.routing), expected)
+        choices = [
+            'Command line (tuff, TUFFCLI)',
+            'Documentation, testing or contributing',
+            'Building from source or tests',
+        ]
+        expected = ['area: build', 'area: cli', 'documentation']
+        body = '### Area\r\n' + ', '.join(choices) + '\r\n### Steps\r\nSettings'
+        self.assertEqual(labels_for(body, self.routing), expected)
 
     def test_missing_answer_or_arbitrary_label_cannot_inject_labels(self):
         for text in ['', '### Area\n_No response_', '### Area\n$(rm -rf /)', '### Other\nSettings']:
