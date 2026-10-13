@@ -176,3 +176,16 @@ on removal.
 Final 1.0.15 Ornith9 and Heretic API checks passed normal/SSE arithmetic and the
 complete file-tool round. CLI cancellation exited 130 and removed its helper in
 0.238 seconds. API disconnect recovery returned 4 in 1.762 seconds.
+
+## Public release verification
+
+Version 9.0.0 is published at [GitHub Releases](https://github.com/rexmhall09/TUFF/releases/tag/v9.0.0).
+[Final CI](https://github.com/rexmhall09/TUFF/actions/runs/38442528957) passed all
+four jobs on the release commit. All twelve public downloads matched the local
+SHA-256 digests. The extracted app and signed archive/feed checks passed, as did
+the latest updater feed comparison. Native fresh installation and cache reuse
+with unavailable download URLs passed for Gemma, Qwen/Ornith, GPT-OSS and MiniMax.
+
+The app ZIP is 9,388,901 bytes, SHA-256
+`c81a7f952960d64fbf38c1267893c29d45ceac2248d99ee1ac308fc07baa8801`.
+It is ad-hoc signed, not notarized. Publisher private keys are not release assets.

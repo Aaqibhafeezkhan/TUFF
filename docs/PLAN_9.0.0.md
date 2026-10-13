@@ -1,7 +1,7 @@
 # TUFF 9.0.0 plan
 
 Date: October 12, 2026
-Status: Implementation and local validation complete; public release verification is the final gate. See
+Status: Released; local, GitHub CI and public release verification are complete. See
 `IMPLEMENTATION_9.0.0.md` for completed work and remaining release gates.
 
 TUFF 9.0 makes model support modular and improves how TUFF uses a Mac's memory.
@@ -576,7 +576,7 @@ Public hosting and publication are excluded from the current authorized task.
 - [x] Required app, CLI, API, image/tool and recovery checks pass.
 - [x] Advanced custom import, errors, startup restoration and removal pass.
 - [x] Final canonical tests and local package checks pass after the custom importer and final 397B fixes.
-- [ ] Public engine/app artifact verification passes during release.
+- [x] Public engine/app artifact verification passes during release.
 
 
 ## 12. Source references

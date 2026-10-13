@@ -136,3 +136,17 @@ The original installed application, models, chat contents and unrelated research
 are preserved. The Homebrew cask is pinned to the production 9.0.0 archive.
 Final GitHub CI and re-downloaded public assets are checked before publication
 is reported complete.
+
+## Published release
+
+[TUFF 9.0.0](https://github.com/rexmhall09/TUFF/releases/tag/v9.0.0) is published.
+[Final GitHub CI](https://github.com/rexmhall09/TUFF/actions/runs/38442528957) passed
+on release commit `a3cf64e41d7b70f00a2acde57981dfe321af58bb`. All twelve public
+assets matched their validated local digests. The downloaded app, archive and
+feed signatures passed; the latest feed matched. Fresh public acquisition and
+cache reuse with unavailable download URLs passed for all four engine families.
+
+PR #43 was merged before release. The pre-TUFF history became one import
+commit; all 230 TUFF-era commits retained their authors, dates, messages and
+file contents. Existing release tags were preserved and a verified local
+recovery bundle retains the original history.
