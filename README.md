@@ -66,15 +66,37 @@ TUFF updates itself. If an update stops it from opening, see
 
 | Model | Download | Minimum memory | Images |
 | --- | ---: | ---: | :-: |
-| Gemma 4 E2B | 2.6 GB | 8 GB | Optional |
-| Gemma 4 E4B | 4.2 GB | 8 GB | Optional |
+| Gemma 4 E2B Q4 | 2.6 GB | 8 GB | Optional |
+| Gemma 4 E4B Q4 | 4.2 GB | 8 GB | Optional |
 | Gemma 4 12B QAT | 11.0 GB | 16 GB | Optional |
-| Gemma 4 26B-A4B | 14.3 GB | 8 GB | Optional |
-| Qwen3.6 35B-A3B | 19.6 GB | 8 GB | Optional |
-| GPT-OSS 20B | 13.8 GB | 16 GB | No |
-| GPT-OSS 120B | 65.3 GB | 16 GB | No |
-| MiniMax M2.7 | 128.7 GB | 16 GB, M2 or newer | No |
-| Qwen3.8 Flash Next | 110.9 GB | 16 GB, M2 or newer | Optional |
+| Gemma 4 26B-A4B Q4 | 14.3 GB | 8 GB | Optional |
+| Qwen 3.6 35B-A3B Q4 | 19.6 GB | 8 GB | Optional |
+| GPT-OSS 20B Q4 | 13.8 GB | 16 GB | No |
+| GPT-OSS 120B Q4 | 65.3 GB | 16 GB | No |
+| MiniMax M2.7 Q4 | 128.7 GB | 16 GB, M2 or newer | No |
+| Qwen 3.8 Flash Next Q4 | 110.9 GB | 16 GB, M2 or newer | Optional |
+| Ornith 1.5 9B Q4 | 5.1 GB | 8 GB | No |
+| Ornith 1.5 35B-A3B Q4 | 19.6 GB | 8 GB | No |
+| Ornith 1.5 397B Q4 | 239 GB | 16 GB | No |
+| Qwen3.8 27B Q4 | 16.2 GB | 8 GB | No |
+| Gemma 4 26B-A4B Heretic Q4 | 15.0 GB | 8 GB | Optional |
+
+Models are grouped under **MoE**, **Dense** and **Legacy**. Each section can be
+collapsed. MiniMax and both GPT-OSS models stay available under Legacy.
+
+The app downloads an inference engine when you install its first model. Models
+with compatible architectures share that engine. Auto chooses context, expert
+cache and resident layers together. A dense model that does not fit can stream
+layers from disk, but that can be slow. These are calculated choices; TUFF learns
+from comparable runs in the app and avoids configurations that caused paging.
+[Memory and engine details](docs/LOCAL_9.0.md).
+
+[Gemma Heretic](https://huggingface.co/mlx-community/gemma-4-26B-A4B-it-heretic-4bit)
+is an optional abliterated derivative, converted by mlx-community from
+[coder3101's checkpoint](https://huggingface.co/coder3101/gemma-4-26B-A4B-it-heretic).
+Its routed experts and attention weights are Q4; shared MLPs and routers remain
+8-bit. Its image pack comes from the same checkpoint. Reduced refusals do not
+mean better accuracy. The ordinary Gemma model remains available.
 
 I test releases on a 16 GB M2 MacBook Air. Numbers for other Macs come from
 people's benchmarks. Images need an M2 or newer.
@@ -95,7 +117,7 @@ people's benchmarks. Images need an M2 or newer.
 | Streams MoE experts from disk | ✅ | ❌ | ❌ | ✅ | ✅ |
 | Open-source desktop app | ✅ | ❌ | ✅ | ✅ | ✅ |
 | Windows and Linux | ❌ | ✅ | ✅ | ✅ | ❌ |
-| Models | 9 | GGUF / MLX catalog | Model library | 13 engines, mostly MoE | Gemma 26B |
+| Models | 14 | GGUF / MLX catalog | Model library | 13 engines, mostly MoE | Gemma 26B |
 
 ✅ yes · ◐ partly · ❌ no. Checked against each project's docs on October 8, 2026.
 
@@ -133,12 +155,16 @@ You need Xcode with Swift 6.2 or newer (I build with Xcode 27).
 ```sh
 git clone https://github.com/rexmhall09/TUFF.git
 cd TUFF
+bash Scripts/package_engines.sh dist/local-engines dist/local-private/signing-key 1.0.0
+export TUFF_ENGINE_CATALOG_PATH="$PWD/dist/local-engines/engine-catalog.json"
 swift build -c release
 .build/release/TUFF
 ```
 
 Clone builds keep models and chats in `scratch/`, so they don't touch an
 installed copy. `Scripts/test.sh` runs the tests; none need a model.
+[Local 9.0 builds](docs/LOCAL_9.0.md) explains the downloaded family engines,
+isolated app packaging and local qualification.
 [How TUFF works](docs/HOW_TUFF_WORKS.md) explains the engine and maps the
 code.
 

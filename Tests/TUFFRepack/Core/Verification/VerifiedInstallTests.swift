@@ -15,7 +15,19 @@ import Testing
         // 256 experts per layer.
         let observedQwenLayoutBytes: UInt64 = 22_493_846
         #expect(VerifiedInstallTool.layoutMaxBytes > observedQwenLayoutBytes)
+        let observedOrnith397LayoutBytes: UInt64 = 68_280_566
+        #expect(VerifiedInstallTool.layoutMaxBytes > observedOrnith397LayoutBytes)
         #expect(VerifiedInstallTool.metadataMaxBytes >= VerifiedInstallTool.layoutMaxBytes)
+    }
+
+    @Test func readOnlyVerificationDoesNotReplaceTheReceipt() throws {
+        let root = try makeInstall()
+        defer { try? FileManager.default.removeItem(at: root) }
+        _ = try VerifiedInstallTool.run(options: .init(inputGTurbo: root.path))
+        let receipt = root.appendingPathComponent(VerifiedInstallReceiptWriter.fileName)
+        let original = try Data(contentsOf: receipt)
+        _ = try VerifiedInstallTool.run(options: .init(inputGTurbo: root.path, writeReceipt: false))
+        #expect(try Data(contentsOf: receipt) == original)
     }
 
     @Test func acceptsRootSymlinkAndBindsAlias() throws {

@@ -18,7 +18,7 @@ import TUFFModelCatalog
 
     @MainActor
     @Test func hardwareGateRefusesDownloadAndSelectionUntilBypassed() {
-        let model = makeAppModel(deviceCapabilities: tinyMac)
+        let model = makeAppModel(installer: MockModelInstallerClient(), deviceCapabilities: tinyMac)
         let install = model.selectedInstall
 
         #expect(!model.hardwareRequirementsSatisfied(for: install))

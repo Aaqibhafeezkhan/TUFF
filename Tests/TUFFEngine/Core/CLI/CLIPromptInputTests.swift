@@ -2,7 +2,7 @@ import Testing
 import Foundation
 import Metal
 import TUFFEngine
-@testable import TUFFCLICore
+@testable import TUFFCLIEngine
 
 /// The messages-file image path and the pre-load size check. Both were review
 /// findings, and neither had a test: the path resolution was dead code that

@@ -140,12 +140,16 @@ private actor SharedInferenceAdmission {
 /// Every operation on the decode-service client is FIFO, and one active lease is
 /// held until its service response reaches a terminal event.
 public final class SharedInferenceBroker: AppModelLifecycleClient,
+    AppInferenceEngineReporting,
     AppInferenceMemoryReporting, AppInferenceTranscriptReporting, @unchecked Sendable {
     private let client: any AppModelLifecycleClient
     private let admission: SharedInferenceAdmission
     private let activityBox: SharedInferenceActivityBox
     private let chatJobs = SharedInferenceChatJobs()
     private let fallbackTranscriptMailbox = GenerationTranscriptMailbox()
+    public var currentEngineIdentity: String? {
+        (client as? any AppInferenceEngineReporting)?.currentEngineIdentity
+    }
 
     public init(client: any AppModelLifecycleClient) {
         let activityBox = SharedInferenceActivityBox()

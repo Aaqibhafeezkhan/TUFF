@@ -3,7 +3,9 @@ import NIOCore
 import NIOHTTP1
 import NIOPosix
 import Synchronization
-import TUFFEngine
+import TUFFInferenceTypes
+import TUFFRuntimeDescriptions
+import TUFFModelMetadata
 
 public actor TUFFHTTPServer {
     public static let maximumBodyBytes = StreamingChatRequestBody.maximumWireBytes

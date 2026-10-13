@@ -1,3 +1,5 @@
+import TUFFRuntimeManagement
+import TUFFEngineAdapter
 import Darwin
 import TUFFEngine
 import Foundation
@@ -17,6 +19,16 @@ enum DecodeServiceError: Error, CustomStringConvertible {
 
 public enum TUFFDecodeServiceMain {
     public static func main() async {
+        let engineLease: InferenceEngineProcessLease?
+        do {
+            engineLease = try argument(after: "--engine-lock").map {
+                try InferenceEngineProcessLease(lockFileURL: URL(fileURLWithPath: $0))
+            }
+        } catch {
+            FileHandle.standardError.write(Data("Could not hold inference engine lease: \(error)\n".utf8))
+            return
+        }
+        defer { withExtendedLifetime(engineLease) {} }
         // Before anything in this process creates a Metal device.
         MetalContext.relaxInteractivityWatchdog()
         let socketPath = argument(after: "--socket")
@@ -41,7 +53,7 @@ public enum TUFFDecodeServiceMain {
         let service = DecodeService(
             client: RealInferenceClient(residencyCoordinator: .current()),
             input: handles.input,
-            output: handles.output)
+            output: handles.output, requiresHandshake: true)
         if let loss = await service.run() {
             FileHandle.standardError.write(Data(
                 "Decode service stopped after transport loss: \(loss)\n".utf8))

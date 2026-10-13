@@ -1,11 +1,47 @@
+import Foundation
 import Testing
 @testable import TUFFModelCatalog
 
 @Suite struct ModelCatalogTests {
+    @Test func localPreferenceDomainsAreStableAndSeparateFromNormalPreferences() {
+        let first = TUFFApplicationDirectories.preferencesSuiteName(environment:
+            ["TUFF_APPLICATION_SUPPORT_ROOT": "/tmp/tuff-one"])
+        #expect(first != "TUFF")
+        #expect(first == TUFFApplicationDirectories.preferencesSuiteName(environment:
+            ["TUFF_APPLICATION_SUPPORT_ROOT": "/tmp/tuff-one/./"]))
+        #expect(first != TUFFApplicationDirectories.preferencesSuiteName(environment:
+            ["TUFF_APPLICATION_SUPPORT_ROOT": "/tmp/tuff-two"]))
+        #expect(TUFFApplicationDirectories.preferencesSuiteName(environment: [:]) == "TUFF")
+        #expect(TUFFApplicationDirectories.preferencesSuiteName(environment:
+            ["TUFF_APPLICATION_SUPPORT_ROOT": "relative"]) == "TUFF")
+    }
+    @Test func olderCatalogJSONLoadsWithTheCurrentMaintenancePolicy() throws {
+        for model in TUFFModelCatalog.all {
+            let encoded = try JSONEncoder().encode(model)
+            var oldObject = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+            oldObject.removeValue(forKey: "maintenanceStatus")
+            let oldData = try JSONSerialization.data(withJSONObject: oldObject)
+            let decoded = try JSONDecoder().decode(TUFFModelDescriptor.self, from: oldData)
+            #expect(decoded == model)
+        }
+    }
+
+    @Test func legacyStatusDoesNotRemoveModelsOrChangeTheirIdentity() {
+        let legacy = TUFFModelCatalog.all.filter { $0.maintenanceStatus == .legacy }
+        #expect(Set(legacy.map(\.id)) == [.gptOss_20B, .gptOss_120B, .minimaxM27])
+        for model in legacy {
+            #expect(TUFFModelCatalog.model(selector: model.selector)?.id == model.id)
+            #expect(model.qualification == .qualified)
+        }
+        #expect(TUFFModelCatalog.default.maintenanceStatus == .maintained)
+        #expect(TUFFModelCatalog.gemma4_12B_QAT.displayName == "Gemma 4 12B QAT")
+        #expect(TUFFModelCatalog.gemma4_12B_QAT.summary.contains("8-bit QAT"))
+    }
+
     @Test func currentCatalogOrderAndSelectorsAreStable() {
         #expect(TUFFModelCatalog.all.map(\.selector) == [
             "gemma4-e2b", "gemma4-e4b", "gemma4-12b-qat", "gemma4", "qwen36",
-            "gpt-oss-20b", "gpt-oss-120b", "minimax-m2.7", "qwen38-flash-next",
+            "gpt-oss-20b", "gpt-oss-120b", "minimax-m2.7", "qwen38-flash-next", "ornith-9b", "ornith-35b", "ornith-397b", "qwen38-27b", "gemma4-heretic",
         ])
         #expect(TUFFModelCatalog.model(selector: "e2b")?.id == .gemma4_E2B)
         #expect(TUFFModelCatalog.default.id == .gemma4_26B_A4B)

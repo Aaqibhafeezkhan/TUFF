@@ -146,7 +146,9 @@ protocol GreedyHeadReporting: Sendable {
     func selectHead(pureGreedy: Bool)
 }
 
+#if !TUFF_ENGINE_GPT_OSS
 extension RealForwardRunner: GreedyHeadReporting {}
+#endif
 
 /// Raw-completion prefill + decode loop shared by the CLI and the Mac app.
 /// Consumes pre-encoded `promptIds` (BOS + verbatim encode upstream — no chat
@@ -168,6 +170,7 @@ public func runRawCompletion(producer: any LogitProducer,
                              draftProducer: (any DraftTokenProducer)? = nil,
                              prefixCheckpointPositions: [Int] = [],
                              stateSnapshotPosition: Int? = nil,
+                             checkpointBudgetBytes: Int = .max,
                              shouldStop: () -> Bool = { false },
                              onProgress: (RawDecodeProgress) -> Void) async throws -> RawDecodeResult {
     try config.validate()
@@ -260,11 +263,22 @@ public func runRawCompletion(producer: any LogitProducer,
     )).sorted()
     var prefixCheckpoints: [RunnerStateSnapshot] = []
     var stateSnapshot: RunnerStateSnapshot?
+    var remainingCheckpointBytes = max(0, checkpointBudgetBytes)
     func takeCheckpoint() {
-        if let snapshot = try? checkpointing?.capturePrefixCheckpoint() {
+        guard remainingCheckpointBytes > 0,
+              let checkpointing,
+              checkpointing.prefixCheckpointByteEstimate <= remainingCheckpointBytes else { return }
+        if let snapshot = try? checkpointing.capturePrefixCheckpoint() {
+            guard snapshot.byteCount <= remainingCheckpointBytes else { return }
+            remainingCheckpointBytes -= snapshot.byteCount
             prefixCheckpoints.append(snapshot)
             if snapshot.position == stateSnapshotPosition {
-                stateSnapshot = try? (producer as? any StateSnapshottingRunner)?.captureState()
+                if let snapshotting = producer as? any StateSnapshottingRunner,
+                   let bytes = snapshotting.stateSnapshotByteEstimate,
+                   bytes <= remainingCheckpointBytes {
+                    stateSnapshot = try? snapshotting.captureState()
+                    remainingCheckpointBytes -= stateSnapshot?.byteCount ?? 0
+                }
             }
         }
     }

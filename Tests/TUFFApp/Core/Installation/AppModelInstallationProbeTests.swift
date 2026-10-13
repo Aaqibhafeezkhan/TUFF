@@ -1,8 +1,33 @@
 import Foundation
 import Testing
+import TUFFModelCatalog
+import TUFFModelMetadata
 @testable import TUFFAppCore
 
 @Suite struct AppModelInstallationProbeTests {
+    @Test func sharedArchitectureUsesManifestCheckpointIdentityWhenNoDescriptorIsGiven() throws {
+        let derivative = AppModelInstallDescriptor(catalog: TUFFModelCatalog.gemma4_26B_Heretic)
+        let url = try makeCompleteModelInstall("heretic-probe", stampedAs: derivative)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let manifestURL = url.appendingPathComponent("manifest.json")
+        var manifest = try JSONSerialization.jsonObject(with: Data(contentsOf: manifestURL)) as! [String: Any]
+        manifest["modelID"] = TUFFModelCatalog.gemma4_26B_Heretic.source.manifestModelID
+        let data = try JSONSerialization.data(withJSONObject: manifest, options: [.sortedKeys])
+        try data.write(to: manifestURL)
+        let receiptURL = url.appendingPathComponent("verified-install.json")
+        var receipt = try JSONSerialization.jsonObject(with: Data(contentsOf: receiptURL)) as! [String: Any]
+        receipt["manifestSha256"] = Sha256Verifier.hashData(data)
+        try JSONSerialization.data(withJSONObject: receipt, options: [.sortedKeys]).write(to: receiptURL)
+        #expect(AppModelInstallationProbe.status(at: url) == .complete)
+        #expect(AppModelInstallationProbe.status(at: url, descriptor: derivative) == .complete)
+        let image = RepackVisionPackInstallerClient.resolvedDescriptor(.visionCompanion, for: url)
+        #expect(image.repoID == derivative.repoID)
+        #expect(image.revision == derivative.revision)
+        guard case .partial = AppModelInstallationProbe.status(at: url, descriptor: .default) else {
+            Issue.record("ordinary Gemma must reject the derivative checkpoint")
+            return
+        }
+    }
     @Test func missingDirectoryIsMissing() {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("tuff-missing-\(UUID().uuidString).gturbo")

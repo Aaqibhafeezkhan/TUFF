@@ -54,12 +54,32 @@ BENCHMARK_MODELS = {
     sampling: %w[--temperature 1.0 --top-k 40 --top-p 0.95],
     runtime: %w[--expert-cache-slots 16 --prefill on --prefill-chunk-tokens 2048 --rdadvise bounded]
   },
-  # 32 slots is this checkpoint's qualified default; see the catalogue note.
+  # 16 slots is the 9.0 default; larger caches must demonstrate a safe benefit.
   "qwen38-flash-next" => {
     path: "scratch/qwen38-flash-next.gturbo",
     chat: [],
     sampling: %w[--temperature 1.0 --top-k 20 --top-p 0.95],
-    runtime: %w[--expert-cache-slots 32 --prefill on --prefill-chunk-tokens 2048 --rdadvise bounded]
+    runtime: %w[--expert-cache-slots 16 --prefill on --prefill-chunk-tokens 2048 --rdadvise bounded]
+  },
+  "ornith-9b" => {
+    path: "scratch/ornith-9b.gturbo", chat: %w[--thinking off],
+    sampling: %w[--temperature 0.7 --top-k 20 --top-p 0.8],
+    runtime: %w[--expert-cache-slots 16 --prefill on --prefill-chunk-tokens 256 --rdadvise off]
+  },
+  "ornith-35b" => {
+    path: "scratch/ornith-35b.gturbo", chat: %w[--thinking off],
+    sampling: %w[--temperature 0.7 --top-k 20 --top-p 0.8],
+    runtime: %w[--expert-cache-slots 16 --prefill on --prefill-chunk-tokens 128 --rdadvise off]
+  },
+  "qwen38-27b" => {
+    path: "scratch/qwen38-27b.gturbo", chat: %w[--thinking off],
+    sampling: %w[--temperature 0.7 --top-k 20 --top-p 0.8],
+    runtime: %w[--expert-cache-slots 16 --prefill on --prefill-chunk-tokens 128 --rdadvise off]
+  },
+  "ornith-397b" => {
+    path: "scratch/ornith-397b.gturbo", chat: %w[--thinking off],
+    sampling: %w[--temperature 0.7 --top-k 20 --top-p 0.8],
+    runtime: %w[--expert-cache-slots 10 --prefill off --prefill-chunk-tokens 32 --rdadvise off]
   }
 }.freeze
 
@@ -72,5 +92,9 @@ BENCHMARK_MODEL_LABELS = {
   "gpt-oss-20b" => "GPT-OSS 20B",
   "gpt-oss-120b" => "GPT-OSS 120B",
   "minimax-m2.7" => "MiniMax M2.7 4-bit",
-  "qwen38-flash-next" => "Qwen3.8 Flash Next 4-bit"
+  "qwen38-flash-next" => "Qwen3.8 Flash Next 4-bit",
+  "ornith-9b" => "Ornith 1.5 9B Q4",
+  "ornith-35b" => "Ornith 1.5 35B-A3B Q4",
+  "qwen38-27b" => "Qwen3.8 27B Q4",
+  "ornith-397b" => "Ornith 1.5 397B Q4"
 }.freeze

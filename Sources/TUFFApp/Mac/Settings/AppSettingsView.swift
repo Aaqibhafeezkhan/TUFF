@@ -1,5 +1,6 @@
 import AppKit
-import TUFFEngine
+import TUFFInferenceTypes
+import TUFFRuntimeDescriptions
 import TUFFAppCore
 import TUFFAppUpdater
 import TUFFMacPresentation
@@ -14,6 +15,7 @@ struct AppSettingsView: View {
     /// so an incomplete value (e.g. "6F4") isn't snapped back to the last
     /// valid one on every keystroke.
     @State private var pendingAccentHex: String?
+    @State private var autoLearningMessage: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -102,7 +104,7 @@ struct AppSettingsView: View {
                 Text("TUFF normally hides Download and Load for models this Mac "
                     + "does not meet the requirements for, and refuses to load "
                     + "any model whose context and expert cache exceed "
-                    + "\(MetricFormat.storage(model.deviceCapabilities.safeAppMemoryBudgetBytes)), "
+                    + "\(MetricFormat.memory(model.deviceCapabilities.safeAppMemoryBudgetBytes)), "
                     + "the share of this Mac's memory it plans against. Turning "
                     + "this on removes both gates.")
                     .appFont(.caption)
@@ -110,7 +112,7 @@ struct AppSettingsView: View {
                 if model.bypassModelRestrictions {
                     Label("A model that does not fit will swap heavily, and macOS "
                         + "can terminate TUFF while it is loading or generating. "
-                        + "Nothing is damaged, and the download stays on disk.",
+                        + "The download stays on disk.",
                           systemImage: "exclamationmark.triangle.fill")
                         .appFont(.caption)
                         .foregroundStyle(.orange)
@@ -178,7 +180,9 @@ struct AppSettingsView: View {
                 }
             }
             if advanced {
+                CustomCheckpointSettingsView(model: model)
                 advancedProfileSettings
+                InferenceEngineSettingsView()
             } else {
                 systemPromptSettings
                 memorySettings
@@ -205,10 +209,20 @@ struct AppSettingsView: View {
                 Text(selectedProfile.automaticMemoryProfile.explanation)
                     .appFont(.caption)
                     .foregroundStyle(.secondary)
-                if let plan = model.automaticMemoryPlan(for: selectedProfileInstall) {
-                    Text(automaticMemorySummary(plan))
-                        .appFont(.caption)
-                        .foregroundStyle(.secondary)
+                DisclosureGroup("Auto tuning") {
+                    Button("Tune Auto on this Mac") { model.tuneAutomaticMemory() }
+                        .disabled(selectedProfileInstall.id != model.selectedModelID || !model.canTuneAutomaticMemory)
+                        .help("Runs local probes for up to 15 seconds. No chats are saved.")
+                    Button("Reset Auto learning") {
+                        do {
+                            try AppAutoPerformanceRecords.reset()
+                            model.updateSettingsProfile(selectedProfile, for: selectedProfileInstall)
+                            autoLearningMessage = "Auto learning reset."
+                        } catch { autoLearningMessage = String(describing: error) }
+                    }
+                    if let autoLearningMessage {
+                        Text(autoLearningMessage).appFont(.caption).foregroundStyle(.secondary)
+                    }
                 }
             }
             Group {
@@ -229,9 +243,8 @@ struct AppSettingsView: View {
                             let eligibility = contextEligibility(
                                 tokens: selectedProfile.contextTokens,
                                 slots: slots)
-                            Text("\(slots) slots ("
-                                + MetricFormat.storage(eligibility.estimatedWorkingSetBytes)
-                                + " total)")
+                            Text(selectedProfile.automaticMemory ? "\(slots) slots"
+                                : "\(slots) slots (" + MetricFormat.memory(eligibility.estimatedWorkingSetBytes) + " total)")
                                 .tag(slots)
                                 .disabled(!eligibility.isCompatible)
                         }
@@ -245,11 +258,13 @@ struct AppSettingsView: View {
             let eligibility = contextEligibility(
                 tokens: selectedProfile.contextTokens,
                 slots: selectedProfile.expertCacheSlots)
-            LabeledContent("Estimated working set") {
-                Text(MetricFormat.storage(eligibility.estimatedWorkingSetBytes))
+            let automaticPlan = selectedProfile.automaticMemory
+                ? model.automaticMemoryPlan(for: selectedProfileInstall) : nil
+            LabeledContent("Calculated allocation") {
+                Text(MetricFormat.memory(automaticPlan?.estimatedWorkingSetBytes ?? eligibility.estimatedWorkingSetBytes))
                     .monospacedDigit()
             }
-            if let explanation = eligibility.explanation {
+            if automaticPlan == nil, let explanation = eligibility.explanation {
                 Label(explanation, systemImage: "exclamationmark.triangle.fill")
                     .appFont(.caption)
                     .foregroundStyle(.orange)
@@ -373,6 +388,21 @@ struct AppSettingsView: View {
     private var advancedProfileSettings: some View {
         Group {
             Section("Runtime") {
+                if selectedProfileInstall.descriptor.projectionLayerCount > 0 {
+                    Picker("Projection residency", selection: projectionResidencyBinding) {
+                        Text("Resident").tag("resident")
+                        Text("Partial").tag("partial")
+                        Text("Streamed").tag("streamed")
+                    }.disabled(selectedProfile.automaticMemory)
+                    if let count = selectedProfile.denseResidentLayerCount, count > 0 {
+                        Stepper(value: projectionLayerBinding,
+                                in: 1...max(1, selectedProfileInstall.descriptor.projectionLayerCount - 1)) {
+                            Text("\(count) projection layers resident")
+                        }.disabled(selectedProfile.automaticMemory)
+                    }
+                    Text("Resident keeps projection weights in RAM. Streamed reads each layer as needed and may be very slow. Auto manages this choice while preserving your manual setting.")
+                        .appFont(.caption).foregroundStyle(.secondary)
+                }
                 Toggle("Chunked prefill", isOn: profileBinding(\.prefillEnabled))
                     .disabled(selectedProfile.automaticMemory
                         || selectedProfile.expertCacheSlots
@@ -500,25 +530,32 @@ struct AppSettingsView: View {
         _ option: AppContextLengthOption,
         eligibility: AppModelContextEligibility
     ) -> String {
+        if selectedProfile.automaticMemory { return option.shortLabel }
         // The total with this option, not the option's own share: the
         // selected row always equals the working set below, which read as
         // three settings that each cost the same.
-        option.shortLabel + " (" + MetricFormat.storage(eligibility.estimatedWorkingSetBytes)
+        return option.shortLabel + " (" + MetricFormat.memory(eligibility.estimatedWorkingSetBytes)
             + " total)"
     }
 
-    private func automaticMemorySummary(_ plan: AppAutomaticMemoryPlan) -> String {
-        let detected = MetricFormat.storage(model.deviceCapabilities.unifiedMemoryBytes)
-        let selected = MetricFormat.storage(plan.estimatedWorkingSetBytes)
-        let budget = MetricFormat.storage(plan.safeBudgetBytes)
-        let slots = selectedProfileInstall.descriptor.usesExpertCache
-            ? " and \(plan.expertCacheSlots) expert-cache slots"
-            : ""
-        let context = AppContextLengthOption(rawValue: plan.contextTokens)?.shortLabel
-            ?? "\(plan.contextTokens)"
-        return "Detected \(detected) unified memory, of which TUFF plans against "
-            + "\(budget). This model gets \(context) of context\(slots), an "
-            + "estimated \(selected)."
+
+    private var projectionResidencyBinding: Binding<String> {
+        Binding(get: {
+            guard let count = selectedProfile.denseResidentLayerCount else { return "resident" }
+            return count == 0 ? "streamed" : "partial"
+        }, set: { mode in
+            var profile = selectedProfile
+            profile.denseResidentLayerCount = mode == "resident" ? nil
+                : (mode == "streamed" ? 0 : max(1, selectedProfileInstall.descriptor.projectionLayerCount / 2))
+            model.updateSettingsProfile(profile, for: selectedProfileInstall)
+        })
+    }
+    private var projectionLayerBinding: Binding<Int> {
+        Binding(get: { selectedProfile.denseResidentLayerCount ?? 1 }, set: { count in
+            var profile = selectedProfile
+            profile.denseResidentLayerCount = count
+            model.updateSettingsProfile(profile, for: selectedProfileInstall)
+        })
     }
 
     private var customAccentColorBinding: Binding<Color> {

@@ -1,5 +1,6 @@
 import AppKit
-import TUFFEngine
+import TUFFInferenceTypes
+import TUFFRuntimeDescriptions
 import TUFFAppCore
 import TUFFMacPresentation
 import SwiftUI

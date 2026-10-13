@@ -34,18 +34,14 @@ private func run(_ executableURL: URL, arguments: [String]) throws -> Int32 {
 let fileManager = FileManager.default
 let currentDirectoryURL = URL(
     fileURLWithPath: fileManager.currentDirectoryPath, isDirectory: true)
-let applicationSupportURL = (try? fileManager.url(
-    for: .applicationSupportDirectory,
-    in: .userDomainMask,
-    appropriateFor: nil,
-    create: false)) ?? fileManager.homeDirectoryForCurrentUser
+let applicationSupportURL = TUFFApplicationDirectories.applicationSupportURL()
 // A shell that finds `tuff` on the PATH passes the bare name as argv[0], so
 // argv[0] can't locate the bundled executables. The path the kernel ran can.
 let executableURL = Bundle.main.executableURL
     ?? (CommandLine.arguments[0].hasPrefix("/")
         ? URL(fileURLWithPath: CommandLine.arguments[0])
         : currentDirectoryURL.appendingPathComponent(CommandLine.arguments[0]))
-let preferences = UserDefaults(suiteName: "TUFF")
+let preferences = UserDefaults(suiteName: TUFFApplicationDirectories.preferencesSuiteName())
 
 do {
     let plan = try TUFFCommand.plan(

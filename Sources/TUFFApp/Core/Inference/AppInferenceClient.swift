@@ -5,6 +5,10 @@ public protocol AppInferenceClient: Sendable {
     func cancel()
 }
 
+public protocol AppInferenceEngineReporting: Sendable {
+    var currentEngineIdentity: String? { get }
+}
+
 /// A client that owns a loadable model session. Loading is split from
 /// generation so the UI can pre-load the ~1.6 GB resident weights once and
 /// keep them warm across runs. Generation never loads or replaces a session.

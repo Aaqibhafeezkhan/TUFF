@@ -1,4 +1,5 @@
 import Foundation
+import TUFFModelCatalog
 
 struct RemoteSnapshot {
     let metadata: IndexLoader.SourceMetadata
@@ -27,7 +28,9 @@ enum RemoteSnapshotLoader {
 
         try await pinned.fetchSmallFile(filename: "model.safetensors.index.json",
                                         info: indexInfo,
-                                        capBytes: 4 * 1024 * 1024,
+                                        capBytes: remote.repoID == TUFFModelCatalog.ornith15_397B.source.repoID
+                                            && indexInfo.resolvedCommit == TUFFModelCatalog.ornith15_397B.source.revision
+                                            ? 64 * 1024 * 1024 : 4 * 1024 * 1024,
                                         outputPath: (metadataDirectory as NSString)
                                             .appendingPathComponent("model.safetensors.index.json"),
                                         audit: audit)
@@ -43,7 +46,12 @@ enum RemoteSnapshotLoader {
             throw RepackError.sourceFingerprintRejected(path: metadata.indexPath,
                                                         sha256: metadata.indexSha256Hex)
         }
-        let arch = try ArchInfo.load(configPath: metadata.configPath)
+        let matched = SupportedModelSource.all.first { $0.sourceIndexSHA256 == metadata.indexSha256Hex && $0.repoID == remote.repoID }
+        let variant = matched.flatMap { source in
+            TUFFModelCatalog.all.first { $0.source.manifestModelID == source.modelID }
+                .flatMap { RepackModelVariant(rawValue: $0.architecture.id.rawValue) }
+        }
+        let arch = try ArchInfo.load(configPath: metadata.configPath, variant: variant)
 
         var files: [String: RemoteFileInfo] = [
             indexInfo.filename: indexInfo,

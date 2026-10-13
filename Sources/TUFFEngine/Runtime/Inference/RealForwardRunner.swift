@@ -1,135 +1,6 @@
 import Foundation
 import Metal
 
-public enum RDAdvicePolicyMode: String, Codable, Sendable, Equatable {
-    case `default`
-    case off
-    case bounded
-    case adaptive
-
-    public static func parse(_ raw: String?) -> RDAdvicePolicyMode {
-        switch raw?.lowercased() {
-        case "off", "none", "disabled":
-            return .off
-        case "bounded":
-            return .bounded
-        case "adaptive":
-            return .adaptive
-        default:
-            return .default
-        }
-    }
-}
-
-public struct RDAdviceAdaptivePolicyConfig: Sendable, Equatable {
-    public var missCap: Int
-    public var byteCap: UInt64
-    public var slowCallNanos: UInt64
-
-    public init(missCap: Int,
-                byteCap: UInt64,
-                slowCallNanos: UInt64) {
-        self.missCap = missCap
-        self.byteCap = byteCap
-        self.slowCallNanos = slowCallNanos
-    }
-
-    public static let conservative = RDAdviceAdaptivePolicyConfig(
-        missCap: 12,
-        byteCap: 384 * 1_048_576,
-        slowCallNanos: 1_000_000)
-}
-
-struct RDAdviceAdaptivePolicyState: Sendable, Equatable {
-    var config: RDAdviceAdaptivePolicyConfig
-    private var skipUntilPosition: Int = -1
-    private(set) var recentSlowCallNanos: UInt64 = 0
-
-    init(config: RDAdviceAdaptivePolicyConfig = .conservative) {
-        self.config = config
-    }
-
-    mutating func reset() {
-        skipUntilPosition = -1
-        recentSlowCallNanos = 0
-    }
-
-    func shouldSkip(position: Int,
-                    requestedMisses: Int,
-                    estimatedBytes: UInt64,
-                    canOverlapUsefulGPUWork: Bool) -> Bool {
-        position <= skipUntilPosition ||
-        !canOverlapUsefulGPUWork ||
-        requestedMisses > config.missCap ||
-        estimatedBytes > config.byteCap
-    }
-
-    mutating func update(after result: ExpertIOAdviceResult,
-                                position: Int) {
-        recentSlowCallNanos = max(recentSlowCallNanos, result.maxCallNanos)
-        if result.maxCallNanos >= config.slowCallNanos {
-            skipUntilPosition = max(skipUntilPosition, position)
-        }
-    }
-}
-
-/// Gemma 4 real-forward decode pass.
-///
-/// Composes the production kernels against the `.gturbo` model:
-///
-///   embed_lookup_int4(token) * sqrt(H)
-///   for L in 0..<30:
-///     a = rmsnorm_bf16w(h, input_layernorm)
-///     Q = q_proj(a)    K = k_proj(a)    V = (SWA) v_proj(a) | (full) k_proj(a)
-///     per-head q/k_norm (bf16w), per-head v_norm (no_scale)
-///     NeoX RoPE on Q + K (default for SWA, proportional for full)
-///     write K and V into separate cache slots
-///     attn = attention(scale=1.0, SWA window or full causal)
-///     attn = o_proj(attn)
-///     h = h + rmsnorm_bf16w(attn, post_attention_layernorm)
-///     h1 = rmsnorm_bf16w(h, pre_feedforward_layernorm)
-///     h1 = SharedExpertInt8(h1)
-///     h1 = rmsnorm_bf16w(h1, post_feedforward_layernorm_1)
-///     // router + routed branch
-///     xr   = rmsnorm_no_scale(h)
-///     idx, w = router_topk_gemma4(xr, effective_scale[L], per_expert_scale[L])
-///     h2 = rmsnorm_bf16w(h, pre_feedforward_layernorm_2)
-///     h2 = moe_fused_ffn_streamed_routed(h2, residual=0, routedBlobs=fetch(idx), w)
-///     h2 = rmsnorm_bf16w(h2, post_feedforward_layernorm_2)
-///     h = h + rmsnorm_bf16w(h1 + h2, post_feedforward_layernorm)
-///     h = h * layer_scalar[L]
-///   logits = DequantInt4GEMV(rmsnorm_bf16w(h, model.norm), embed_table^T)
-///   // final softcap and softmax happen in the Sampler.
-///
-/// Direct against `Model`; this is the only production decode forward path.
-internal enum PrefillProjectionFamily: Sendable, Equatable {
-    case q
-    case kv
-    case o
-    case shared
-    case routed
-}
-
-internal enum PrefillProjectionDispatch: Sendable, Equatable {
-    case repeatedGEMV
-    case qmm
-}
-
-internal enum PrefillProjectionDispatchPolicy {
-    static func selectedDispatch(for family: PrefillProjectionFamily,
-                                 chunkTokens: Int) -> PrefillProjectionDispatch {
-        guard chunkTokens >= 32 else {
-            return .repeatedGEMV
-        }
-        switch family {
-        case .q:
-            return .repeatedGEMV
-        case .kv, .o, .shared, .routed:
-            return .qmm
-        }
-    }
-}
-
 public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRunner, ContextWindowReporting, ContinuableLogitProducer, SpeculativeVerificationRunner, @unchecked Sendable {
     private struct LayerSharedExpertProjections {
         let gate: SharedExpertInt8Proj
@@ -258,6 +129,9 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
     var debugAttentionOut: MTLBuffer { oOut }
     var debugSharedExpertOut: MTLBuffer { h1Buf }
     var debugRoutedOut: MTLBuffer { h2Buf }
+    private var sharedGateBeforeHalf: Bool {
+        cfg.variant == .ornith15_397B && model.sharedExpertWeightBits == 4
+    }
 
     /// Test-only: called with the index of the layer about to run, and once
     /// more with `numLayers`, after every command already encoded for the
@@ -301,7 +175,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
     public var lookaheadReadsIssued: Int { lookahead.readsIssued }
     var exposedPrefetchWaitNanos: UInt64 { lookahead.exposedWaitNanos }
     var expertReadMetrics: ExpertReadMetrics { model.expertReadMetrics }
-    public var lookaheadEnabled: Bool { lookahead.enabled }
+    public var lookaheadEnabled: Bool { lookahead.enabled && !model.stagesDenseLayers }
     // Persistent MoE scratch, allocated once; about 56 KiB at production shape.
     private let moeActs: MTLBuffer       // [topK * FmoE] FP16
     private let moeHitActiveSlots: MTLBuffer // [topK] UInt32
@@ -737,7 +611,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                 gate: sharedProj(gate),
                 up: sharedProj(up),
                 down: sharedProj(down),
-                postF1: cfg.feedForwardKind == .dense
+                postF1: cfg.feedForwardKind == .dense && cfg.family == .gemma4
                     ? try model.postFFN(layer: L)
                     : (cfg.ffnSandwichNorms ? try model.postFFN1(layer: L) : nil),
                 scalarGate: cfg.sharedExpertGated
@@ -1518,7 +1392,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
         let layerViews = try (0..<cfg.numLayers).map { L in
             let isFull = cfg.fullAttentionLayerMask[L] == 1
             let isLinear = cfg.layerIsLinear(L)
-            let dense = cfg.feedForwardKind == .dense
+            let dense = cfg.feedForwardKind == .dense && cfg.family == .gemma4
             let sandwich = cfg.ffnSandwichNorms && !dense
             let sharesKV = cfg.layerSharesKV(L)
             return LayerPrefillQKVViews(
@@ -1526,7 +1400,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                     ? nil : try model.inputNorm(layer: L),
                 postAttention: cfg.hyperConnection.isEnabled
                     ? nil : try model.postAttnNorm(layer: L),
-                router: dense ? nil : try model.router(layer: L),
+                router: cfg.feedForwardKind == .dense ? nil : try model.router(layer: L),
                 q: isLinear ? nil : try model.qProj(layer: L),
                 k: (isLinear || sharesKV) ? nil : try model.kProj(layer: L),
                 v: (isLinear || sharesKV) ? nil
@@ -1923,10 +1797,21 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
         let blockInput = usesHyperConnections ? scratch.hcMixed : scratch.normed
         let ffnInput = usesHyperConnections ? scratch.hcMixed : scratch.routedX
 
+        func finishStagedDenseChunkLayer(_ layer: Int) throws {
+            guard model.stagesDenseLayers else { return }
+            cb.commit()
+            try waitForCompletion(cb)
+            guard let next = makePrefillCommandBuffer("dense staged layer \(layer + 1)") else {
+                throw ModelError.residentBufferWrapFailed
+            }
+            cb = next
+        }
+
         for L in 0..<cfg.numLayers {
             if cfg.feedForwardKind == .mixtureOfExperts {
                 model.beginOpeningRoutedExpertStreamer(layer: L)
             }
+            try model.prepareDenseLayer(L)
             let views = layerViews[L]
             let isLinear = cfg.layerIsLinear(L)
             let isFull = cfg.fullAttentionLayerMask[L] == 1
@@ -2307,6 +2192,27 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                                          xStrideElements: qDim,
                                          yStrideElements: D)
             }
+            if cfg.feedForwardKind == .dense && cfg.family == .qwen36 {
+                elementwise!.encodeResidualAdd(commandBuffer: cb, hidden: scratch.hidden,
+                                               delta: scratch.h1, count: t * D)
+                prefillRMS.encodeBF16W(commandBuffer: cb, x: scratch.hidden,
+                    weight: views.postAttention!.buffer,
+                    weightOffset: Int(views.postAttention!.offset), out: scratch.denseX,
+                    t: UInt32(t), d: UInt32(D), eps: eps)
+                let projections = sharedExpertProjections[L]!
+                try prefillSharedExpert.encodeBlock(commandBuffer: cb, x: scratch.denseX,
+                    y: scratch.h1, gate: projections.gate, up: projections.up,
+                    down: projections.down, scratchGate: scratch.sharedGateScratch,
+                    scratchUp: scratch.sharedUpScratch, scratchAct: scratch.sharedActScratch,
+                    queryCount: t, d: D, intermediate: cfg.intermediateSize,
+                    xStrideElements: D, yStrideElements: D,
+                    allowSmallBlock: smallBlockPrefill.admits(family: .shared, tokenCount: t,
+                        speculativeVerification: isSpeculativeVerification))
+                elementwise!.encodeResidualAdd(commandBuffer: cb, hidden: scratch.hidden,
+                                               delta: scratch.h1, count: t * D)
+                try finishStagedDenseChunkLayer(L)
+                continue
+            }
             if cfg.feedForwardKind == .dense {
                 // Official Gemma 4 dense order: post-normalized attention
                 // residual, dense FFN sandwich, PLE mapping residual, scale.
@@ -2370,6 +2276,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                         values: scratch.hidden,
                         count: t * D,
                         scale: layerScale)
+                    try finishStagedDenseChunkLayer(L)
                     continue
                 }
 
@@ -2430,6 +2337,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                     delta: scratch.h1,
                     count: t * D,
                     scale: layerScale)
+                try finishStagedDenseChunkLayer(L)
                 continue
             }
             if cfg.ffnSandwichNorms {
@@ -2577,6 +2485,18 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                         throw ModelError.residentBufferWrapFailed
                     }
                     if let sharedProj = sharedExpertProjections[L] {
+                    if sharedGateBeforeHalf {
+                        let view = sharedProj.scalarGate!
+                        for row in 0..<t {
+                            int8ScalarGate!.encode(commandBuffer: sharedCB,
+                                weights: view.buffer, weightsOffset: Int(view.offset),
+                                scales: view.buffer, scalesOffset: Int(view.scaleOffset),
+                                biases: view.buffer, biasesOffset: Int(view.biasOffset),
+                                x: ffnInput, xOffset: row * D * 2,
+                                y: scratch.sharedScalarGate, yOffset: row * 2,
+                                m: 1, n: UInt32(D))
+                        }
+                    }
                     try prefillSharedExpert.encodeBlock(commandBuffer: sharedCB,
                                                         x: cfg.ffnSandwichNorms
                                                             ? scratch.denseX
@@ -2595,7 +2515,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                                                         yStrideElements: D,
                                                         allowSmallBlock: smallBlockPrefill.admits(
                                                             family: .shared, tokenCount: t,
-                                                            speculativeVerification: isSpeculativeVerification))
+                                                            speculativeVerification: isSpeculativeVerification),
+                                                        outputGate: sharedGateBeforeHalf ? scratch.sharedScalarGate : nil)
                     if cfg.ffnSandwichNorms {
                         let postF1 = sharedProj.postF1!
                         prefillRMS.encodeBF16W(commandBuffer: sharedCB,
@@ -2606,7 +2527,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                                                t: UInt32(t),
                                                d: UInt32(D),
                                                eps: eps)
-                    } else if cfg.sharedExpertGated {
+                    } else if cfg.sharedExpertGated && !sharedGateBeforeHalf {
                         // out = sigmoid(shared_expert_gate(moeX)) * shared_mlp(moeX),
                         // per chunk row.
                         let gateView = sharedProj.scalarGate!
@@ -3153,6 +3074,10 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
         }
 
         for L in 0..<cfg.numLayers {
+            if model.stagesDenseLayers {
+                try drainForDebug()
+                try model.prepareDenseLayer(L)
+            }
             if let sink = debugLayerSink {
                 try drainForDebug()
                 sink(L)
@@ -3405,9 +3330,24 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
             }
 
             if cfg.feedForwardKind == .dense {
-                try encodeDenseGemmaLayerDecode(
-                    cb, layer: L, postAttention: postAttn!,
-                    projections: sharedProj!, d: D, eps: eps)
+                if cfg.family == .qwen36 {
+                    elementwise!.encodeResidualAdd(commandBuffer: cb, hidden: hidden,
+                                                   delta: oOut, count: cfg.hiddenSize)
+                    rms.encodeBF16W(commandBuffer: cb, x: hidden,
+                        weight: postAttn!.buffer, weightOffset: Int(postAttn!.offset),
+                        out: denseX, d: D, eps: eps)
+                    let projections = sharedProj!
+                    try shared.encode(commandBuffer: cb, x: denseX,
+                        gate: projections.gate, up: projections.up, down: projections.down,
+                        y: h1Buf, scratchGate: denseScratchGate, scratchUp: denseScratchUp,
+                        scratchAct: denseScratchAct)
+                    elementwise!.encodeResidualAdd(commandBuffer: cb, hidden: hidden,
+                                                   delta: h1Buf, count: cfg.hiddenSize)
+                } else {
+                    try encodeDenseGemmaLayerDecode(
+                        cb, layer: L, postAttention: postAttn!,
+                        projections: sharedProj!, d: D, eps: eps)
+                }
                 // A dense layer produces nothing the CPU reads, so the whole
                 // token stays on one command buffer: the layer's work is
                 // handed to the next iteration instead of being committed and
@@ -3509,7 +3449,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
             // read that was registered but not yet started, so no drain can
             // wait on it forever.
             defer { fireLookahead() }
-            if lookahead.enabled, L + 1 < cfg.numLayers,
+            if lookahead.enabled, !model.stagesDenseLayers, L + 1 < cfg.numLayers,
                let nextRouter = try? model.router(layer: L + 1) {
                 if cfg.usesSigmoidCorrectionRouter {
                     let correction = try model.routerCorrectionBias(layer: L + 1)
@@ -3695,6 +3635,14 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
             // overlaps the routed-expert pread. The routed CB follows it on
             // the same queue, so the combine sees h1Buf.
             if let sharedCB, let sharedProj {
+            if sharedGateBeforeHalf {
+                let view = sharedProj.scalarGate!
+                int8ScalarGate!.encode(commandBuffer: sharedCB,
+                    weights: view.buffer, weightsOffset: Int(view.offset),
+                    scales: view.buffer, scalesOffset: Int(view.scaleOffset),
+                    biases: view.buffer, biasesOffset: Int(view.biasOffset),
+                    x: ffnInput, y: sharedScalarGateBuf!, m: 1, n: D)
+            }
             try! shared.encode(commandBuffer: sharedCB,
                                x: cfg.ffnSandwichNorms ? denseX : ffnInput,
                                gate: sharedProj.gate,
@@ -3703,14 +3651,15 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                                y: h1Buf,
                                scratchGate: denseScratchGate,
                                scratchUp: denseScratchUp,
-                               scratchAct: denseScratchAct)
+                               scratchAct: denseScratchAct,
+                               outputGate: sharedGateBeforeHalf ? sharedScalarGateBuf : nil)
             if cfg.ffnSandwichNorms {
                 let postF1 = sharedProj.postF1!
                 rms.encodeBF16W(commandBuffer: sharedCB, x: h1Buf,
                                 weight: postF1.buffer,
                                 weightOffset: Int(postF1.offset),
                                 out: h1Buf, d: D, eps: eps)
-            } else if cfg.sharedExpertGated {
+            } else if cfg.sharedExpertGated && !sharedGateBeforeHalf {
                 // out = sigmoid(shared_expert_gate(moeX)) * shared_mlp(moeX)
                 let gateView = sharedProj.scalarGate!
                 int8ScalarGate!.encode(commandBuffer: sharedCB,

@@ -4,6 +4,7 @@ import Metal
 final class PrefillSharedExpert {
     private let shared: SharedExpertRuntime
     private let batched: MPPPrefillAffineQMM?
+    private let gatedDown: DequantInt4GEMV?
     /// Opt-in shared-weight path for 2-31 token blocks of an INT4 shared
     /// expert. Nil unless the runner's small-block policy enabled it.
     private let smallBlock: DequantInt4SmallBlock?
@@ -24,6 +25,7 @@ final class PrefillSharedExpert {
                                               weightBits: weightBits,
                                               siluActivation: siluActivation,
                                               groupSize: groupSize)
+        self.gatedDown = weightBits == 4 ? try DequantInt4GEMV(context: context, groupSize: groupSize) : nil
         // INT8 shared weights are grouped at 64 whatever the checkpoint's INT4
         // group, as `dequant_int8.metal` assumes.
         self.batched = allowBatched
@@ -66,7 +68,8 @@ final class PrefillSharedExpert {
                             intermediate: Int,
                             xStrideElements: Int,
                             yStrideElements: Int,
-                            allowSmallBlock: Bool = false) throws {
+                            allowSmallBlock: Bool = false,
+                            outputGate: MTLBuffer? = nil, outputGateOffset: Int = 0) throws {
         precondition(queryCount >= 0, "queryCount must be non-negative")
         precondition(d > 0, "d must be positive")
         precondition(intermediate > 0, "intermediate must be positive")
@@ -80,6 +83,13 @@ final class PrefillSharedExpert {
         }
 
         let halfBytes = MemoryLayout<Float16>.stride
+        if let outputGate {
+            guard outputGateOffset >= 0, outputGateOffset % 2 == 0,
+                  outputGateOffset <= outputGate.length,
+                  queryCount <= (outputGate.length - outputGateOffset) / halfBytes else {
+                throw SharedExpertError.scratchTooSmall("prefill scalar gates exceed buffer")
+            }
+        }
         if queryCount >= Self.minimumBatchedTokens,
            xStrideElements == d, yStrideElements == d,
            try encodeBatched(commandBuffer: cb, x: x, xOffset: xOffset,
@@ -88,10 +98,11 @@ final class PrefillSharedExpert {
                              scratchGate: scratchGate, scratchGateOffset: scratchGateOffset,
                              scratchUp: scratchUp, scratchUpOffset: scratchUpOffset,
                              scratchAct: scratchAct, scratchActOffset: scratchActOffset,
-                             queryCount: queryCount, d: d, intermediate: intermediate) {
+                             queryCount: queryCount, d: d, intermediate: intermediate,
+                             outputGate: outputGate, outputGateOffset: outputGateOffset) {
             return
         }
-        if allowSmallBlock,
+        if outputGate == nil, allowSmallBlock,
            try encodeSmallBlock(commandBuffer: cb, x: x, xOffset: xOffset,
                                 y: y, yOffset: yOffset,
                                 gate: gate, up: up, down: down,
@@ -117,7 +128,8 @@ final class PrefillSharedExpert {
                               scratchUp: scratchUp,
                               scratchUpOffset: scratchUpOffset,
                               scratchAct: scratchAct,
-                              scratchActOffset: scratchActOffset)
+                              scratchActOffset: scratchActOffset,
+                              outputGate: outputGate, outputGateOffset: outputGateOffset + row * halfBytes)
         }
     }
 
@@ -216,7 +228,9 @@ final class PrefillSharedExpert {
                                scratchGate: MTLBuffer, scratchGateOffset: Int,
                                scratchUp: MTLBuffer, scratchUpOffset: Int,
                                scratchAct: MTLBuffer, scratchActOffset: Int,
-                               queryCount: Int, d: Int, intermediate: Int) throws -> Bool {
+                               queryCount: Int, d: Int, intermediate: Int,
+                               outputGate: MTLBuffer? = nil, outputGateOffset: Int = 0) throws -> Bool {
+        guard outputGate == nil || gatedDown != nil else { return false }
         guard let batched,
               MPPPrefillAffineQMM.supports(k: d, n: intermediate, m: queryCount),
               MPPPrefillAffineQMM.supports(k: intermediate, n: d, m: queryCount),
@@ -257,9 +271,19 @@ final class PrefillSharedExpert {
         encoder.dispatchThreads(MTLSize(width: Int(count), height: 1, depth: 1),
                                 threadsPerThreadgroup: MTLSize(width: width, height: 1, depth: 1))
         encoder.endEncoding()
-        guard project(down, scratchAct, scratchActOffset, y, yOffset) else {
-            throw SharedExpertInt8Error.dimensionMismatch(
-                "batched shared-expert down projection refused after its shape was accepted")
+        if let outputGate, let gatedDown {
+            gatedDown.encode(commandBuffer: cb,
+                weights: down.weights, weightsOffset: down.weightsOffset,
+                scales: down.scales, scalesOffset: down.scalesOffset,
+                biases: down.biases, biasesOffset: down.biasesOffset,
+                x: scratchAct, xOffset: scratchActOffset, y: y, yOffset: yOffset,
+                m: down.rows, n: down.cols, outputGate: outputGate,
+                outputGateOffset: outputGateOffset, queryCount: queryCount)
+        } else {
+            guard project(down, scratchAct, scratchActOffset, y, yOffset) else {
+                throw SharedExpertInt8Error.dimensionMismatch(
+                    "batched shared-expert down projection refused after its shape was accepted")
+            }
         }
         return true
     }

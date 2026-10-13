@@ -1,76 +1,11 @@
+import TUFFAppCore
+import TUFFRuntimeManagement
 import CryptoKit
 import Foundation
 import Metal
 import TUFFEngine
 import TUFFModelCatalog
 import Synchronization
-
-final class GenerationTaskRegistry: Sendable {
-    private struct Entry: Sendable {
-        let id: UUID
-        var task: Task<Void, Never>?
-        var cancellationRequested = false
-        var idleWaiters: [CheckedContinuation<Void, Never>] = []
-    }
-
-    private let state = Mutex<Entry?>(nil)
-
-    func reserve(_ id: UUID) -> Bool {
-        state.withLock { entry in
-            guard entry == nil else { return false }
-            entry = Entry(id: id, task: nil)
-            return true
-        }
-    }
-
-    func attach(_ task: Task<Void, Never>, to id: UUID) {
-        let shouldCancel = state.withLock { entry -> Bool in
-            guard entry?.id == id else { return true }
-            entry?.task = task
-            return entry?.cancellationRequested == true
-        }
-        if shouldCancel { task.cancel() }
-    }
-
-    func take(_ id: UUID) -> Task<Void, Never>? {
-        state.withLock { entry in
-            guard entry?.id == id else { return nil }
-            // Cancellation does not mean the producer has finished. Retain
-            // its reservation until clear() acknowledges all cleanup.
-            entry?.cancellationRequested = true
-            return entry?.task
-        }
-    }
-
-    func takeCurrent() -> Task<Void, Never>? {
-        state.withLock { entry in
-            entry?.cancellationRequested = true
-            return entry?.task
-        }
-    }
-
-    func clear(_ id: UUID) {
-        let waiters = state.withLock { entry -> [CheckedContinuation<Void, Never>] in
-            guard entry?.id == id else { return [] }
-            let waiters = entry?.idleWaiters ?? []
-            entry = nil
-            return waiters
-        }
-        for waiter in waiters { waiter.resume() }
-    }
-
-    func waitUntilIdle() async {
-        await withCheckedContinuation { continuation in
-            let alreadyIdle = state.withLock { entry -> Bool in
-                guard entry != nil else { return true }
-                entry?.idleWaiters.append(continuation)
-                return false
-            }
-            if alreadyIdle { continuation.resume() }
-        }
-    }
-
-}
 
 /// Real-model inference client for the Mac app. Wraps the same raw-completion
 /// loop the CLI uses (`runRawCompletion`, BOS + verbatim encode, no chat
@@ -243,7 +178,7 @@ actor RealInferenceSession {
             if let residencyCoordinator {
                 residencyLease = try await residencyCoordinator.reserve(
                     directory: key.directory, context: key.maxContext, slots: key.options.expertCacheSlots,
-                    chunk: key.options.prefillChunkTokens)
+                    chunk: key.options.prefillChunkTokens, options: key.options)
             }
             var loadSucceeded = false
             defer { if !loadSucceeded { residencyLease = nil } }
@@ -272,6 +207,7 @@ actor RealInferenceSession {
                 directoryURL: key.directory,
                 device: context.device,
                 streamingMode: .pread(slotCount: runtimeConfiguration.expertCacheSlots),
+                denseResidency: key.options.denseResidencyPolicy,
                 expertCachePolicy: runtimeConfiguration.modelExpertCachePolicy,
                 integrityPolicy: key.options.modelVerification.runtimeValue)
             try Task.checkCancellation()
@@ -469,6 +405,9 @@ actor RealInferenceSession {
                     trim: AppConversationTrim(droppedTurns: dropped,
                                               promptTokens: tokens.count))
             }
+            if request.preservesFullHistory {
+                throw AppInferenceError.contextOverflow(prompt: tokens.count, maxNew: 0, maxContext: maxContext)
+            }
             guard dropped < request.history.count else {
                 // Nothing left to drop; the prompt itself overflows.
                 throw AppInferenceError.contextOverflow(
@@ -573,6 +512,9 @@ actor RealInferenceSession {
 
     static func retainedConversationBudget(model: Model, key: SessionLoadKey,
                                            imagePackInstalled: Bool) -> Int {
+        if let bytes = key.options.retainedConversationBytes {
+            return ConversationRetentionBudget.budget(safeBudgetBytes: UInt64(bytes), workingSetBytes: 0, capBytes: UInt64(bytes))
+        }
         guard let descriptor = TUFFModelCatalog.all.first(where: {
             $0.architecture.id.rawValue == model.config.variant.rawValue
         }) else { return 0 }
@@ -589,7 +531,7 @@ actor RealInferenceSession {
         let switches = ProcessInfo.processInfo.environment
             .filter { $0.key.hasPrefix("TUFF_") }
             .map { "\($0.key)=\($0.value)" }.sorted()
-        let identity = ([GFTokenizer.toolChatTemplateIdentity,
+        let identity = ([GFTokenizer.toolChatTemplateIdentity, InferenceEngineEnvironment.computationIdentity,
                          String(runtime.expertCacheSlots), runtime.expertCachePolicy.rawValue,
                          runtime.prefillPolicy.rawValue, String(runtime.prefillChunkTokens),
                          runtime.headPath.rawValue, String(key.forceLogitsHead)] + switches)
@@ -735,6 +677,9 @@ actor RealInferenceSession {
                 multimodalInput = rendered.input
                 conversationTrim = rendered.trim
             }
+            if request.preservesFullHistory && conversationTrim.droppedTurns > 0 {
+                throw AppInferenceError.invalidRequest("The full conversation exceeds this Auto context. Increase context or start a new chat; no history was removed.")
+            }
             progress.promptTokenCount = promptIds.count
             progress.conversationTrim = conversationTrim
             memorySampler.resetPeak()
@@ -798,7 +743,9 @@ actor RealInferenceSession {
                     ? [Self.turnCheckpointPosition(
                         request: request, promptIDs: promptIds, tokenizer: tokenizer,
                         modelVariant: variant, harmonyDate: harmonyDate)].compactMap { $0 }
-                    : []) { @Sendable event in
+                    : [],
+                checkpointBudgetBytes: max(0, conversations.budgetBytes
+                    - conversations.retainedBytes - conversations.activeCheckpointBytes)) { @Sendable event in
                 switch event {
                 case .prefill(let done, let total):
                     if done == total {

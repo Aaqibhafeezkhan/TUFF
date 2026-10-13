@@ -1,3 +1,4 @@
+@testable import TUFFServerEngine
 import Testing
 import TUFFEngine
 @testable import TUFFServerCore

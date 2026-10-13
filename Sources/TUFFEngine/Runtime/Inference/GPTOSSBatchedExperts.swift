@@ -14,7 +14,7 @@ import Metal
 /// scatter fills the same route partials `encodeFloatResidualReduce` weights
 /// and sums, so the residual update is unchanged.
 final class GPTOSSBatchedExperts {
-    static let maxRows = 1_024
+    static let maxRows = RuntimeAllocationGeometry.maximumBatchedExpertRows
     static let tileK = 64
 
     /// MXFP4 pipelines by tile shape, smallest M first: an expert sees about

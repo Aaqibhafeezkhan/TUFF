@@ -25,9 +25,25 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def shader_digest(cli):
+def engine_info(cli, model_directory):
+    """The host authenticates and acquires its model's installed engine."""
+    return json.loads(subprocess.check_output([str(cli), '--engine-info', '--model', str(model_directory)],
+        text=True, timeout=120))
+
+
+def shader_digest(cli, model_directory=None):
     root = next((p for p in Path(cli).parents if p.suffix == '.app'), Path(cli).parent)
     bundles = list(root.rglob('TUFF_TUFFEngine.bundle'))
+    if not bundles and model_directory is not None:
+        info = engine_info(cli, model_directory)
+        engine_root = Path(info['executablePath']).parent
+        files = [f for f in info['manifest']['files'] if Path(f['path']).suffix in ('.metal', '.metallib')]
+        if not files:
+            raise ValueError('installed engine has no shader resources')
+        # Include the authenticated engine build as well as shader bytes, so a
+        # helper-only change invalidates results even when the thin host matches.
+        return hashlib.sha256((info['manifest']['archiveSHA256'] + ''.join(
+            f['path'] + digest(engine_root / f['path']) for f in sorted(files, key=lambda f: f['path']))).encode()).hexdigest()
     if len(bundles) != 1:
         raise ValueError('expected one engine resource bundle beside the CLI')
     bundle = bundles[0]
@@ -162,9 +178,12 @@ def main():
         'require File.expand_path("Scripts/benchmark_models", Dir.pwd); puts JSON.generate(BENCHMARK_MODELS)'], cwd=ROOT))
     cli = args.cli.resolve()
     comparison = args.comparison_cli.resolve() if args.comparison_cli else None
-    identity = dict(cli_sha256=digest(cli), shaders_sha256=shader_digest(cli),
+    def combined_shaders(binary):
+        return hashlib.sha256(''.join(model + shader_digest(binary,
+            args.model_root / Path(metadata[model]['path']).name) for model in args.models.split(',')).encode()).hexdigest()
+    identity = dict(cli_sha256=digest(cli), shaders_sha256=combined_shaders(cli),
                     comparison_cli_sha256=digest(comparison) if comparison else None,
-                    comparison_shaders_sha256=shader_digest(comparison) if comparison else None,
+                    comparison_shaders_sha256=combined_shaders(comparison) if comparison else None,
                     harness_sha256=digest(__file__),
                     reporting_sha256=digest(ROOT/'Scripts/benchmark_reporting.py'),
                     model_table_sha256=digest(ROOT/'Scripts/benchmark_models.rb'),

@@ -1,3 +1,4 @@
+@testable import TUFFEngineAdapter
 import Foundation
 import Testing
 import TUFFEngine
@@ -152,6 +153,19 @@ struct ConversationHistoryTests {
                 ]),
                 tokenizer: tokenizer,
                 maxContext: 256)
+        }
+    }
+
+    @Test("Auto refuses an underestimated context instead of dropping history")
+    func automaticHistoryPreservationUsesActualTokenCount() async throws {
+        let tokenizer = try await GFTokenizer.load()
+        var command = request(prompt: "Final question.", history: [
+            AppChatTurn(prompt: String(repeating: "context ", count: 800), response: "Earlier answer.")
+        ])
+        command.preservesFullHistory = true
+        #expect(throws: AppInferenceError.self) {
+            _ = try RealInferenceSession.renderConversation(request: command,
+                tokenizer: tokenizer, maxContext: 256)
         }
     }
 }

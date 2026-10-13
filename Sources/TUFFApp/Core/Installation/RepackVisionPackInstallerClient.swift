@@ -1,6 +1,9 @@
 import Foundation
 import Synchronization
-import TUFFEngine
+import TUFFInferenceTypes
+import TUFFRuntimeDescriptions
+import TUFFModelMetadata
+import TUFFModelCatalog
 import TUFFRepackCore
 
 public final class RepackVisionPackInstallerClient: AppVisionPackInstallerClient, Sendable {
@@ -220,13 +223,19 @@ public final class RepackVisionPackInstallerClient: AppVisionPackInstallerClient
         }.value
     }
 
-    private static func resolvedDescriptor(
+    static func resolvedDescriptor(
         _ configured: AppModelInstallDescriptor,
         for textModelDirectory: URL
     ) -> AppModelInstallDescriptor {
         guard configured == .visionCompanion,
               let architecture = try? ManifestReader.resolveArchitecture(
-                directoryURL: textModelDirectory),
+                directoryURL: textModelDirectory) else { return configured }
+        if let manifest = try? ManifestReader.load(directoryURL: textModelDirectory, expecting: architecture),
+           let model = TUFFModelCatalog.model(manifestModelID: manifest.modelID),
+           let addon = model.addons.first(where: { $0.kind == .imageInput }) {
+            return AppModelInstallDescriptor(addon: addon)
+        }
+        guard
               let resolved = AppModelInstallDescriptor.visionCompanion(
                 for: architecture.variant) else { return configured }
         return resolved

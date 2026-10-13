@@ -108,7 +108,8 @@ static inline void dequant_int4_gemv_simd_body(
     uint                  rows_per_tg,
     uint                  tg_idx,
     uint                  sg_idx,
-    uint                  lane
+    uint                  lane,
+    device const half*    output_gate = nullptr
 ) {
     const uint row = tg_idx * rows_per_tg + sg_idx;
     if (row >= M) return;
@@ -186,8 +187,29 @@ static inline void dequant_int4_gemv_simd_body(
     }
     acc = simd_sum(acc);
     if (lane == 0) {
+        // Gated shared experts can exceed FP16 before attenuation. Apply the
+        // gate to the FP32 accumulation so Inf * 0 cannot poison the residual.
+        if (output_gate != nullptr) acc *= 1.0f / (1.0f + exp(-float(output_gate[0])));
         y[row] = half(acc);
     }
+}
+
+kernel void dequant_int4_gemv_gated(
+    device const uint8_t* W [[buffer(0)]],
+    device const bfloat* scales [[buffer(1)]],
+    device const bfloat* biases [[buffer(2)]],
+    device const half* x [[buffer(3)]],
+    device half* y [[buffer(4)]],
+    constant uint& M [[buffer(5)]],
+    constant uint& N [[buffer(6)]],
+    device const half* output_gate [[buffer(7)]],
+    uint3 tg_idx [[threadgroup_position_in_grid]],
+    uint sg_idx [[simdgroup_index_in_threadgroup]],
+    uint lane [[thread_index_in_simdgroup]]
+) {
+    dequant_int4_gemv_simd_body(W, scales, biases, x + tg_idx.y * N,
+                              y + tg_idx.y * M, M, N,
+                              8u, tg_idx.x, sg_idx, lane, output_gate + tg_idx.y);
 }
 
 kernel void dequant_int4_gemv_simd(

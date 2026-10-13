@@ -84,6 +84,7 @@ enum Safetensors {
             case "F32":  dtype = .fp32
             case "U8":   dtype = .u8
             case "I64":  dtype = .i64
+            case "I32": dtype = .i32
             default: throw RepackError.safetensorsUnknownDtype(path: path, dtype: dtypeStr)
             }
             guard let shape = entry["shape"] as? [Any] else {

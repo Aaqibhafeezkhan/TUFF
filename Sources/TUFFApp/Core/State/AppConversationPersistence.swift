@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import TUFFModelCatalog
 
 public struct AppConversationAttachment: Codable, Equatable, Sendable, Identifiable {
     public let id: UUID
@@ -183,11 +184,11 @@ public enum AppConversationPersistenceError: Error, Equatable, LocalizedError {
 /// restoring it from a backup does not leave absolute paths behind.
 public struct AppConversationRepository: Sendable {
     public static var defaultRootURL: URL {
-        let support = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support", isDirectory: true)
+        defaultRootURL(environment: ProcessInfo.processInfo.environment)
+    }
+
+    static func defaultRootURL(environment: [String: String]) -> URL {
+        let support = TUFFApplicationDirectories.applicationSupportURL(environment: environment)
         return support.appendingPathComponent("TUFF/Chats/v1", isDirectory: true)
     }
 

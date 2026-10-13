@@ -1,4 +1,5 @@
 import Foundation
+import TUFFModelCatalog
 
 /// v2.0.0 kept chats under `Application Support/TUFF` while models stayed in the
 /// older `Application Support/TurboFieldfare` directory. Everything the app owns
@@ -69,8 +70,6 @@ public enum AppSupportMigration {
     }
 
     public static func applicationSupportURL(fileManager: FileManager = .default) -> URL {
-        fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support", isDirectory: true)
+        TUFFApplicationDirectories.applicationSupportURL(fileManager: fileManager)
     }
 }

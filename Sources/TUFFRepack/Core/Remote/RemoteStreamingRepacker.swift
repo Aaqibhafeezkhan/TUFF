@@ -235,10 +235,9 @@ public final class RemoteStreamingRepacker {
         let remainingOutputBytes = outputBytes > reusedDestinationBytes
             ? outputBytes - reusedDestinationBytes
             : 0
-        let diskRequirement = try DiskSpaceChecker.requireAvailable(
-            path: paths.parentDirectory,
-            bytes: remainingOutputBytes + UInt64(options.rangeChunkBytes),
-            reserveBytes: options.minFreeReserveBytes)
+        let assess = options.dryRunSpaceCheck ? DiskSpaceChecker.assess : DiskSpaceChecker.requireAvailable
+        let diskRequirement = try assess(paths.parentDirectory,
+            remainingOutputBytes + UInt64(options.rangeChunkBytes) * 2, options.minFreeReserveBytes)
         progress(.checkingDisk(diskRequirement))
         try Task.checkCancellation()
 

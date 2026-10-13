@@ -83,7 +83,7 @@ enum GTurboJSON {
             // Named explicitly rather than left to the reader's
             // family-to-variant fallback: `qwen4_exp` is a family that can
             // hold more than one checkpoint shape.
-            variant: (isDense || isGPTOSS || arch.family == .qwen4Exp)
+            variant: (isDense || !isGemma)
                 ? arch.variant.rawValue : nil,
             feedForwardKind: (isDense || isGPTOSS)
                 ? arch.feedForwardKind.rawValue : nil,

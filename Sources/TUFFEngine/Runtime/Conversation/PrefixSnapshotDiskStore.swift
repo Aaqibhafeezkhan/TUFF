@@ -42,9 +42,15 @@ public final class PrefixSnapshotDiskStore: @unchecked Sendable {
            let megabytes = Int(override.trimmingCharacters(in: .whitespaces)) {
             budget = min(budget, max(0, megabytes) << 20)
         }
-        guard budget > 0,
-              let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
-        else { return nil }
+        guard budget > 0 else { return nil }
+        let caches: URL
+        if let scoped = environment["TUFF_APPLICATION_SUPPORT_ROOT"],
+           scoped.hasPrefix("/"), !scoped.contains("\0") {
+            caches = URL(fileURLWithPath: scoped, isDirectory: true).standardizedFileURL
+                .appendingPathComponent("TUFF/Caches", isDirectory: true)
+        } else if let normal = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
+            caches = normal
+        } else { return nil }
         func safe(_ text: String) -> String {
             String(text.map { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "." ? $0 : "_" })
         }

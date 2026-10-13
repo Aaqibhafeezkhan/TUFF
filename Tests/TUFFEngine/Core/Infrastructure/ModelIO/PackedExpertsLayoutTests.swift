@@ -5,6 +5,10 @@ import Darwin
 
 @Suite struct PackedExpertsLayoutTests {
 
+    @Test func capFitsCompletedOrnith397Layout() {
+        #expect(PackedExpertsLayoutReader.defaultMaxBytes > 68_280_566)
+    }
+
     @Test func rejectsLayoutFIFOWithoutBlocking() throws {
         let dir = try Self.writeToyLayout()
         defer { try? FileManager.default.removeItem(at: dir) }

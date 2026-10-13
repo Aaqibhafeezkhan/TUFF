@@ -1,4 +1,4 @@
-import TUFFEngine
+import TUFFRuntimeDescriptions
 import TUFFModelCatalog
 
 public enum AppContextLengthOption: Int, CaseIterable, Identifiable, Sendable {
@@ -14,7 +14,7 @@ public enum AppContextLengthOption: Int, CaseIterable, Identifiable, Sendable {
     case twoFiftySixK = 262_144
 
     public static func options(for descriptor: AppModelInstallDescriptor) -> [Self] {
-        let limit = descriptor.catalogID.flatMap(TUFFModelCatalog.model(id:))?
+        let limit = descriptor.planningCatalogID.flatMap(TUFFModelCatalog.model(id:))?
             .maximumContextTokens ?? 65_536
         return allCases.filter { $0.tokens <= limit }
     }

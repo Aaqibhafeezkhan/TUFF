@@ -21,6 +21,52 @@ import Metal
                                   options: .storageModeShared)!
     }
 
+    @Test func boundedLayerStagingMatchesResidentDecodeAndPrefill() async throws {
+        let directory = try DenseGemmaToySynthetic.write()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let context = try MetalContext()
+        let referenceModel = try Model.load(directoryURL: directory, device: context.device,
+                                            expecting: .gemma4E4BToy())
+        let reference = try RealForwardRunner(model: referenceModel, context: context,
+            maxContext: 64, runtimeConfiguration: RuntimeConfiguration(forceLogitsHead: true))
+        let output = logits(context)
+        func values() -> [Float16] {
+            Array(UnsafeBufferPointer(start: output.contents().assumingMemoryBound(to: Float16.self),
+                                      count: 256))
+        }
+        let prompt: [Int32] = [2, 7, 19, 5]
+        var expected: [[Float16]] = []
+        for (position, token) in prompt.enumerated() {
+            try await reference.produce(token: token, position: position, into: output)
+            expected.append(values())
+        }
+        reference.reset()
+        _ = try await reference.prefillChunked(tokens: prompt[...], startPosition: 0,
+            outputMode: .logits, config: .production(chunkTokens: 32), into: output,
+            onProgress: { _ in })
+        let expectedPrefill = values()
+        for residentLayers: Set<Int> in [[], [0, 2]] {
+            let model = try Model.load(directoryURL: directory, device: context.device,
+                expecting: .gemma4E4BToy(), denseResidency: .bounded(residentLayers: residentLayers))
+            #expect(model.stagesDenseLayers)
+            #expect(model.denseStagingBytes > 0)
+            #expect(model.denseStagingBytes < model.residentIndex.header.residentSize)
+            let runner = try RealForwardRunner(model: model, context: context, maxContext: 64,
+                runtimeConfiguration: RuntimeConfiguration(forceLogitsHead: true))
+            for (position, token) in prompt.enumerated() {
+                try await runner.produce(token: token, position: position, into: output)
+                #expect(values() == expected[position])
+            }
+            runner.reset()
+            _ = try await runner.prefillChunked(tokens: prompt[...], startPosition: 0,
+                outputMode: .logits, config: .production(chunkTokens: 32), into: output,
+                onProgress: { _ in })
+            #expect(values() == expectedPrefill)
+            try await runner.produce(token: 11, position: 4, into: output)
+            #expect(runner.continuationPosition == 5)
+        }
+    }
+
     @Test func denseInstallLoadsWithoutExpertDirectory() throws {
         let (directory, _, model, runner) = try makeRunner()
         defer { try? FileManager.default.removeItem(at: directory) }

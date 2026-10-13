@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
-import TUFFEngine
+import TUFFModelMetadata
+import TUFFRuntimeDescriptions
 
 public struct AppImageAttachment: Sendable, Equatable, Codable {
     public let id: UUID

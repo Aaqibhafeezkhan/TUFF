@@ -79,8 +79,10 @@ class HarnessTests(unittest.TestCase):
             config={'path':'gemma4.gturbo','runtime':['--expert-cache-slots','16','--prefill','on','--prefill-chunk-tokens','512','--rdadvise','off'],
                     'sampling':['--temperature','0.2','--top-k','64','--top-p','0.95']}
             proc=MagicMock();proc.poll.return_value=0
-            with patch.object(interfaces,'require_idle_inference'),patch.object(interfaces,'machine_state',side_effect=probe),patch.object(interfaces.time,'monotonic',side_effect=lambda:clock[0]),patch.object(interfaces.subprocess,'Popen',return_value=proc),patch.object(interfaces,'send_frame'),patch.object(interfaces,'read_frame',side_effect=read),patch.object(interfaces,'digest',return_value='fixture'),contextlib.redirect_stdout(io.StringIO()):
+            engine=dict(executablePath=str(Path(directory)/'TUFFInferenceEngine'),lockFilePath=str(Path(directory)/'engine.lock'))
+            with patch.object(interfaces,'engine_info',return_value=engine),patch.object(interfaces,'require_idle_inference'),patch.object(interfaces,'machine_state',side_effect=probe),patch.object(interfaces.time,'monotonic',side_effect=lambda:clock[0]),patch.object(interfaces.subprocess,'Popen',return_value=proc) as launch,patch.object(interfaces,'send_frame'),patch.object(interfaces,'read_frame',side_effect=read),patch.object(interfaces,'digest',return_value='fixture'),contextlib.redirect_stdout(io.StringIO()):
                 rows=interfaces.service_run(args,'gemma4',config)
+            self.assertEqual(launch.call_args.args[0], [engine['executablePath'], '--engine-lock', engine['lockFilePath']])
             self.assertEqual(rows[0]['wall_seconds'],7)
             self.assertEqual(rows[0]['load_seconds'],1)
 
@@ -252,6 +254,17 @@ class HarnessTests(unittest.TestCase):
             self.assertEqual(hashes[0],hashes[1])
             (bundle/'logit.metal').write_text('kernel void changed() {}')
             self.assertNotEqual(hashes[0],bench.shader_digest(app/'Contents/Resources/bin/TUFFCLI'))
+
+    def test_thin_host_identity_includes_the_authenticated_engine_build(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            shader=root/'kernel.metal';shader.write_text('kernel void fixture() {}')
+            info=dict(executablePath=str(root/'TUFFInferenceEngine'),
+                manifest=dict(archiveSHA256='first',files=[dict(path='kernel.metal')]))
+            with patch.object(bench,'engine_info',return_value=info):
+                first=bench.shader_digest(root/'TUFFCLI',root/'model.gturbo')
+                info['manifest']['archiveSHA256']='second'
+                self.assertNotEqual(first,bench.shader_digest(root/'TUFFCLI',root/'model.gturbo'))
 
     def test_paired_order_resume_and_changed_binary_guard(self):
         with tempfile.TemporaryDirectory() as directory:

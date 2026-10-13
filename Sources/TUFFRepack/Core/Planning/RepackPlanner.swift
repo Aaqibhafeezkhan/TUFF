@@ -36,6 +36,9 @@ struct ResidentEntry: Sendable {
     /// TUFF's resident affine format is BF16, so those two small tensors are
     /// converted while streaming instead of being staged as a second model.
     let companionTransform: RangeCopyTransform
+    let weightTransform: RangeCopyTransform
+    let scaleTransform: RangeCopyTransform
+    let biasTransform: RangeCopyTransform
 
     init(name: String,
          dtype: UInt8,
@@ -50,7 +53,9 @@ struct ResidentEntry: Sendable {
          sourceWeight: SourceTensor,
          sourceScales: SourceTensor?,
          sourceBiases: SourceTensor?,
-         companionTransform: RangeCopyTransform = .identity) {
+         companionTransform: RangeCopyTransform = .identity,
+         weightTransform: RangeCopyTransform = .identity,
+         scaleTransform: RangeCopyTransform? = nil, biasTransform: RangeCopyTransform? = nil) {
         self.name = name
         self.dtype = dtype
         self.logicalShape4 = logicalShape4
@@ -65,6 +70,9 @@ struct ResidentEntry: Sendable {
         self.sourceScales = sourceScales
         self.sourceBiases = sourceBiases
         self.companionTransform = companionTransform
+        self.weightTransform = weightTransform
+        self.scaleTransform = scaleTransform ?? companionTransform
+        self.biasTransform = biasTransform ?? companionTransform
     }
 }
 
@@ -173,6 +181,7 @@ struct RepackPlan: Sendable {
     let ngramTable: NgramTablePlan?
     let matchedModelID: String?
     let excludedMultimodalTensorNames: [String]
+    var sourceCopies: [RangeCopy]? = nil
 }
 
 // MARK: - Planner
@@ -429,6 +438,10 @@ enum RepackPlanner {
                             arch: ArchInfo,
                             shardHeaders: [Safetensors.Header],
                             outputDir: String) throws -> RepackPlan {
+
+        if meta.baseMode == "compressed-affine" {
+            return try CompressedQwenRepackPlanner.plan(meta: meta, arch: arch, headers: shardHeaders, outputDir: outputDir)
+        }
 
         // Companion tensors may live in different shards, so resolve them
         // through one global registry.
@@ -1071,6 +1084,7 @@ enum RepackPlanner {
         case .fp32: 3
         case .u8: 4
         case .i64: 5
+        case .i32: 0
         }
     }
 

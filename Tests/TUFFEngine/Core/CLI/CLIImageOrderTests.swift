@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import TUFFEngine
-@testable import TUFFCLICore
+@testable import TUFFCLIEngine
 
 /// The CLI plans and encodes images in dictionary order, which Swift derives
 /// from a per-process hash seed — so the same command line did the work in a

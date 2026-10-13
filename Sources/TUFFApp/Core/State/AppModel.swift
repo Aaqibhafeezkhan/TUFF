@@ -1,13 +1,94 @@
 import Foundation
 import Synchronization
 import TUFFModelCatalog
-import TUFFEngine
+import TUFFInferenceTypes
+import TUFFRuntimeDescriptions
+import TUFFModelMetadata
 import TUFFRepackCore
+import TUFFRuntimeManagement
 import Observation
 
 @MainActor
 @Observable
 public final class AppModel {
+    public private(set) var customCheckpointImportError: String?
+    public private(set) var isImportingCustomCheckpoint = false
+    public var customCheckpointInstalls: [ModelInstallCoordinator] {
+        installs.filter { $0.descriptor.isCustomCheckpoint }
+    }
+
+    public func importCustomCheckpoint(directory: URL, name: String, templateID: TUFFModelID) async {
+        guard !isImportingCustomCheckpoint, !isRunning, !loadState.isLoading else { return }
+        isImportingCustomCheckpoint = true
+        customCheckpointImportError = nil
+        defer { isImportingCustomCheckpoint = false }
+        do {
+            let sourcePath = directory.standardizedFileURL.resolvingSymlinksInPath().path
+            guard !(try AppCustomCheckpointStore.load()).contains(where: { $0.sourcePath == sourcePath }) else {
+                throw AppCustomCheckpoint.ImportError("This checkpoint is already registered.")
+            }
+            let record = try await Task.detached(priority: .utility) {
+                try AppCustomCheckpoint.inspect(directory: directory, name: name, templateID: templateID)
+            }.value
+            guard !isRunning, !loadState.isLoading else {
+                throw AppCustomCheckpoint.ImportError("Finish the current operation before importing.")
+            }
+            var records = try AppCustomCheckpointStore.load()
+            guard !records.contains(where: { $0.sourcePath == record.sourcePath }) else {
+                throw AppCustomCheckpoint.ImportError("This checkpoint is already registered.")
+            }
+            let alias = AppCustomCheckpointStore.directory.appendingPathComponent(record.descriptor.installDirectoryName)
+            try FileManager.default.createDirectory(at: AppCustomCheckpointStore.directory, withIntermediateDirectories: true)
+            try FileManager.default.createSymbolicLink(atPath: alias.path, withDestinationPath: record.sourcePath)
+            do {
+                let engine = try await InferenceEngineEnvironment.acquireModel(at: alias)
+                await engine.release()
+                guard !isRunning, !loadState.isLoading else {
+                    throw AppCustomCheckpoint.ImportError("Finish the current operation before importing.")
+                }
+                records.append(record)
+                try AppCustomCheckpointStore.save(records)
+            } catch {
+                try? await InferenceEngineEnvironment.unbindModel(at: alias)
+                try? FileManager.default.removeItem(at: alias)
+                throw error
+            }
+            let coordinator = ModelInstallCoordinator(descriptor: record.descriptor, directoryURL: alias,
+                client: AppCustomCheckpointInstaller(descriptor: record.descriptor))
+            installs.append(coordinator)
+            updateSettingsProfile(.defaults(for: record.templateID.rawValue), for: coordinator)
+            persistSettings()
+        } catch { customCheckpointImportError = String(describing: error) }
+    }
+
+    public func removeCustomCheckpoint(_ coordinator: ModelInstallCoordinator) {
+        guard coordinator.descriptor.isCustomCheckpoint else { return }
+        guard !isRunning, !loadState.isLoading,
+              coordinator.id != selectedModelID || !loadState.isReady else {
+            customCheckpointImportError = "Unload the checkpoint before removing its entry."
+            return
+        }
+        do {
+            var records = try AppCustomCheckpointStore.load()
+            guard let record = records.first(where: { $0.descriptor.id == coordinator.id }) else { return }
+            let alias = AppCustomCheckpointStore.directory.appendingPathComponent(record.descriptor.installDirectoryName)
+            guard try FileManager.default.destinationOfSymbolicLink(atPath: alias.path) == record.sourcePath else {
+                throw AppCustomCheckpoint.ImportError("The registered checkpoint link changed; its files were left untouched.")
+            }
+            records.removeAll { $0.id == record.id }
+            try AppCustomCheckpointStore.save(records)
+            try FileManager.default.removeItem(at: alias)
+            if coordinator.id == selectedModelID,
+               let fallback = installs.first(where: { !$0.descriptor.isCustomCheckpoint && $0.isInstalled })
+                    ?? installs.first(where: { !$0.descriptor.isCustomCheckpoint }) {
+                selectModel(fallback)
+            }
+            installs.removeAll { $0.id == coordinator.id }
+            Task { try? await InferenceEngineEnvironment.unbindModel(at: alias) }
+            customCheckpointImportError = nil
+        } catch { customCheckpointImportError = String(describing: error) }
+    }
+
     public typealias RunState = AppRunState
 
     public let conversationStore: AppConversationStore
@@ -19,6 +100,9 @@ public final class AppModel {
     public let toolStore: AppToolStore
     public let deviceCapabilities: TUFFDeviceCapabilities
     private var runsAfterCurrentLoad = false
+    private var autoObservationStart: (swap: UInt64, swapWritten: UInt64, warnings: UInt64)?
+    private var autoWorkloadKey = "text-cold-short-t0"
+
 
     public var modelPathText: String {
         get { modelLibraryStore.modelPathText }
@@ -357,7 +441,7 @@ public final class AppModel {
     public let isVisionRuntimeSupported: Bool
 
     public static var currentDeviceSupportsVisionRuntime: Bool {
-        VisionRuntime.isSupportedOnDefaultDevice
+        TUFFDeviceCapabilities.current().appleSiliconGeneration >= 2
     }
 
     /// `otherInstalls` replaces the coordinators the catalog would build for
@@ -365,7 +449,7 @@ public final class AppModel {
     /// catalog leave it nil; tests pass their own so no catalog model reaches
     /// the network or a real install directory.
     public init(modelDirectory: URL? = nil,
-                client: any AppInferenceClient = RealInferenceClient(),
+                client: any AppInferenceClient = DecodeServiceInferenceClient(),
                 installer: any AppModelInstallerClient = RepackModelInstallerClient(descriptor: .default),
                 otherInstalls: [ModelInstallCoordinator]? = nil,
                 visionInstaller: any AppVisionPackInstallerClient = RepackVisionPackInstallerClient(),
@@ -391,7 +475,7 @@ public final class AppModel {
         let modelSettings = AppAutomaticMemoryPlanner.applying(
             savedModelSettings,
             for: installer.descriptor,
-            on: deviceCapabilities)
+            on: deviceCapabilities, modelDirectory: directory, useBundledLayout: settingsPersistenceEnabled)
         // Initialize AppModel's stored dependencies before writing through the
         // domain-store proxy properties below. Swift treats those computed
         // properties as accesses to self even though each store already has a
@@ -415,13 +499,18 @@ public final class AppModel {
         // a CLI or server operator, not to someone using the app, where it was
         // one more setting whose effect no figure on screen could show.
         // `keepReady` remains available through AppRuntimeOptions for those.
+        let initialPlan = modelSettings.automaticMemory ? AppAutomaticMemoryPlanner.plan(
+            for: installer.descriptor, on: deviceCapabilities, profile: modelSettings.automaticMemoryProfile,
+            modelDirectory: directory, useBundledLayout: settingsPersistenceEnabled) : nil
         self.runtimeOptions = AppRuntimeOptions(
             expertCacheSlots: modelSettings.expertCacheSlots,
             prefillEnabled: modelSettings.prefillEnabled,
-            prefillChunkTokens: installer.descriptor
+            prefillChunkTokens: initialPlan?.prefillChunkTokens ?? installer.descriptor
                 .recommendedPrefillChunkTokens(on: deviceCapabilities),
             rdadvisePolicy: modelSettings.rdadvisePolicy,
-            visionResidencyPolicy: .onDemand)
+            visionResidencyPolicy: .onDemand,
+            denseResidencyPolicy: initialPlan?.denseResidencyPolicy ?? modelSettings.manualDenseResidencyPolicy(for: installer.descriptor),
+            retainedConversationBytes: initialPlan?.retainedConversationBytes)
         self.automaticMemory = modelSettings.automaticMemory
         self.automaticMemoryProfile = modelSettings.automaticMemoryProfile
         self.maxContextTokens = modelSettings.contextTokens
@@ -466,6 +555,19 @@ public final class AppModel {
             if !self.installs.contains(where: { $0.id == selected.id }) {
                 self.installs.insert(selected, at: 0)
             }
+        }
+        if settingsPersistenceEnabled {
+            do {
+                for record in try AppCustomCheckpointStore.load() {
+                    let alias = AppCustomCheckpointStore.directory.appendingPathComponent(record.descriptor.installDirectoryName)
+                    if !FileManager.default.fileExists(atPath: alias.path),
+                       (try? FileManager.default.destinationOfSymbolicLink(atPath: alias.path)) == nil {
+                        try FileManager.default.createSymbolicLink(atPath: alias.path, withDestinationPath: record.sourcePath)
+                    }
+                    self.installs.append(ModelInstallCoordinator(descriptor: record.descriptor, directoryURL: alias,
+                        client: AppCustomCheckpointInstaller(descriptor: record.descriptor)))
+                }
+            } catch { self.customCheckpointImportError = String(describing: error) }
         }
         // Cache every profile so edits to non-selected models are observable.
         self.settingsStore.modelProfiles = Self.storedProfiles(
@@ -877,7 +979,16 @@ public final class AppModel {
         contextTokens: Int,
         expertCacheSlots: Int
     ) -> AppModelContextEligibility {
-        coordinator.descriptor.contextEligibility(
+        if coordinator.id == selectedModelID,
+           let estimate = AppAutomaticMemoryPlanner.estimatedAllocation(directory: coordinator.directoryURL,
+                context: contextTokens, options: AppRuntimeOptions(
+                    expertCacheSlots: expertCacheSlots, prefillChunkTokens: runtimeOptions.prefillChunkTokens,
+                    denseResidencyPolicy: runtimeOptions.denseResidencyPolicy,
+                    retainedConversationBytes: runtimeOptions.retainedConversationBytes)) {
+            return AppModelContextEligibility(estimatedWorkingSetBytes: estimate.peakAllocatedBytes,
+                safeBudgetBytes: deviceCapabilities.safeAppMemoryBudgetBytes)
+        }
+        return coordinator.descriptor.contextEligibility(
             contextTokens: contextTokens,
             expertCacheSlots: expertCacheSlots,
             prefillChunkTokens: coordinator.id == selectedModelID
@@ -927,6 +1038,9 @@ public final class AppModel {
     public func visionInstallDescriptor(
         for coordinator: ModelInstallCoordinator
     ) -> AppModelInstallDescriptor? {
+        if coordinator.descriptor.catalogID != nil {
+            return coordinator.descriptor.imageCompanion
+        }
         guard let variant = coordinator.descriptor.modelVariant else {
             return .visionCompanion(for: coordinator.descriptor.family)
         }
@@ -1428,7 +1542,7 @@ public final class AppModel {
         return AppAutomaticMemoryPlanner.applying(
             storedSettingsProfile(for: coordinator),
             for: coordinator.descriptor,
-            on: deviceCapabilities)
+            on: deviceCapabilities, modelDirectory: coordinator.directoryURL, useBundledLayout: settingsPersistenceEnabled)
     }
 
     /// Captures live settings without replacing Auto's saved manual values.
@@ -1455,7 +1569,9 @@ public final class AppModel {
         AppAutomaticMemoryPlanner.plan(
             for: coordinator.descriptor,
             on: deviceCapabilities,
-            profile: profile)
+            profile: profile, workloadKey: coordinator.id == selectedModelID ? autoWorkloadKey : "text-cold-short-t0",
+            modelDirectory: coordinator.directoryURL, useBundledLayout: settingsPersistenceEnabled,
+            engineIdentity: coordinator.id == selectedModelID ? (client as? any AppInferenceEngineReporting)?.currentEngineIdentity : nil)
     }
 
     /// Switches Auto without discarding the manual memory profile underneath
@@ -1710,7 +1826,17 @@ public final class AppModel {
         beginLoad()
     }
 
-    private func beginLoad() {
+    public func tuneAutomaticMemory() {
+        guard canTuneAutomaticMemory else { return }
+        beginLoad(calibrate: true)
+    }
+
+    public var canTuneAutomaticMemory: Bool {
+        automaticMemory && isModelInstalled && loadState.isReady && !isRunning
+            && !isVisionCompanionOperationInProgress && hardwareRequirementsSatisfied(for: selectedInstall)
+    }
+
+    private func beginLoad(calibrate: Bool = false) {
         guard let lifecycle = client as? AppModelLifecycleClient else {
             loadState = .failed(.modelLoadFailed("This client has no model load lifecycle."))
             return
@@ -1730,6 +1856,13 @@ public final class AppModel {
         // the reload that would have cleared it.
         let options = runtimeKey.options(prefillEnabled: runtimeOptions.prefillEnabled,
                                         prefillChunkTokens: runtimeOptions.prefillChunkTokens)
+        let descriptor = selectedDescriptor
+        let device = deviceCapabilities
+        let calibration = calibrate ? AppAutomaticMemoryPlanner.layoutSummary(at: directory) : nil
+        if calibration != nil { toolStore.inferenceActivity.set(true) }
+        let baseline = calibration.flatMap { AppAutomaticMemoryPlanner.plan(for: descriptor,
+            on: device, profile: automaticMemoryProfile, layoutSummary: $0) }
+        let inferenceClient = client
         let pendingUnload = unloadTask
         loadGeneration &+= 1
         let generation = loadGeneration
@@ -1746,6 +1879,7 @@ public final class AppModel {
                                                  maxContextTokens: maxContext,
                                                  options: options,
                                                  forceLogitsHead: forceLogitsHead) { [weak self] state in
+                    if calibration != nil && baseline != nil && state.isReady { return }
                     // Stamped where the phase is emitted, in order; checked
                     // where it is applied, which is not.
                     let sequence = emitted.withLock { value -> UInt64 in
@@ -1756,6 +1890,15 @@ public final class AppModel {
                         self?.applyLoadState(state, generation: generation,
                                              sequence: sequence)
                     }
+                }
+                if let calibration, let baseline {
+                    let tuningSequence = emitted.withLock { $0 += 1; return $0 }
+                    await self?.applyLoadState(.loading(.calibratingAuto), generation: generation, sequence: tuningSequence)
+                    let selected = try await AppAutoCalibrator.run(client: inferenceClient, lifecycle: lifecycle,
+                        directory: directory, descriptor: descriptor, device: device, summary: calibration,
+                        baseline: baseline, options: options, forceLogitsHead: forceLogitsHead)
+                    await self?.acceptAutomaticCalibration(selected, directory: directory,
+                        options: options, forceLogitsHead: forceLogitsHead, generation: generation)
                 }
             } catch is CancellationError {
             } catch let appError as AppInferenceError {
@@ -1769,12 +1912,32 @@ public final class AppModel {
         }
     }
 
+    private func acceptAutomaticCalibration(_ plan: AppAutomaticMemoryPlan, directory: URL,
+                                             options: AppRuntimeOptions, forceLogitsHead: Bool,
+                                             generation: UInt64) {
+        guard generation == loadGeneration else { return }
+        var selected = options
+        selected.expertCacheSlots = plan.expertCacheSlots
+        selected.prefillChunkTokens = plan.prefillChunkTokens
+        selected.prefillEnabled = plan.expertCacheSlots >= 16
+        selected.denseResidencyPolicy = plan.denseResidencyPolicy
+        selected.retainedConversationBytes = plan.retainedConversationBytes
+        runtimeOptions = selected
+        maxContextTokens = plan.contextTokens
+        autoWorkloadKey = "calibration-short-t\(ProcessInfo.processInfo.thermalState.rawValue)"
+        pendingExplicitLoadRuntimeKey = AppLoadedRuntimeKey(modelDirectory: directory,
+            maxContextTokens: plan.contextTokens, options: selected, forceLogitsHead: forceLogitsHead)
+        applyLoadState(.ready(modelDirectory: directory, loadSeconds: 0), generation: generation)
+    }
+
     public func cancelLoad() {
         guard canCancelLoad, let lifecycle = client as? AppModelLifecycleClient else { return }
+        if case .loading(.calibratingAuto) = loadState { client.cancel() }
         runsAfterCurrentLoad = false
         loadState = .cancelling
         loadGeneration &+= 1
         loadTask?.cancel()
+        toolStore.inferenceActivity.set(false)
         loadTask = nil
         pendingExplicitLoadRuntimeKey = nil
         unloadGeneration &+= 1
@@ -2391,25 +2554,53 @@ public final class AppModel {
             defaultReasoning: reasoning,
             defaultReasoningEffort: reasoningEffort,
             preserveThinking: preserveThinking,
-            systemPrompt: modelSystemPrompt)
+            systemPrompt: modelSystemPrompt, denseResidentLayerCount: {
+                if case .bounded(let layers) = runtimeOptions.denseResidencyPolicy { return layers.count }
+                return nil
+            }())
     }
 
     private func applySettingsProfile(_ profile: AppModelSettingsProfile) {
-        let profile = AppAutomaticMemoryPlanner.applying(
+        var profile = AppAutomaticMemoryPlanner.applying(
             profile,
             for: selectedDescriptor,
-            on: deviceCapabilities)
+            on: deviceCapabilities, modelDirectory: URL(fileURLWithPath: modelPathText), workloadKey: autoWorkloadKey,
+            useBundledLayout: settingsPersistenceEnabled,
+            engineIdentity: (client as? any AppInferenceEngineReporting)?.currentEngineIdentity)
+        var autoPlan = profile.automaticMemory ? AppAutomaticMemoryPlanner.plan(
+            for: selectedDescriptor, on: deviceCapabilities, profile: profile.automaticMemoryProfile, workloadKey: autoWorkloadKey,
+            modelDirectory: URL(fileURLWithPath: modelPathText), useBundledLayout: settingsPersistenceEnabled,
+            engineIdentity: (client as? any AppInferenceEngineReporting)?.currentEngineIdentity) : nil
+        let conversationReserve = contextUsage.estimatedTokens + (maxNewTokensOverride ?? 1_024)
+            + (effectiveChatCapabilities.isEmpty ? 256 : 2_048)
+        if let baseline = autoPlan, baseline.contextTokens < conversationReserve,
+           let summary = AppAutomaticMemoryPlanner.layoutSummary(at: URL(fileURLWithPath: modelPathText)) {
+            autoPlan = AppContextLengthOption.options(for: selectedDescriptor).map(\.tokens).sorted()
+                .lazy.filter { $0 >= conversationReserve }.compactMap {
+                    AppAutomaticMemoryPlanner.plan(for: self.selectedDescriptor, on: self.deviceCapabilities,
+                        profile: profile.automaticMemoryProfile, layoutSummary: summary,
+                        workloadKey: self.autoWorkloadKey, modelDirectory: URL(fileURLWithPath: self.modelPathText),
+                        contextTokens: $0, engineIdentity: (self.client as? any AppInferenceEngineReporting)?.currentEngineIdentity)
+                }.first ?? baseline
+            if let autoPlan {
+                profile.contextTokens = autoPlan.contextTokens
+                profile.expertCacheSlots = autoPlan.expertCacheSlots
+                profile.prefillEnabled = autoPlan.expertCacheSlots >= 16
+            }
+        }
         runtimeOptions = AppRuntimeOptions(
             expertCacheSlots: profile.expertCacheSlots,
             prefillEnabled: profile.prefillEnabled,
-            prefillChunkTokens: selectedDescriptor
+            prefillChunkTokens: autoPlan?.prefillChunkTokens ?? selectedDescriptor
                 .recommendedPrefillChunkTokens(on: deviceCapabilities),
             rdadvisePolicy: profile.rdadvisePolicy,
             // Pinned for the same reason as `init`: the app always releases the
             // image tower. Reading the persisted value here would let a
             // `keepReady` written by an older build resurrect ~1 GB of resident
             // tower on a machine with no control that shows or clears it.
-            visionResidencyPolicy: .onDemand)
+            visionResidencyPolicy: .onDemand,
+            denseResidencyPolicy: autoPlan?.denseResidencyPolicy ?? profile.manualDenseResidencyPolicy(for: selectedDescriptor),
+            retainedConversationBytes: autoPlan?.retainedConversationBytes)
         automaticMemory = profile.automaticMemory
         automaticMemoryProfile = profile.automaticMemoryProfile
         maxContextTokens = profile.contextTokens
@@ -2517,6 +2708,7 @@ public final class AppModel {
         stored.contextTokens = saved.contextTokens
         stored.expertCacheSlots = saved.expertCacheSlots
         stored.prefillEnabled = saved.prefillEnabled
+        stored.denseResidentLayerCount = saved.denseResidentLayerCount
         return stored
     }
 
@@ -2654,6 +2846,40 @@ public final class AppModel {
 
     public func run() {
         guard canRun else { return }
+        if automaticMemory, let summary = AppAutomaticMemoryPlanner.layoutSummary(at: URL(fileURLWithPath: modelPathText)) {
+            // Leave room for the answer and tool results before selecting a
+            // larger window. The helper checks the actual tokenizer count.
+            let reserve = maxNewTokensOverride ?? 1_024
+            let required = contextUsage.estimatedTokens + reserve
+                + ((effectiveChatCapabilities.web || effectiveChatCapabilities.files) ? 2_048 : 256)
+            if required > effectiveMaxContextTokens {
+                let choices = AppContextLengthOption.options(for: selectedDescriptor).map(\.tokens).sorted()
+                let plan = choices.lazy.filter { $0 >= required }.compactMap {
+                    AppAutomaticMemoryPlanner.plan(for: self.selectedDescriptor, on: self.deviceCapabilities,
+                        profile: self.automaticMemoryProfile, layoutSummary: summary, workloadKey: self.autoWorkloadKey,
+                        modelDirectory: URL(fileURLWithPath: self.modelPathText), contextTokens: $0,
+                        engineIdentity: (self.client as? any AppInferenceEngineReporting)?.currentEngineIdentity)
+                }.first
+                guard let plan else {
+                    error = .invalidRequest("The full conversation and answer reserve cannot fit safely on this Mac. Reduce the answer limit or start a new chat; no history was removed.")
+                    return
+                }
+                maxContextTokens = plan.contextTokens
+                runtimeOptions.expertCacheSlots = plan.expertCacheSlots
+                runtimeOptions.prefillChunkTokens = plan.prefillChunkTokens
+                runtimeOptions.prefillEnabled = plan.expertCacheSlots >= 16
+                runtimeOptions.denseResidencyPolicy = plan.denseResidencyPolicy
+                runtimeOptions.retainedConversationBytes = plan.retainedConversationBytes
+                runsAfterCurrentLoad = true
+                beginLoad()
+                return
+            }
+        }
+        if automaticMemory, let loadedRuntimeKey, loadedRuntimeKey != currentRuntimeKey {
+            runsAfterCurrentLoad = true
+            beginLoad()
+            return
+        }
         var request: AppGenerationRequest
         let capabilities = effectiveChatCapabilities
         do {
@@ -2765,6 +2991,8 @@ public final class AppModel {
             toolbox: toolStore.makeToolbox(provider: settingsStore.searchProvider))
         let activity = toolStore.inferenceActivity
         activity.set(true)
+        autoObservationStart = (AppAutoMemoryPressureMonitor.swapBytes(),
+            AppAutoMemoryPressureMonitor.swapWrittenBytes(), AppAutoMemoryPressureMonitor.shared.snapshot.warnings)
         let answerRequest = request
         runTask = Task.detached { [weak self, runner, answerRequest] in
             let model = self
@@ -3049,7 +3277,8 @@ public final class AppModel {
                 prefillEnabled: runtimeOptions.prefillEnabled,
                 prefillChunkTokens: runtimeOptions.prefillChunkTokens),
             tools: AppToolCatalog.definitions(for: capabilities),
-            conversationKey: conversationStore.selectedConversationID?.uuidString)
+            conversationKey: conversationStore.selectedConversationID?.uuidString,
+            preservesFullHistory: automaticMemory)
         try request.validate(requireModelDirectory: true)
         return request
     }
@@ -3104,11 +3333,42 @@ public final class AppModel {
         }
     }
 
+    private func recordAutoPerformance(_ diagnostics: AppDiagnostics, completed: Bool = true) {
+        guard automaticMemory, settingsPersistenceEnabled, diagnostics.toolRounds == 0,
+              let summary = AppAutomaticMemoryPlanner.layoutSummary(at: URL(fileURLWithPath: modelPathText)) else { return }
+        let layers: Int
+        switch diagnostics.runtimeOptions.denseResidencyPolicy {
+        case .resident: layers = summary.layout.denseGroupBytes.count
+        case .bounded(let resident): layers = resident.count
+        case .automatic: return
+        }
+        let key = AppAutoPerformanceRecords.workloadKey(promptTokens: diagnostics.promptTokenCount ?? 0,
+            reusedPrefix: (diagnostics.cachedPromptTokens ?? 0) > 0, imageInput: !outputImageAttachments.isEmpty,
+            sampled: loadedRuntimeKey?.forceLogitsHead ?? currentForceLogitsHead)
+        autoWorkloadKey = key
+        let pressure = AppAutoMemoryPressureMonitor.shared.snapshot
+        let swap = AppAutoMemoryPressureMonitor.swapBytes()
+        let start = autoObservationStart
+        let observedPressure = start.map { pressure.warnings > $0.warnings ? InferenceMemoryPressure.warning : pressure.pressure } ?? pressure.pressure
+        let paging = start.map { AppAutoMemoryPressureMonitor.pagingBytes(
+            startUsed: $0.swap, endUsed: swap, startWritten: $0.swapWritten,
+            endWritten: AppAutoMemoryPressureMonitor.swapWrittenBytes()) } ?? 0
+        guard completed || observedPressure != .normal || paging > 0 else { return }
+        AppAutoPerformanceRecords.record(identity: AppAutoPerformanceRecords.identity(summary: summary, device: deviceCapabilities,
+            engineIdentity: (client as? any AppInferenceEngineReporting)?.currentEngineIdentity,
+            modelDirectory: URL(fileURLWithPath: modelPathText)),
+            observation: InferencePlanObservation(candidateID: "c\(effectiveMaxContextTokens)-e\(diagnostics.runtimeOptions.expertCacheSlots)-d\(layers)-p\(diagnostics.runtimeOptions.prefillChunkTokens)",
+                workloadKey: key, decodeTokens: diagnostics.generatedTokens, decodeSeconds: diagnostics.decodeSeconds,
+                timeToFirstTokenSeconds: diagnostics.requestStartTimeToFirstTokenSeconds ?? diagnostics.timeToFirstTokenSeconds ?? 0,
+                pressure: observedPressure, swapGrowthBytes: paging))
+    }
+
     private func finishSuccessfully(_ diagnostics: AppDiagnostics) {
         guard !hasHandledTerminalEvent else { return }
         hasHandledTerminalEvent = true
         materializeServiceTranscript()
         self.diagnostics = diagnostics
+        recordAutoPerformance(diagnostics)
         recordAnswer()
         finishTerminalRun()
     }
@@ -3134,6 +3394,7 @@ public final class AppModel {
         hasHandledTerminalEvent = true
         materializeServiceTranscript()
         self.diagnostics = diagnostics
+        recordAutoPerformance(diagnostics, completed: false)
         error = .cancelled
         recordAnswer()
         finishTerminalRun()
@@ -3165,6 +3426,9 @@ public final class AppModel {
         runTask = nil
         answerCancellation = nil
         toolStore.inferenceActivity.set(false)
+        if automaticMemory, settingsPersistenceEnabled {
+            applySettingsProfile(storedSettingsProfile(for: selectedInstall))
+        }
     }
 
     // MARK: - Answers with tools
@@ -3283,6 +3547,7 @@ public final class AppModel {
 
     private func clearLoadTask(generation: UInt64) {
         guard generation == loadGeneration else { return }
+        if !isRunning { toolStore.inferenceActivity.set(false) }
         loadTask = nil
         pendingExplicitLoadRuntimeKey = nil
     }

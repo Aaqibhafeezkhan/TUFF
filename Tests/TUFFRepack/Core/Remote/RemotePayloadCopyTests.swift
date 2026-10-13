@@ -4,6 +4,7 @@ import Testing
 @testable import TUFFRepackCore
 
 final class FakeHFURLProtocol: URLProtocol, @unchecked Sendable {
+    private static let accessLock = NSRecursiveLock()
     nonisolated(unsafe) static var files: [String: Data] = [:]
     nonisolated(unsafe) static var commit = "cc499c86a958ea7f05cffaa91c7e7243240dabbe"
     nonisolated(unsafe) static var failures: [String: [FakeFailure]] = [:]
@@ -21,6 +22,8 @@ final class FakeHFURLProtocol: URLProtocol, @unchecked Sendable {
     }
 
     override func startLoading() {
+        Self.accessLock.lock()
+        defer { Self.accessLock.unlock() }
         guard let url = request.url,
               let filename = Self.filename(from: url) else {
             let response = HTTPURLResponse(url: request.url!,

@@ -1,11 +1,21 @@
+import TUFFRuntimeManagement
+import TUFFModelMetadata
 import Darwin
 import Foundation
 import Synchronization
-import TUFFEngine
+import TUFFInferenceTypes
+import TUFFRuntimeDescriptions
 import TUFFDecodeProtocol
 
 public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
-    AppInferenceMemoryReporting, AppInferenceTranscriptReporting, @unchecked Sendable {
+    AppInferenceMemoryReporting, AppInferenceTranscriptReporting, AppInferenceEngineReporting, @unchecked Sendable {
+    public var currentEngineIdentity: String? {
+        connection.withLock { value in
+            value.engineInstallation.map {
+                $0.lease.manifest.packageID + ":" + $0.lease.manifest.version.directoryName + ":" + $0.identity
+            }
+        }
+    }
     private struct Connection {
         var input: FileHandle?
         var responses: DecodeServiceResponseRouter?
@@ -13,10 +23,12 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
         var launchLabel: String?
         var socketPath: String?
         var directProcess: Process?
+        var engineInstallation: InferenceEngineInstallation?
     }
 
     private let connection = Mutex(Connection())
-    private let serviceURL: URL
+    private let requiresHandshake: Bool
+    private let serviceURLOverride: URL?
     private let inferenceMemory = Mutex<UInt64?>(nil)
     private let inferenceTowerMemory = Mutex<UInt64?>(nil)
     public let generationTranscriptMailbox = GenerationTranscriptMailbox()
@@ -29,14 +41,15 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
         inferenceTowerMemory.withLock { $0 }
     }
 
-    public init(serviceURL: URL? = nil) {
-        self.serviceURL = serviceURL ?? Self.defaultServiceURL()
+    public init(serviceURL: URL? = nil, requiresHandshake: Bool = true) {
+        self.serviceURLOverride = serviceURL
+        self.requiresHandshake = requiresHandshake
         DecodeUnixSocket.ignoreSIGPIPEProcessWide()
     }
 
     /// Connect an existing transport without launching a helper process.
     convenience init(input: FileHandle, output: FileHandle) {
-        self.init()
+        self.init(requiresHandshake: false)
         connection.withLock {
             $0.input = input
             $0.responses = DecodeServiceResponseRouter(output: output)
@@ -46,10 +59,63 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
     public func ensureLoaded(modelDirectory: URL, maxContextTokens: Int,
                              options: AppRuntimeOptions, forceLogitsHead: Bool,
                              onState: @escaping @Sendable (AppModelLoadState) -> Void) async throws {
+        do {
+            try await load(modelDirectory: modelDirectory, maxContextTokens: maxContextTokens,
+                options: options, forceLogitsHead: forceLogitsHead, acquireEngine: true, onState: onState)
+        } catch {
+            try Task.checkCancellation()
+            guard serviceURLOverride == nil, requiresHandshake else { throw error }
+            let failedIdentity = connection.withLock { $0.engineInstallation?.identity }
+            closeConnection()
+            guard let fallback = try? await InferenceEngineEnvironment.acquireKnownGoodModel(
+                at: modelDirectory, excluding: failedIdentity) else { throw error }
+            connection.withLock { $0.engineInstallation = fallback }
+            do {
+                try await load(modelDirectory: modelDirectory, maxContextTokens: maxContextTokens,
+                    options: options, forceLogitsHead: forceLogitsHead, acquireEngine: false, onState: onState)
+            } catch {
+                closeConnection()
+                throw error
+            }
+        }
+    }
+
+    private func load(modelDirectory: URL, maxContextTokens: Int,
+                      options: AppRuntimeOptions, forceLogitsHead: Bool, acquireEngine: Bool,
+                      onState: @escaping @Sendable (AppModelLoadState) -> Void) async throws {
         onState(.loading(.validatingDirectory))
+        // Explicit transports are test/developer injections. Ordinary app loads
+        // always acquire an authenticated engine installed in the shared store.
+        if acquireEngine && serviceURLOverride == nil && (requiresHandshake || currentHandles() == nil) {
+            onState(.loading(.preparingEngine))
+            let installed = try await InferenceEngineEnvironment.acquireModel(at: modelDirectory)
+            if Task.isCancelled {
+                await installed.release()
+                throw CancellationError()
+            }
+            let previous = connection.withLock { $0.engineInstallation }
+            if previous?.executableURL == installed.executableURL, currentHandles() != nil {
+                await installed.release()
+            } else {
+                if currentHandles() != nil { await unload() }
+                closeConnection()
+                connection.withLock { $0.engineInstallation = installed }
+            }
+        }
         let handles = try await Task.detached(priority: .userInitiated) { [self] in
             try ensureProcess()
         }.value
+        if requiresHandshake {
+            let architecture = try ManifestReader.resolveArchitecture(directoryURL: modelDirectory)
+            let hello = DecodeEngineHello(architectureID: architecture.variant.rawValue,
+                requiredFeatures: ["preserve-history"] + (options.retainedConversationBytes == nil ? [] : ["bounded-retention"]))
+            try handles.input.write(contentsOf: DecodeFrameCodec.encode(DecodeServiceCommand.hello(hello)))
+            let reply = try await handles.responses.next(matching: hello.requestID)
+            guard reply.kind == .hello, let capabilities = reply.capabilities,
+                  capabilities.accepts(hello) else {
+                throw AppInferenceError.modelLoadFailed(reply.error ?? "inference engine handshake failed")
+            }
+        }
         let request = DecodeLoadRequest(
             modelPath: modelDirectory.path, maxContextTokens: maxContextTokens,
             runtimeOptions: Self.decodeRuntimeOptions(options),
@@ -83,6 +149,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
         connection.withLock { $0.loadedDirectory = nil }
         inferenceMemory.withLock { $0 = nil }
         inferenceTowerMemory.withLock { $0 = nil }
+        if connection.withLock({ $0.engineInstallation != nil }) { closeConnection() }
     }
 
     public func generate(_ request: AppGenerationRequest)
@@ -145,6 +212,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                     command.currentRounds = request.currentRounds.isEmpty
                         ? nil : request.currentRounds.map(Self.decodeToolRound)
                     command.conversationKey = request.conversationKey
+                    command.preservesFullHistory = request.preservesFullHistory
                     try handles.input.write(contentsOf: DecodeFrameCodec.encode(
                         DecodeServiceCommand.generate(command)))
 
@@ -222,6 +290,9 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                             event, options: request.runtimeOptions)
                         switch event.kind {
                         case .finished:
+                            if let installation = connection.withLock({ $0.engineInstallation }) {
+                                await InferenceEngineEnvironment.markKnownGood(installation, for: request.modelDirectory)
+                            }
                             if let calls = event.toolCalls, !calls.isEmpty {
                                 continuation.yield(.toolCalls(calls.map {
                                     AppToolCall(id: $0.id, name: $0.name, arguments: $0.arguments)
@@ -263,7 +334,9 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
             DecodeServiceCommand.cancel))
     }
 
-    deinit {
+    deinit { closeConnection() }
+
+    private func closeConnection() {
         let state = connection.withLock { value -> Connection in
             defer { value = Connection() }
             return value
@@ -286,6 +359,9 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
 
     private func launchIndependentService() throws
         -> (input: FileHandle, responses: DecodeServiceResponseRouter) {
+        guard let serviceURL = serviceURLOverride ?? connection.withLock({ $0.engineInstallation?.executableURL }) else {
+            throw InferenceEngineEnvironmentError.missingCatalog
+        }
         guard FileManager.default.isExecutableFile(atPath: serviceURL.path) else {
             throw AppInferenceError.modelLoadFailed(
                 "decode service executable is missing at \(serviceURL.path); run swift build -c release before launching the app")
@@ -298,7 +374,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
         // authoritative, and the direct-spawn fallback below may still work.
         // Carry the detail so the final error can name what actually failed.
         var kickstartError: String?
-        if let bootstrapped = try? bootstrapViaLaunchd(label: label, socketPath: socketPath) {
+        if let bootstrapped = try? bootstrapViaLaunchd(label: label, socketPath: socketPath, serviceURL: serviceURL) {
             kickstartError = bootstrapped
             if let handles = try? connectSocketWithRetry(socketPath: socketPath, attempts: 100) {
                 connection.withLock {
@@ -319,7 +395,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
         Self.removeLaunchJob(label: label)
         let process: Process
         do {
-            process = try launchDirectProcess(socketPath: socketPath, label: label)
+            process = try launchDirectProcess(socketPath: socketPath, label: label, serviceURL: serviceURL)
         } catch {
             throw AppInferenceError.modelLoadFailed(
                 "decode service could not be started: \(error)")
@@ -346,7 +422,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
     /// failure detail, if any — bootstrap succeeding while kickstart fails is a
     /// diagnostic, not a fatal error, because the socket is authoritative.
     @discardableResult
-    private func bootstrapViaLaunchd(label: String, socketPath: String) throws -> String? {
+    private func bootstrapViaLaunchd(label: String, socketPath: String, serviceURL: URL) throws -> String? {
         let propertyListURL = URL(
             fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("\(label).plist")
@@ -356,10 +432,14 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                 serviceURL.path,
                 "--socket", socketPath,
                 "--launch-label", label,
-            ],
+            ] + engineLeaseArguments,
+
             "RunAtLoad": true,
             "KeepAlive": false,
             "ProcessType": "Interactive",
+            "EnvironmentVariables": ProcessInfo.processInfo.environment.filter {
+                ["TUFF_APPLICATION_SUPPORT_ROOT", "TUFF_ENGINE_CATALOG_PATH"].contains($0.key)
+            },
         ]
         let propertyListData = try PropertyListSerialization.data(
             fromPropertyList: propertyList, format: .xml, options: 0)
@@ -413,10 +493,10 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
         return kickstartError
     }
 
-    private func launchDirectProcess(socketPath: String, label: String) throws -> Process {
+    private func launchDirectProcess(socketPath: String, label: String, serviceURL: URL) throws -> Process {
         let process = Process()
         process.executableURL = serviceURL
-        process.arguments = ["--socket", socketPath, "--launch-label", label]
+        process.arguments = ["--socket", socketPath, "--launch-label", label] + engineLeaseArguments
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try process.run()
@@ -537,14 +617,25 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
 
     private static func decodeRuntimeOptions(_ options: AppRuntimeOptions)
         -> DecodeRuntimeOptions {
-        DecodeRuntimeOptions(
+        let layers: [Int]?
+        switch options.denseResidencyPolicy {
+        case .automatic: layers = nil
+        case .resident: layers = nil
+        case .bounded(let resident): layers = resident.sorted()
+        }
+        return DecodeRuntimeOptions(
             expertCacheSlots: options.expertCacheSlots,
             expertCachePolicy: options.expertCachePolicy.rawValue,
             prefillEnabled: options.prefillEnabled,
             prefillChunkTokens: options.prefillChunkTokens,
             rdadvisePolicy: options.rdadvisePolicy.rawValue,
             modelVerification: options.modelVerification.rawValue,
-            visionResidencyPolicy: options.visionResidencyPolicy.rawValue)
+            visionResidencyPolicy: options.visionResidencyPolicy.rawValue,
+            denseResidentLayers: layers,
+            denseWeightBudgetBytes: {
+                if case .automatic(let budget) = options.denseResidencyPolicy { return budget }
+                return nil
+            }(), retainedConversationBytes: options.retainedConversationBytes)
     }
 
     private static func removeLaunchJob(label: String) {
@@ -557,11 +648,9 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
         process.waitUntilExit()
     }
 
-    private static func defaultServiceURL() -> URL {
-        return Bundle.main.executableURL!
-            .deletingLastPathComponent()
-            // Matches the executable product name in Package.swift; the
-            // service binary is built next to the app binary.
-            .appendingPathComponent("TUFFDecodeService")
+    private var engineLeaseArguments: [String] {
+        connection.withLock { value in
+            value.engineInstallation.map { ["--engine-lock", $0.lockFileURL.path] } ?? []
+        }
     }
 }

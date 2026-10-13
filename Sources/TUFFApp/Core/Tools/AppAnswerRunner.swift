@@ -148,8 +148,7 @@ public struct AppAnswerRunner: Sendable {
                         partial: finalize(diagnostics)))
                     return
                 }
-                let budget = characterBudget(request: current, diagnostics: diagnostics,
-                                             calls: calls.count)
+                let budget = characterBudget(request: current, diagnostics: diagnostics)
                 let started = ContinuousClock.now
                 let session = session
                 let task = Task<AppToolRound, Never> {
@@ -209,10 +208,9 @@ public struct AppAnswerRunner: Sendable {
 
     /// Result text the context can still take, from the token counts the
     /// last generation reported, at a conservative three characters a token,
-    /// with room kept for the answer. A context that cannot take even the
-    /// minimum for every call is reported as zero, and the calls are refused.
-    func characterBudget(request: AppGenerationRequest, diagnostics: AppDiagnostics,
-                         calls: Int) -> Int {
+    /// with room kept for the answer. The tool session applies the per-call
+    /// minimum when dividing this total across results.
+    func characterBudget(request: AppGenerationRequest, diagnostics: AppDiagnostics) -> Int {
         let used = (diagnostics.promptTokenCount ?? 0) + diagnostics.generatedTokens
         let free = request.maxContextTokens - used - limits.answerReserveTokens
         return max(0, free) * 3

@@ -1,5 +1,6 @@
 import Foundation
-import TUFFEngine
+import TUFFInferenceTypes
+import TUFFRuntimeDescriptions
 import TUFFModelCatalog
 
 /// An installed model the benchmark can run.

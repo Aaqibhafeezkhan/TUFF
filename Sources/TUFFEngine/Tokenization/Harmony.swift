@@ -1,13 +1,10 @@
+import TUFFInferenceTypes
 import Foundation
 
 /// GPT-OSS exposes graded reasoning effort through the Harmony system message.
 /// It is intentionally separate from `ChatReasoning`, whose only valid values
 /// are the native on/off controls used by Gemma and Qwen.
-public enum GPTOSSReasoningEffort: String, Codable, Sendable, Equatable, CaseIterable {
-    case low
-    case medium
-    case high
-}
+public typealias GPTOSSReasoningEffort = TUFFInferenceTypes.GPTOSSReasoningEffort
 
 /// The special-token contract shared by the official 20B and 120B GPT-OSS
 /// tokenizers. Instances resolved from an installed tokenizer are compared to
@@ -51,18 +48,8 @@ public struct HarmonyPromptRenderer: Sendable {
 
     /// Calendar date embedded in the Harmony system message. Keeping the
     /// formatter here gives the CLI, server, and app one reproducible contract.
-    public static func calendarDate(
-        _ date: Date = Date(),
-        timeZone: TimeZone = .current
-    ) -> String {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = timeZone
-        let components = calendar.dateComponents([.year, .month, .day], from: date)
-        return String(
-            format: "%04d-%02d-%02d",
-            components.year ?? 0,
-            components.month ?? 0,
-            components.day ?? 0)
+    public static func calendarDate(_ date: Date = Date(), timeZone: TimeZone = .current) -> String {
+        InferenceCalendarDate.calendarDate(date, timeZone: timeZone)
     }
 
     public func render(

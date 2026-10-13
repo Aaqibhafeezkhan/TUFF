@@ -1,5 +1,13 @@
 // swift-tools-version: 6.2
 import PackageDescription
+import Foundation
+
+let engineFamily = ProcessInfo.processInfo.environment["TUFF_ENGINE_FAMILY"]
+let familyDefine: String? = ["gemma-affine": "TUFF_ENGINE_GEMMA", "qwen-hybrid-affine": "TUFF_ENGINE_QWEN",
+    "gpt-oss-mxfp4": "TUFF_ENGINE_GPT_OSS", "minimax-affine": "TUFF_ENGINE_MINIMAX"][engineFamily ?? ""]
+let familySettings: [SwiftSetting] = familyDefine.map { [.define($0)] } ?? []
+let engineSettings = familySettings + ((engineFamily != nil && engineFamily != "gpt-oss-mxfp4")
+    ? [.define("TUFF_ENGINE_AFFINE_ONLY")] : [])
 
 let package = Package(
     name: "TUFF",
@@ -8,12 +16,16 @@ let package = Package(
         .iOS(.v26),
     ],
     products: [
+        .executable(name: "TUFFQualification", targets: ["TUFFQualification"]),
+        .executable(name: "TUFFModelPlan", targets: ["TUFFModelPlan"]),
+        .executable(name: "TUFFEnginePackage", targets: ["TUFFEnginePackage"]),
         .library(name: "TUFFEngine", targets: ["TUFFEngine"]),
         .executable(name: "TUFFRepack", targets: ["TUFFRepack"]),
         .executable(name: "TUFFCLI", targets: ["TUFFCLI"]),
         .executable(name: "TUFFCommand", targets: ["TUFFCommand"]),
         .executable(name: "TUFF", targets: ["TUFFMac"]),
         .executable(name: "TUFFDecodeService", targets: ["TUFFDecodeService"]),
+        .executable(name: "TUFFInferenceEngine", targets: ["TUFFInferenceEngine"]),
         .executable(name: "TUFFServer", targets: ["TUFFServer"]),
     ],
     dependencies: [
@@ -25,6 +37,13 @@ let package = Package(
         .package(path: "Vendor/SwiftMath"),
     ],
     targets: [
+        .executableTarget(name: "TUFFQualification", dependencies: ["TUFFAppCore", "TUFFModelMetadata", "TUFFModelCatalog", "TUFFInferenceTypes"], path: "Sources/TUFFQualification"),
+        .executableTarget(name: "TUFFModelPlan", dependencies: ["TUFFAppCore", "TUFFModelMetadata", "TUFFModelCatalog"], path: "Sources/TUFFModelPlan"),
+        .executableTarget(
+            name: "TUFFEnginePackage",
+            dependencies: ["TUFFRuntimeManagement", "TUFFModelMetadata"],
+            path: "Sources/TUFFEnginePackage"
+        ),
         .target(
             name: "TUFFModelCatalog",
             path: "Sources/TUFFModelCatalog"
@@ -34,31 +53,66 @@ let package = Package(
             path: "Sources/TUFFFormat"
         ),
         .target(
+            name: "TUFFInferenceTypes",
+            path: "Sources/TUFFInferenceTypes"
+        ),
+        .target(
+            name: "TUFFRuntimeDescriptions",
+            dependencies: ["TUFFModelCatalog"],
+            path: "Sources/TUFFRuntimeDescriptions",
+            swiftSettings: familySettings
+        ),
+        .target(
+            name: "TUFFModelMetadata",
+            dependencies: ["TUFFRuntimeDescriptions", "TUFFInferenceTypes", "TUFFFormat"],
+            path: "Sources/TUFFModelMetadata"
+        ),
+        .target(
+            name: "TUFFRuntimeManagement",
+            dependencies: ["TUFFInferenceTypes", "TUFFModelCatalog", "TUFFModelMetadata", "TUFFRuntimeDescriptions"],
+            path: "Sources/TUFFRuntimeManagement"
+        ),
+        .target(
             name: "TUFFEngine",
             dependencies: [
                 "TUFFModelCatalog",
                 "TUFFFormat",
+                "TUFFInferenceTypes",
+                "TUFFRuntimeDescriptions",
+                "TUFFModelMetadata",
                 .product(name: "Tokenizers", package: "swift-transformers"),
                 .product(name: "Hub", package: "swift-transformers"),
             ],
             path: "Sources/TUFFEngine",
+            exclude: engineFamily == "gpt-oss-mxfp4" ? ["Runtime/Inference/RealForwardRunner.swift"] : [],
             resources: [
                 .copy("Metal"),
-            ]
+            ],
+            swiftSettings: engineSettings
         ),
         .target(
             name: "TUFFRepackCore",
-            dependencies: ["TUFFModelCatalog", "TUFFFormat"],
+            dependencies: ["TUFFModelCatalog", "TUFFFormat", "TUFFRuntimeDescriptions", "TUFFModelMetadata", "TUFFInferenceTypes"],
             path: "Sources/TUFFRepack/Core"
         ),
         .executableTarget(
             name: "TUFFRepack",
-            dependencies: ["TUFFRepackCore"],
+            dependencies: ["TUFFRepackCore", "TUFFRuntimeManagement", "TUFFModelCatalog"],
             path: "Sources/TUFFRepack/Command"
         ),
         .target(
+            name: "TUFFCLIArguments",
+            dependencies: ["TUFFInferenceTypes", "TUFFRuntimeDescriptions"],
+            path: "Sources/TUFFCLIArguments"
+        ),
+        .target(
+            name: "TUFFCLIEngine",
+            dependencies: ["TUFFCLIArguments", "TUFFCLICore", "TUFFEngine", "TUFFAppCore"],
+            path: "Sources/TUFFCLIEngine"
+        ),
+        .target(
             name: "TUFFCLICore",
-            dependencies: ["TUFFModelCatalog", "TUFFEngine"],
+            dependencies: ["TUFFModelCatalog", "TUFFCLIArguments", "TUFFDecodeProtocol", "TUFFRuntimeManagement", "TUFFAppCore"],
             path: "Sources/TUFFCLI",
             exclude: ["Command"]
         ),
@@ -79,11 +133,17 @@ let package = Package(
         ),
         .target(
             name: "TUFFAppCore",
-            dependencies: ["TUFFModelCatalog", "TUFFEngine", "TUFFRepackCore", "TUFFDecodeProtocol"],
+            dependencies: ["TUFFModelCatalog", "TUFFRepackCore", "TUFFDecodeProtocol", "TUFFInferenceTypes", "TUFFRuntimeDescriptions", "TUFFModelMetadata", "TUFFRuntimeManagement"],
             path: "Sources/TUFFApp/Core",
             resources: [
                 .copy("Resources/app-prompts.json"),
+                .copy("Resources/model-layouts.json"),
             ]
+        ),
+        .target(
+            name: "TUFFEngineAdapter",
+            dependencies: ["TUFFAppCore", "TUFFEngine", "TUFFRuntimeManagement"],
+            path: "Sources/TUFFEngineAdapter"
         ),
         .target(
             name: "TUFFMacPresentation",
@@ -96,12 +156,12 @@ let package = Package(
         ),
         .target(
             name: "TUFFDecodeProtocol",
-            dependencies: ["TUFFEngine"],
+            dependencies: ["TUFFInferenceTypes"],
             path: "Sources/TUFFDecodeProtocol"
         ),
         .target(
             name: "TUFFDecodeServiceCore",
-            dependencies: ["TUFFAppCore", "TUFFDecodeProtocol"],
+            dependencies: ["TUFFAppCore", "TUFFDecodeProtocol", "TUFFEngineAdapter", "TUFFRuntimeManagement"],
             path: "Sources/TUFFDecodeService",
             exclude: ["Command"]
         ),
@@ -110,16 +170,33 @@ let package = Package(
             dependencies: ["TUFFDecodeServiceCore"],
             path: "Sources/TUFFDecodeService/Command"
         ),
+        .executableTarget(
+            name: "TUFFInferenceEngine",
+            dependencies: ["TUFFCLIArguments", "TUFFCLIEngine", "TUFFDecodeProtocol",
+                           "TUFFDecodeServiceCore", "TUFFInferenceTypes", "TUFFRuntimeManagement",
+                           "TUFFServerEngine"],
+            path: "Sources/TUFFInferenceEngine"
+        ),
         .target(
             name: "TUFFServerCore",
             dependencies: [
                 "TUFFModelCatalog",
-                "TUFFEngine",
+                "TUFFAppCore",
+                "TUFFDecodeProtocol",
+                "TUFFInferenceTypes",
+                "TUFFRuntimeDescriptions",
+                "TUFFModelMetadata",
+                "TUFFRuntimeManagement",
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
             ],
             path: "Sources/TUFFServer/Core"
+        ),
+        .target(
+            name: "TUFFServerEngine",
+            dependencies: ["TUFFServerCore", "TUFFEngine", "TUFFDecodeProtocol", "TUFFRuntimeManagement"],
+            path: "Sources/TUFFServerEngine"
         ),
         .target(
             name: "TUFFAppServer",
@@ -148,8 +225,10 @@ let package = Package(
                 "TUFFAppServer",
                 "TUFFAppUpdater",
                 "TUFFMacPresentation",
+                "TUFFInferenceTypes",
+                "TUFFRuntimeDescriptions",
+                "TUFFRuntimeManagement",
                 "TUFFCLICore",
-                "TUFFDecodeServiceCore",
                 "TUFFServerCore",
             ],
             path: "Sources/TUFFApp/Mac",
@@ -161,6 +240,11 @@ let package = Package(
             name: "TUFFValidationSupport",
             dependencies: ["TUFFEngine"],
             path: "Sources/TUFFValidation/Support"
+        ),
+        .testTarget(
+            name: "TUFFInferenceTypesTests",
+            dependencies: ["TUFFInferenceTypes", "TUFFDecodeProtocol", "TUFFRuntimeManagement", "TUFFRuntimeDescriptions"],
+            path: "Tests/TUFFInferenceTypes"
         ),
         .testTarget(
             name: "TUFFModelCatalogTests",
@@ -190,6 +274,7 @@ let package = Package(
                 "TUFFValidationSupport",
                 "TUFFRepackCore",
                 "TUFFCLICore",
+                "TUFFCLIEngine",
                 .product(name: "Hub", package: "swift-transformers"),
             ],
             path: "Tests/TUFFEngine/Core",
@@ -202,7 +287,8 @@ let package = Package(
         .testTarget(
             name: "TUFFRepackTests",
             dependencies: ["TUFFFormat", "TUFFRepackCore"],
-            path: "Tests/TUFFRepack/Core"
+            path: "Tests/TUFFRepack/Core",
+            resources: [.copy("Fixtures/NewModels")]
         ),
         .testTarget(
             name: "TUFFAppCoreTests",
@@ -210,6 +296,7 @@ let package = Package(
                 "TUFFModelCatalog",
                 "TUFFAppCore",
                 "TUFFEngine",
+                "TUFFEngineAdapter",
                 "TUFFRepackCore",
                 "TUFFDecodeProtocol",
             ],
@@ -217,7 +304,7 @@ let package = Package(
         ),
         .testTarget(
             name: "TUFFDecodeServiceTests",
-            dependencies: ["TUFFDecodeServiceCore", "TUFFAppCore", "TUFFDecodeProtocol"],
+            dependencies: ["TUFFDecodeServiceCore", "TUFFAppCore", "TUFFDecodeProtocol", "TUFFEngineAdapter"],
             path: "Tests/TUFFDecodeService"
         ),
         .testTarget(
@@ -237,6 +324,8 @@ let package = Package(
             name: "TUFFServerTests",
             dependencies: [
                 "TUFFServerCore",
+                "TUFFServerEngine",
+                "TUFFEngine",
                 .product(name: "NIOEmbedded", package: "swift-nio"),
             ],
             path: "Tests/TUFFServer",

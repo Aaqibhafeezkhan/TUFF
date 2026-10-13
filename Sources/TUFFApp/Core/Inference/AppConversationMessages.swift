@@ -1,20 +1,20 @@
 import Foundation
-import TUFFEngine
+import TUFFInferenceTypes
 
 /// The conversation as chat-template messages. A tool round becomes an
 /// assistant message carrying its calls, reasoning and any text it wrote,
 /// followed by one tool message per result, so every template renders them in
 /// its own native format. Nothing is folded into a user message.
-enum AppConversationMessages {
+package enum AppConversationMessages {
     /// Messages for `turns` plus the current message and its rounds.
     /// `finalThinking` says whether a completed turn's reasoning is rendered
     /// back (Harmony, or Qwen with preserved thinking); a tool round's
     /// reasoning is always passed and the template decides, because the
     /// templates keep it for the turn still in progress.
-    static func messages(for request: AppGenerationRequest,
+    package static func messages(for request: AppGenerationRequest,
                          turns: ArraySlice<AppChatTurn>,
-                         finalThinking: Bool) -> [GFTokenizer.Message] {
-        var messages: [GFTokenizer.Message] = []
+                         finalThinking: Bool) -> [InferenceChatMessage] {
+        var messages: [InferenceChatMessage] = []
         messages.reserveCapacity(turns.count * 2 + 2)
         if !request.systemPrompt.isEmpty {
             messages.append(.init(role: .system, content: request.systemPrompt))
@@ -30,8 +30,8 @@ enum AppConversationMessages {
         return messages
     }
 
-    static func roundMessages(_ rounds: [AppToolRound]) -> [GFTokenizer.Message] {
-        var messages: [GFTokenizer.Message] = []
+    package static func roundMessages(_ rounds: [AppToolRound]) -> [InferenceChatMessage] {
+        var messages: [InferenceChatMessage] = []
         for round in rounds where round.isComplete {
             messages.append(.init(role: .assistant,
                                   content: round.content.isEmpty ? nil : round.content,
@@ -46,7 +46,7 @@ enum AppConversationMessages {
     }
 
     /// Content SHA-256 of each message's images, aligned with `messages`.
-    static func imageIdentities(for request: AppGenerationRequest,
+    package static func imageIdentities(for request: AppGenerationRequest,
                                 turns: ArraySlice<AppChatTurn>) -> [[String]] {
         var identities: [[String]] = []
         if !request.systemPrompt.isEmpty { identities.append([]) }
@@ -66,47 +66,4 @@ enum AppConversationMessages {
         return identities
     }
 
-    /// Multimodal messages with the same structure. Images present in
-    /// `features` are placed ahead of a user message's text.
-    static func multimodalMessages(for request: AppGenerationRequest,
-                                   turns: ArraySlice<AppChatTurn>,
-                                   features: [UUID: VisionFeatures],
-                                   finalThinking: Bool)
-        -> (messages: [MultimodalMessage], used: [UUID: VisionFeatures]) {
-        var messages: [MultimodalMessage] = []
-        var used: [UUID: VisionFeatures] = [:]
-        if !request.systemPrompt.isEmpty {
-            messages.append(MultimodalMessage(role: .system, content: [.text(request.systemPrompt)]))
-        }
-        func userMessage(text: String, images: [AppImageAttachment]) -> MultimodalMessage {
-            var content: [MultimodalContentPart] = []
-            for image in images {
-                guard let encoded = features[image.id] else { continue }
-                used[image.id] = encoded
-                content.append(.image(id: image.id))
-            }
-            if !text.isEmpty || content.isEmpty { content.append(.text(text)) }
-            return MultimodalMessage(role: .user, content: content)
-        }
-        func rounds(_ rounds: [AppToolRound]) {
-            for message in roundMessages(rounds) {
-                messages.append(MultimodalMessage(
-                    role: message.role,
-                    content: (message.content ?? "").isEmpty ? [] : [.text(message.content ?? "")],
-                    thinking: message.thinking,
-                    toolCalls: message.toolCalls,
-                    toolCallID: message.toolCallID,
-                    name: message.name))
-            }
-        }
-        for turn in turns {
-            messages.append(userMessage(text: turn.prompt, images: turn.images))
-            rounds(turn.toolRounds)
-            messages.append(MultimodalMessage(role: .assistant, content: [.text(turn.response)],
-                                              thinking: finalThinking ? turn.thinking : nil))
-        }
-        messages.append(userMessage(text: request.prompt, images: request.imageAttachments))
-        rounds(request.currentRounds)
-        return (messages, used)
-    }
 }

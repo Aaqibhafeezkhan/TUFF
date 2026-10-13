@@ -79,6 +79,7 @@ body:
         - Gemma 4 E4B
         - Gemma 4 12B QAT
         - Gemma 4 26B-A4B
+        - Gemma 4 26B Heretic
         - Qwen3.6 35B-A3B
         - Qwen3.8 Flash Next
         - GPT-OSS 20B

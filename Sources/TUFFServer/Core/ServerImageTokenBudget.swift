@@ -1,13 +1,15 @@
 import Foundation
-import TUFFEngine
+import TUFFInferenceTypes
+import TUFFRuntimeDescriptions
+import TUFFModelMetadata
 
 /// The server's face of `VisionImageTokenBudget`: the shared arithmetic plus
 /// the OpenAI-shaped rejection. The rule itself lives in the runtime so the
 /// app and CLI cannot drift from it.
-enum ServerImageTokenBudget {
+package enum ServerImageTokenBudget {
     /// A rendered image placeholder becomes one BOI marker, the projected image
     /// tokens, and one EOI marker.
-    static func imageTokens(softTokenCounts: [Int]) -> Int {
+    package static func imageTokens(softTokenCounts: [Int]) -> Int {
         VisionImageTokenBudget.imageTokens(softTokenCounts: softTokenCounts)
     }
 
@@ -17,7 +19,7 @@ enum ServerImageTokenBudget {
     /// pinned Pi 0.82.1 sends `max_tokens: 16384`, the entire default
     /// 16,384-token context, on every request. Counting it here rejected
     /// requests the text path would have served.
-    static func fits(
+    package static func fits(
         softTokenCounts: [Int],
         textTokens: Int,
         maxContext: Int
@@ -28,7 +30,7 @@ enum ServerImageTokenBudget {
             maxContext: maxContext)
     }
 
-    static func rejection(
+    package static func rejection(
         imageCount: Int,
         softTokenCounts: [Int],
         textTokens: Int,

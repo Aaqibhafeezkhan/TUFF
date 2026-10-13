@@ -1,60 +1,9 @@
 import Foundation
 
-public enum MultimodalContentPart: Codable, Sendable, Equatable {
-    case text(String)
-    case image(id: UUID)
-}
-
-/// A continuation turn's content, before image token counts are known.
-public enum MultimodalContinuationPart: Sendable, Equatable {
-    case text(String)
-    case image
-}
-
-/// Tokens for a continuation turn. Ranges are relative to this turn, which is
-/// also the suffix handed to the runner, so they need no rebasing.
-public struct MultimodalContinuationTokens: Sendable, Equatable {
-    public let effectiveTokenIDs: [Int32]
-    public let embeddingTokenIDs: [Int32]
-    public let imageTokenRanges: [Range<Int>]
-}
-
-public struct MultimodalMessage: Codable, Sendable, Equatable {
-    public let role: GFTokenizer.Role
-    public let content: [MultimodalContentPart]
-    public let thinking: String?
-    public let toolCalls: [GFTokenizer.HistoricalToolCall]
-    public let toolCallID: String?
-    public let name: String?
-
-    public init(role: GFTokenizer.Role,
-                content: [MultimodalContentPart],
-                toolCalls: [GFTokenizer.HistoricalToolCall] = [],
-                toolCallID: String? = nil,
-                name: String? = nil) {
-        self.init(
-            role: role,
-            content: content,
-            thinking: nil,
-            toolCalls: toolCalls,
-            toolCallID: toolCallID,
-            name: name)
-    }
-
-    public init(role: GFTokenizer.Role,
-                content: [MultimodalContentPart],
-                thinking: String?,
-                toolCalls: [GFTokenizer.HistoricalToolCall] = [],
-                toolCallID: String? = nil,
-                name: String? = nil) {
-        self.role = role
-        self.content = content
-        self.thinking = thinking
-        self.toolCalls = toolCalls
-        self.toolCallID = toolCallID
-        self.name = name
-    }
-}
+public typealias MultimodalContentPart = TUFFInferenceTypes.MultimodalContentPart
+public typealias MultimodalContinuationPart = TUFFInferenceTypes.MultimodalContinuationPart
+public typealias MultimodalContinuationTokens = TUFFInferenceTypes.MultimodalContinuationTokens
+public typealias MultimodalMessage = TUFFInferenceTypes.MultimodalMessage
 
 public enum MultimodalPromptRendererError: Error, Equatable {
     case emptyMessages

@@ -1,6 +1,8 @@
 import Darwin
 import Foundation
-import TUFFEngine
+import TUFFInferenceTypes
+import TUFFRuntimeDescriptions
+import TUFFModelMetadata
 
 /// The `TUFFServer` executable, callable from any binary that links the server.
 public enum RouterServerCommand {
@@ -9,8 +11,6 @@ public enum RouterServerCommand {
         // ready line goes to stdout, which is fully buffered when it is not a
         // terminal. Line buffering puts the line where it is useful.
         setvbuf(stdout, nil, _IOLBF, 0)
-        // Before anything in this process creates a Metal device.
-        MetalContext.relaxInteractivityWatchdog()
         do {
             let parsed = try RouterServerArguments.parse(arguments)
             return await RouterServerRuntime.run(parsed)

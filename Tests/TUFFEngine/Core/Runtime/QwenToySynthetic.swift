@@ -11,8 +11,8 @@ import TUFFFormat
 enum QwenToySynthetic {
 
     /// Build the toy directory in a temp dir and return its URL.
-    static func write() throws -> URL {
-        let toy = ArchConfig.qwen36Toy()
+    static func write(dense: Bool = false) throws -> URL {
+        let toy = ArchConfig.qwen36Toy(dense: dense)
         let la = toy.linearAttention
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("gturbo-qwen-toy-\(UUID().uuidString)")
@@ -77,6 +77,14 @@ enum QwenToySynthetic {
                                   shape: [UInt32(d), 0, 0, 0], count: d))
             specs.append(bf16Spec("\(prefix).post_attention_layernorm.weight",
                                   shape: [UInt32(d), 0, 0, 0], count: d))
+            if dense {
+                specs.append(int4AffineSpec("\(prefix).mlp.gate_proj.weight",
+                                           rows: toy.intermediateSize, cols: d))
+                specs.append(int4AffineSpec("\(prefix).mlp.up_proj.weight",
+                                           rows: toy.intermediateSize, cols: d))
+                specs.append(int4AffineSpec("\(prefix).mlp.down_proj.weight",
+                                           rows: d, cols: toy.intermediateSize))
+            } else {
             specs.append(int8AffineSpec("\(prefix).mlp.gate.weight",
                                         rows: toy.numExperts, cols: d))
             specs.append(int8AffineSpec("\(prefix).mlp.shared_expert_gate.weight",
@@ -87,6 +95,7 @@ enum QwenToySynthetic {
                                         rows: toy.intermediateSize, cols: d))
             specs.append(int8AffineSpec("\(prefix).mlp.shared_expert.down_proj.weight",
                                         rows: d, cols: toy.intermediateSize))
+            }
             if toy.layerIsLinear(L) {
                 specs.append(int4AffineSpec("\(prefix).linear_attn.in_proj_qkv.weight",
                                             rows: la.qkvDim, cols: d))
@@ -332,6 +341,7 @@ enum QwenToySynthetic {
         }
 
         let archDict: [String: Any] = [
+            "feedForwardKind": toy.feedForwardKind.rawValue,
             "hiddenSize": toy.hiddenSize, "ffnIntermediate": toy.intermediateSize,
             "moeIntermediateSize": toy.moeIntermediateSize,
             "numHeads": toy.numHeads, "numKVHeads": toy.numKVHeads,
@@ -373,8 +383,8 @@ enum QwenToySynthetic {
         let manifestRoot: [String: Any] = [
             "magic": "GTURBO",
             "versionMajor": 1,
-            "versionMinor": 0,
-            "flags": ["streamingPresent": true, "turboQuantKV": false, "aneSharedExpert": false],
+            "versionMinor": dense ? 1 : 0,
+            "flags": ["denseFFN": dense, "streamingPresent": !dense, "turboQuantKV": false, "aneSharedExpert": false],
             "modelID": "qwen-toy",
             "arch": archDict,
             // Mirrors the bit widths the specs above actually write: int4 for
@@ -384,14 +394,15 @@ enum QwenToySynthetic {
                 "embedding": quantSlot(4),
                 "attention": quantSlot(4),
                 "router": quantSlot(8),
-                "sharedExpert": quantSlot(8),
+                "sharedExpert": quantSlot(dense ? 4 : 8),
                 "routedExpert": quantSlot(4),
             ],
-            "files": files,
+            "files": dense ? files.filter { !$0.key.hasPrefix("packed_experts/") } : files,
             "expertsPerLayer": toy.numExperts,
             "numLayers": toy.numLayers,
-            "expertStride": expertStride,
+            "expertStride": dense ? UInt64(0) : expertStride,
         ]
+        if dense { try FileManager.default.removeItem(at: exp) }
         let manifestData = try JSONSerialization.data(withJSONObject: manifestRoot,
             options: [.sortedKeys, .withoutEscapingSlashes])
         try manifestData.write(to: dir.appendingPathComponent("manifest.json"))
@@ -406,11 +417,11 @@ extension ArchConfig {
     /// no sandwich norms. Numbers are intentionally toy but respect every
     /// kernel divisibility constraint (D % 64, keyHeadDim % 32, even
     /// rotaryDim).
-    static func qwen36Toy() -> ArchConfig {
+    static func qwen36Toy(dense: Bool = false) -> ArchConfig {
         ArchConfig(
             hiddenSize: 64,
             intermediateSize: 128,
-            moeIntermediateSize: 128,
+            moeIntermediateSize: dense ? 0 : 128,
             numHeads: 4,
             numKVHeads: 2,
             numFullKVHeads: 2,
@@ -423,19 +434,20 @@ extension ArchConfig {
             fullRopeTheta: 10_000_000.0,
             partialRotaryFactor: 0.25,
             numLayers: 4,
-            numExperts: 8,
-            topKExperts: 8,
+            numExperts: dense ? 0 : 8,
+            topKExperts: dense ? 0 : 8,
             tieWordEmbeddings: false,
             attentionKEqV: false,
             fullAttentionLayerMask: [2, 1, 2, 1],
             hiddenActivation: "silu",
             family: .qwen36,
+            feedForwardKind: dense ? .dense : .mixtureOfExperts,
             attnOutputGate: true,
             attentionScale: 0.125,
             embeddingScaledBySqrtHidden: false,
             routerScaled: false,
             ffnSandwichNorms: false,
-            sharedExpertGated: true,
+            sharedExpertGated: !dense,
             ropeNeoxSubdim: true,
             linearAttention: LinearAttentionConfig(
                 numKHeads: 2, numVHeads: 4,

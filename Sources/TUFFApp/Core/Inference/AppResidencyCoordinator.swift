@@ -1,6 +1,7 @@
 import Foundation
 import TUFFModelCatalog
-import TUFFEngine
+import TUFFRuntimeDescriptions
+import TUFFModelMetadata
 
 /// Reserves the decode service's working set and asks idle API models to yield.
 public struct AppResidencyCoordinator: Sendable {
@@ -44,11 +45,18 @@ public struct AppResidencyCoordinator: Sendable {
     }
 
     public func reserve(directory: URL, context: Int, slots: Int,
-                        chunk: Int = 128) async throws -> TUFFResidencyLease {
+                        chunk: Int = 128, options: AppRuntimeOptions? = nil) async throws -> TUFFResidencyLease {
         struct ManifestIdentity: Decodable { let modelID: String }
         let identity = try JSONDecoder().decode(ManifestIdentity.self,
-            from: Data(contentsOf: directory.appendingPathComponent("manifest.json")))
+            from: GTurboModelDirectory(rootURL: directory).readMetadata("manifest.json", maxBytes: ManifestReader.defaultMaxBytes))
         if let model = TUFFModelCatalog.model(manifestModelID: identity.modelID) {
+            if let options, let estimate = AppAutomaticMemoryPlanner.estimatedAllocation(
+                directory: directory, context: context, options: options) {
+                let hasVision = (try? VisionPackLocation.companionURL(forTextModel: directory))
+                    .map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+                return try await reserve(record: .init(owner: .app, modelID: model.apiModelID,
+                    estimatedBytes: hasVision ? max(budgetBytes, estimate.peakAllocatedBytes) : estimate.peakAllocatedBytes))
+            }
             if let companion = try? VisionPackLocation.companionURL(forTextModel: directory),
                FileManager.default.fileExists(atPath: companion.path) {
                 // Vision towers can allocate a transient encoding working set.

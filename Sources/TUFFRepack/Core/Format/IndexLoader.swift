@@ -1,4 +1,5 @@
 import Foundation
+import TUFFModelCatalog
 
 /// Parses `model.safetensors.index.json` and `config.json -> quantization`.
 enum IndexLoader {
@@ -65,6 +66,23 @@ enum IndexLoader {
                     baseMode: baseMode,
                     bitsOverrides: overrides,
                     shardFilenames: stableShardFilenames(weightMap))
+            }
+            if let compressed = root["quantization_config"] as? [String: Any],
+               compressed["quant_method"] as? String == "compressed-tensors" {
+                guard indexSha == TUFFModelCatalog.ornith15_397B.source.sourceIndexSHA256,
+                      compressed["format"] as? String == "pack-quantized",
+                      let groups = compressed["config_groups"] as? [String: Any], groups.count == 1,
+                      let group = groups.values.first as? [String: Any],
+                      let weights = group["weights"] as? [String: Any],
+                      weights["num_bits"] as? Int == 4, weights["group_size"] as? Int == 32,
+                      weights["symmetric"] as? Bool == true, weights["type"] as? String == "int",
+                      weights["strategy"] as? String == "group", weights["dynamic"] as? Bool == false,
+                      weights["actorder"] is NSNull else {
+                    throw RepackError.configJsonInvalid(path: configPath, detail: "unsupported compressed tensor source")
+                }
+                return SourceMetadata(indexPath: indexPath, configPath: configPath,
+                    indexSha256Hex: indexSha, weightMap: weightMap, baseBits: 4, baseGroupSize: 32,
+                    baseMode: "compressed-affine", bitsOverrides: [:], shardFilenames: stableShardFilenames(weightMap))
             }
             guard let quant = root["quantization"] as? [String: Any] else {
                 throw RepackError.configJsonInvalid(path: configPath, detail: "no quantization slot")

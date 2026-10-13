@@ -86,11 +86,16 @@ public struct AppBugReport: Sendable {
         case .gemma4_E4B: "Gemma 4 E4B"
         case .gemma4_12B_QAT: "Gemma 4 12B QAT"
         case .gemma4_26B_A4B: "Gemma 4 26B-A4B"
+        case .gemma4_26B_Heretic: "Gemma 4 26B Heretic"
         case .qwen36_35B_A3B: "Qwen3.6 35B-A3B"
         case .qwen38FlashNext: "Qwen3.8 Flash Next"
         case .gptOss_20B: "GPT-OSS 20B"
         case .gptOss_120B: "GPT-OSS 120B"
         case .minimaxM27: "MiniMax M2.7"
+        case .ornith15_9B: "Ornith 1.5 9B"
+        case .ornith15_35B_A3B: "Ornith 1.5 35B-A3B"
+        case .ornith15_397B: "Ornith 1.5 397B"
+        case .qwen38_27B: "Qwen3.8 27B"
         }
     }
 

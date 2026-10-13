@@ -103,6 +103,7 @@ final class ResidentBufferSet {
     struct ResolvedEntry {
         let buffer: MTLBuffer
         let regionFileOffset: UInt64
+        var bufferOffset: UInt64 = 0
     }
 
     /// Target size of one mmap'd resident region when splitting is safe.
@@ -134,13 +135,91 @@ final class ResidentBufferSet {
         return payloadSize <= physicalMemory / splitPayloadMemoryShareDenominator
     }
 
+    private let denseLayers: DenseLayerStorage?
+    var stagesDenseLayers: Bool { denseLayers != nil }
+    var denseStagingBytes: UInt64 { denseLayers?.plan.stagingBytes ?? 0 }
+    var streamedProjectionLayers: Set<Int> { Set(denseLayers?.plan.layers.keys.map { $0 } ?? []) }
+    func prepareDenseLayer(_ layer: Int) throws { try denseLayers?.prepare(layer: layer) }
+
     private let buffers: [ResidentBuffer]
     private let regionByTensorName: [String: Int]
 
     init(fileURL: URL,
          index: ResidentIndex,
          device: MTLDevice,
-         fileDescriptor: Int32? = nil) throws {
+         fileDescriptor: Int32? = nil,
+         denseResidency: DenseResidencyPolicy = .resident,
+         numLayers: Int = 0) throws {
+        let streamedNames: Set<String>
+        let selectedResidency: DenseResidencyPolicy
+        if case .automatic(let budget) = denseResidency {
+            if index.header.residentSize <= budget {
+                selectedResidency = .resident
+            } else {
+                let all = try DenseLayerStorage.makePlan(index: index, residentLayers: [],
+                    numLayers: numLayers, maximumBytes: UInt64(device.maxBufferLength))
+                let fixed = index.entries.values.filter { DenseLayerStorage.layerNumber($0.name) == nil }
+                let fixedPlans = try Self.planRegions(entries: fixed,
+                    payloadOffset: index.header.indexSize, payloadSize: index.header.residentSize,
+                    maximumLength: 1, hardMaximumLength: UInt64(device.maxBufferLength))
+                func mappedBytes(_ plans: [RegionPlan]) throws -> UInt64 {
+                    let page = UInt64(getpagesize())
+                    var total: UInt64 = 0
+                    for plan in plans {
+                        let bytes = plan.size.addingReportingOverflow(plan.fileOffset % page)
+                        let rounded = bytes.partialValue.addingReportingOverflow(page - 1)
+                        guard !bytes.overflow, !rounded.overflow else {
+                            throw ModelError.residentBufferWrapFailed
+                        }
+                        let sum = total.addingReportingOverflow(rounded.partialValue / page * page)
+                        guard !sum.overflow else { throw ModelError.residentBufferWrapFailed }
+                        total = sum.partialValue
+                    }
+                    return total
+                }
+                var used = try mappedBytes(fixedPlans)
+                let baseline = used.addingReportingOverflow(all.stagingBytes)
+                guard !baseline.overflow, baseline.partialValue <= budget else {
+                    throw ModelError.indexCorrupt(detail: "weight budget cannot hold global tables and one dense layer")
+                }
+                used = baseline.partialValue
+                var retained: Set<Int> = []
+                // Keep complete layers; the staging allocation remains reserved.
+                // Local tuning can request other subsets through .bounded.
+                for layer in 0..<numLayers {
+                    guard let slices = all.layers[layer] else { continue }
+                    let retainedPlans = try Self.planRegions(
+                        entries: slices.compactMap { index.entries[$0.name] },
+                        payloadOffset: index.header.indexSize, payloadSize: index.header.residentSize,
+                        maximumLength: 1, hardMaximumLength: UInt64(device.maxBufferLength))
+                    let bytes = try mappedBytes(retainedPlans)
+                    let total = used.addingReportingOverflow(bytes)
+                    if !total.overflow && total.partialValue <= budget {
+                        retained.insert(layer)
+                        used = total.partialValue
+                    }
+                }
+                selectedResidency = .bounded(residentLayers: retained)
+            }
+        } else { selectedResidency = denseResidency }
+        switch selectedResidency {
+        case .automatic:
+            preconditionFailure("unresolved dense residency")
+        case .resident:
+            denseLayers = nil
+            streamedNames = []
+        case .bounded(let layers):
+            guard let fileDescriptor else { throw ModelError.residentBufferWrapFailed }
+            if layers.count == numLayers && layers.allSatisfy({ $0 >= 0 && $0 < numLayers }) {
+                denseLayers = nil
+                streamedNames = []
+            } else {
+                let storage = try DenseLayerStorage(index: index, residentLayers: layers,
+                    numLayers: numLayers, device: device, fileDescriptor: fileDescriptor)
+                denseLayers = storage
+                streamedNames = Set(storage.plan.layers.values.flatMap { $0 }.map(\.name))
+            }
+        }
         // Metal's per-encoder cost for a bound buffer grows with the buffer's
         // size (measured: ~3 us for a 64 KB or 256 MB buffer, ~10-25 us for a
         // 1-2.6 GB buffer, per dispatch). Decode issues hundreds of dispatches
@@ -152,12 +231,12 @@ final class ResidentBufferSet {
             payloadSize: index.header.residentSize,
             physicalMemory: ProcessInfo.processInfo.physicalMemory)
         let plans = try Self.planRegions(
-            entries: Array(index.entries.values),
+            entries: index.entries.values.filter { !streamedNames.contains($0.name) },
             payloadOffset: index.header.indexSize,
             payloadSize: index.header.residentSize,
-            maximumLength: split
+            maximumLength: denseLayers != nil ? 1 : (split
                 ? min(UInt64(device.maxBufferLength), Self.preferredRegionBytes)
-                : UInt64(device.maxBufferLength),
+                : UInt64(device.maxBufferLength)),
             hardMaximumLength: UInt64(device.maxBufferLength))
 
         var opened: [ResidentBuffer] = []
@@ -180,6 +259,7 @@ final class ResidentBufferSet {
     }
 
     func resolve(tensorName: String) throws -> ResolvedEntry {
+        if let resolved = denseLayers?.resolve(tensorName) { return resolved }
         guard let regionIndex = regionByTensorName[tensorName] else {
             throw ModelError.tensorNotFound(name: tensorName)
         }

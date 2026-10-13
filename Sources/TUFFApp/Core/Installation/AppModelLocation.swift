@@ -5,11 +5,12 @@ enum AppModelLocation {
         descriptor: AppModelInstallDescriptor = .selected
     ) -> URL {
         let fileManager = FileManager.default
-        let applicationSupport = (try? fileManager.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: false)) ?? fileManager.homeDirectoryForCurrentUser
+        let applicationSupport = AppSupportMigration.applicationSupportURL(fileManager: fileManager)
+        if let path = ProcessInfo.processInfo.environment["TUFF_APPLICATION_SUPPORT_ROOT"],
+           path.hasPrefix("/"), !path.contains("\0") {
+            return applicationSupport.appendingPathComponent("TUFF/Models", isDirectory: true)
+                .appendingPathComponent(descriptor.installDirectoryName, isDirectory: true)
+        }
         return resolve(
             explicitURL: nil,
             executableURL: Bundle.main.executableURL,

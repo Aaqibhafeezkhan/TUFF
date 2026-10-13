@@ -1,12 +1,14 @@
 import Foundation
 import TUFFRepackCore
+import TUFFModelCatalog
+import TUFFRuntimeManagement
 
 private let supportedModelSelectors = SupportedModelSource.all
     .map(\.name).joined(separator: "|")
 
 private let usage = """
 Usage:
-  TUFFRepack [--model <\(supportedModelSelectors)>] --output <model.gturbo> [--overwrite] [--resume] [--repo-id <owner/repo>] [--revision <ref>]
+  TUFFRepack [--model <\(supportedModelSelectors)>] --output <model.gturbo> [--overwrite] [--resume] [--dry-run] [--layout-summary-output <json>] [--repo-id <owner/repo>] [--revision <ref>]
   TUFFRepack --discard-partial --output <model.gturbo>
   TUFFRepack --verify-install --input-gturbo <model.gturbo>
   TUFFRepack --vision-output <model.vision.gturbo>
@@ -44,6 +46,8 @@ private struct Arguments {
     var output: String?
     var overwrite = false
     var resume = false
+    var dryRun = false
+    var layoutSummaryOutput: String?
     var discardPartial = false
     var verifyInstall = false
     var inputGTurbo: String?
@@ -67,6 +71,9 @@ private struct Arguments {
                 throw ParseError.help
             case "--overwrite":
                 parsed.overwrite = true
+                index += 1
+            case "--dry-run":
+                parsed.dryRun = true
                 index += 1
             case "--resume":
                 parsed.resume = true
@@ -110,12 +117,13 @@ private struct Arguments {
                 parsed.model = source
                 parsed.modelWasExplicit = true
                 index += 2
-            case "--output", "--input-gturbo", "--repo-id", "--revision":
+            case "--layout-summary-output", "--output", "--input-gturbo", "--repo-id", "--revision":
                 guard index + 1 < values.count else {
                     throw ParseError.missingValue(flag)
                 }
                 let value = values[index + 1]
                 switch flag {
+                case "--layout-summary-output": parsed.layoutSummaryOutput = value
                 case "--output": parsed.output = value
                 case "--input-gturbo": parsed.inputGTurbo = value
                 case "--repo-id": parsed.repoID = value
@@ -401,7 +409,7 @@ private func run(_ values: [String]) async -> Int32 {
         outputDirectory: URL(fileURLWithPath: output),
         overwrite: arguments.overwrite,
         token: ProcessInfo.processInfo.environment["HF_TOKEN"],
-        resume: arguments.resume)
+        resume: arguments.resume, dryRun: arguments.dryRun)
     // An explicit repo or revision replaces the architecture's pinned source,
     // which also waives the fingerprint check the pin exists to enforce.
     if arguments.repoID != nil || arguments.revision != nil {
@@ -413,20 +421,45 @@ private func run(_ values: [String]) async -> Int32 {
             requireKnownSource: false,
             minFreeReserveBytes: source.reserveBytes,
             overwrite: arguments.overwrite,
-            resume: arguments.resume)
+            resume: arguments.resume, dryRunSpaceCheck: arguments.dryRun)
     }
     let installedName = arguments.repoID == nil && arguments.revision == nil
         ? source.displayName
         : "\(source.displayName) from \(options.repoID)@\(options.revision)"
+    var engine: InferenceEngineInstallation?
     do {
+        // An absent or incompatible checkpoint is a local error. Report it
+        // before acquiring an engine or contacting its publisher.
+        if arguments.resume {
+            guard try RemoteStreamingRepacker.inspectPersistentInstall(outputDirectory: options.outputDir,
+                repoID: options.repoID, requestedRevision: options.revision) != nil else {
+                throw RepackError.installStateMissing(path:
+                    try RemoteInstallPaths(outputDirectory: options.outputDir).checkpointFile)
+            }
+        }
+        if !arguments.dryRun, arguments.repoID == nil, arguments.revision == nil,
+           let model = TUFFModelCatalog.model(selector: source.name) {
+            printError("[install] preparing inference engine")
+            engine = try await InferenceEngineEnvironment.acquire(architectureID: model.architecture.id.rawValue,
+                quantizationLayout: model.architecture.weightLayout.rawValue)
+        }
         let progress = InstallProgressReporter()
         let result = try await RemoteStreamingRepacker(options: options).run(
             progress: { progress($0) })
-        print("Installed \(installedName)")
+        if let output = arguments.layoutSummaryOutput {
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            try encoder.encode(result.weightLayoutSummary).write(to: URL(fileURLWithPath: output), options: .atomic)
+        }
+        if let engine {
+            try await InferenceEngineEnvironment.bind(engine, to: URL(fileURLWithPath: result.outputDir))
+            await engine.release()
+        }
+        print("\(arguments.dryRun ? "Planned" : "Installed") \(installedName)")
         print("Source revision: \(result.resolvedCommit)")
         print("Model: \(result.outputDir)")
         return 0
     } catch {
+        await engine?.release()
         printError("install failed: \(error)")
         return 1
     }

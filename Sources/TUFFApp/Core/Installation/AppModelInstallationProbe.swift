@@ -1,5 +1,6 @@
 import Foundation
-import TUFFEngine
+import TUFFModelMetadata
+import TUFFModelCatalog
 
 public enum AppModelInstallationStatus: Equatable, Sendable {
     case missing
@@ -30,10 +31,14 @@ public enum AppModelInstallationProbe {
             // manifest itself declares, so the probe does not depend on which
             // model the app happens to have selected.
             guard let expected = descriptor
+                    ?? TUFFModelCatalog.model(manifestModelID: manifest.modelID).map(AppModelInstallDescriptor.init(catalog:))
                     ?? AppModelInstallDescriptor.descriptor(for: baseline.variant) else {
                 return .partial("no descriptor for variant \(baseline.variant.rawValue)")
             }
             let expectedSource = "sha256:" + expected.sourceIndexSHA256
+            if expected.isCustomCheckpoint, expected.modelVariant != baseline.variant {
+                return .partial("Custom checkpoint architecture does not match its selected engine.")
+            }
             guard manifest.sourceSnapshotHash == expectedSource else {
                 return .partial("installed checkpoint does not match \(expected.displayName)")
             }
@@ -48,6 +53,9 @@ public enum AppModelInstallationProbe {
             }
             let receipt = try VerifiedInstallReceiptReader.load(directoryURL: directory)
             let manifestHash = try Sha256Verifier.hashFile(at: manifestURL, chunkBytes: 65_536)
+            if let expectedHash = expected.customManifestSHA256, expectedHash != manifestHash {
+                return .partial("Custom checkpoint changed. Remove the entry and import it again.")
+            }
             try VerifiedInstallReceiptReader.validateManifestBinding(
                 receipt,
                 directoryURL: directory,

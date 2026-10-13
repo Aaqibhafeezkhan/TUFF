@@ -171,9 +171,11 @@ struct FolderAccessPanel: View {
 
     private func addFolders() {
         let panel = NSOpenPanel()
+        panel.allowedContentTypes = []
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = true
+        panel.treatsFilePackagesAsDirectories = false
         panel.prompt = "Add"
         panel.message = "Choose folders for TUFF to search. Only these folders are read."
         guard panel.runModal() == .OK else { return }

@@ -1,3 +1,4 @@
+import TUFFServerCore
 import Foundation
 import TUFFEngine
 
@@ -17,14 +18,14 @@ extension ValidatedChatRequest {
     /// A text bridge retains generated reasoning that a fresh template render
     /// can drop. Require an exact rendered prefix for completed thinking turns;
     /// tool results continue the same turn and have their own checked bridge.
-    var allowsTextBridge: Bool {
+    package var allowsTextBridge: Bool {
         reasoning == .off && !preserveThinking && reasoningEffort == nil
     }
 
     /// The request as the conversation cache sees it. A multimodal request
     /// without one identity list per message has none, so it neither
     /// publishes nor matches.
-    var conversationTranscript: ConversationTranscript {
+    package var conversationTranscript: ConversationTranscript {
         let count = messages.count
         if multimodalMessages == nil, imageIdentities.isEmpty {
             return ConversationTranscript(

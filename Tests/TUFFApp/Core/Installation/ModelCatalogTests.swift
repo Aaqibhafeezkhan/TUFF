@@ -17,10 +17,7 @@ import TUFFRepackCore
     /// manifest it was never built for.
     @Test func everyImagePackComesFromItsOwnCheckpoint() {
         for model in TUFFModelCatalog.all {
-            let variant = ModelVariant(rawValue: model.architecture.id.rawValue)
-            let companion = variant.flatMap {
-                AppModelInstallDescriptor.visionCompanion(for: $0)
-            }
+            let companion = AppModelInstallDescriptor(catalog: model).imageCompanion
             guard model.capabilities.contains(.imageInput) else {
                 #expect(companion == nil,
                         "\(model.selector) has no image input but offers a pack")
@@ -47,6 +44,7 @@ import TUFFRepackCore
             .gemma4_E4B: 1_313_596_274,
             .gemma4_12B_QAT: 102_556_672,
             .gemma4_26B_A4B: 1_539_478_890,
+            .gemma4_26B_Heretic: 1_580_286_570,
             .qwen36_35B_A3B: 1_137_999_008,
             // Measured by the installer's own planner against this pin:
             // "planned: 1009.1 MiB to download, 859.6 MiB to write".
@@ -145,6 +143,11 @@ import TUFFRepackCore
             "gpt-oss-120b",
             "minimax-m2.7",
             "qwen3.8-flash-next",
+            "ornith-1.5-9b",
+            "ornith-1.5-35b-a3b",
+            "ornith-1.5-397b",
+            "qwen3.8-27b",
+            "gemma4-26b-heretic",
         ])
         #expect(AppModelInstallDescriptor.catalog.map(\.installDirectoryName) == [
             "gemma4-e2b.gturbo",
@@ -156,6 +159,11 @@ import TUFFRepackCore
             "gpt-oss-120b.gturbo",
             "minimax-m2.7.gturbo",
             "qwen38-flash-next.gturbo",
+            "ornith-9b.gturbo",
+            "ornith-35b.gturbo",
+            "ornith-397b.gturbo",
+            "qwen38-27b.gturbo",
+            "gemma4-heretic.gturbo",
         ])
         #expect(AppModelInstallDescriptor.gemma4E4B.supportsImageInput)
         #expect(MacModelSettings.defaults(

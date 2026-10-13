@@ -206,13 +206,13 @@ private func runner(_ client: ScriptedBenchmarkClient) -> AppBenchmarkRunner {
     @Test func thePostHasATableAndTheDataTheLeaderboardReads() async throws {
         let result = await sampleResult()
         let body = try AppBenchmarkShare.body(for: result)
-        #expect(body.contains("| Gemma 4 E4B IT 4-bit | 10.0 tok/s |"))
+        #expect(body.contains("| Gemma 4 E4B Q4 | 10.0 tok/s |"))
         let start = try #require(body.range(of: AppBenchmarkShare.dataFence + "\n"))
         let end = try #require(body.range(of: "\n```", range: start.upperBound..<body.endIndex))
         let json = Data(body[start.upperBound..<end.lowerBound].utf8)
         let decoded = try AppBenchmarkResult.decoder().decode(AppBenchmarkResult.self, from: json)
         #expect(decoded.id == result.id)
-        #expect(AppBenchmarkShare.title(for: result) == "M2, 16 GB: Gemma 4 E4B IT 4-bit on TUFF \(TUFFVersion.current)")
+        #expect(AppBenchmarkShare.title(for: result) == "M2, 16 GB: Gemma 4 E4B Q4 on TUFF \(TUFFVersion.current)")
     }
 
     @Test func aPostTooLongForAURLOpensWithTheTitleOnly() {

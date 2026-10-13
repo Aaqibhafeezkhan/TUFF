@@ -1,3 +1,4 @@
+@testable import TUFFServerEngine
 import Foundation
 import Testing
 @testable import TUFFEngine

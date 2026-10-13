@@ -4,6 +4,53 @@ import TUFFModelCatalog
 @testable import TUFFAppCore
 
 @Suite struct AppAutomaticMemoryPlannerTests {
+    @Test func aDominantMinimumExpertCacheLeavesRoomForStreamingAndOtherApps() throws {
+        let descriptor = AppModelInstallDescriptor(catalog: TUFFModelCatalog.ornith15_397B)
+        let summary = try #require(AppAutomaticMemoryPlanner.predictedLayout(for: descriptor))
+        let small = try #require(AppAutomaticMemoryPlanner.plan(for: descriptor, on: device(16),
+            profile: .speed, layoutSummary: summary, contextTokens: 2_048))
+        let roomier = try #require(AppAutomaticMemoryPlanner.plan(for: descriptor, on: device(32),
+            profile: .speed, layoutSummary: summary, contextTokens: 2_048))
+        #expect(small.expertCacheSlots == 10)
+        #expect(small.prefillChunkTokens == 32)
+        #expect(small.residentLayerCount == 0)
+        #expect(small.safeBudgetBytes == 8 << 30)
+        #expect(small.estimatedWorkingSetBytes <= small.safeBudgetBytes)
+        #expect(roomier.expertCacheSlots == 16)
+        #expect(roomier.safeBudgetBytes == 24 << 30)
+        #expect(roomier.streamedBytesPerToken == 0)
+    }
+    @Test func flashNextStartsWithTheSmallerQualifiedCache() throws {
+        let descriptor = AppModelInstallDescriptor.qwen38FlashNext
+        let summary = try #require(AppAutomaticMemoryPlanner.predictedLayout(for: descriptor))
+        let plan = try #require(AppAutomaticMemoryPlanner.plan(for: descriptor, on: device(16),
+            profile: .speed, layoutSummary: summary, contextTokens: 2_048))
+        #expect(plan.expertCacheSlots == 16)
+        let smaller = try #require(AppAutomaticLayoutPlanner.estimate(catalog: TUFFModelCatalog.qwen38FlashNext,
+            summary: summary, context: 2_048, slots: 16, chunk: 256, densePolicy: .resident, retainedBytes: 0))
+        let larger = try #require(AppAutomaticLayoutPlanner.estimate(catalog: TUFFModelCatalog.qwen38FlashNext,
+            summary: summary, context: 2_048, slots: 32, chunk: 256, densePolicy: .resident, retainedBytes: 0))
+        #expect(larger.peakAllocatedBytes - smaller.peakAllocatedBytes > 2 << 30)
+    }
+    @Test func aDominantCacheLeavesSnapshotsOffUntilThereIsRoom() throws {
+        let descriptor = AppModelInstallDescriptor(catalog: TUFFModelCatalog.ornith15_397B)
+        let layout = try #require(AppAutomaticMemoryPlanner.predictedLayout(for: descriptor))
+        let balanced = try #require(AppAutomaticMemoryPlanner.plan(for: descriptor, on: device(16),
+            profile: .balanced, layoutSummary: layout))
+        let speed = try #require(AppAutomaticMemoryPlanner.plan(for: descriptor, on: device(16),
+            profile: .speed, layoutSummary: layout))
+        let minimum = AppAutomaticLayoutPlanner.minimumUsefulRetention(config: .ornith15_397B,
+            context: balanced.contextTokens)
+        #expect(balanced.retainedConversationBytes == 0)
+        #expect(balanced.estimatedWorkingSetBytes <= balanced.safeBudgetBytes)
+        #expect(speed.retainedConversationBytes == 0)
+        #expect(balanced.residentLayerCount == 0)
+        #expect(speed.residentLayerCount == 0)
+        #expect(balanced.contextTokens == 2_048)
+        let roomier = try #require(AppAutomaticMemoryPlanner.plan(for: descriptor, on: device(32),
+            profile: .balanced, layoutSummary: layout))
+        #expect(UInt64(roomier.retainedConversationBytes ?? 0) >= minimum)
+    }
     private func device(
         _ gibibytes: UInt64,
         availableGibibytes: UInt64? = nil

@@ -9,7 +9,7 @@ from pathlib import Path
 def inference_processes():
     """Record executable names, never command arguments that may contain user text."""
     output = subprocess.check_output(['ps', '-axo', 'pid=,comm='], text=True, timeout=10)
-    names = {'TUFF', 'TUFFCLI', 'TUFFDecodeService', 'TUFFServer', 'xctest',
+    names = {'TUFF', 'TUFFCLI', 'TUFFDecodeService', 'TUFFInferenceEngine', 'TUFFServer', 'xctest',
              'swift-frontend', 'ollama', 'llama-server', 'mlx_lm'}
     processes = []
     for line in output.splitlines():

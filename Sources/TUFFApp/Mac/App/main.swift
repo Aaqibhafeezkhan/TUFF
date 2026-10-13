@@ -2,11 +2,9 @@ import Darwin
 import Foundation
 import TUFFAppCore
 import TUFFCLICore
-import TUFFDecodeServiceCore
 import TUFFServerCore
 
-// One executable serves the app, the decode service, the server and the
-// command-line runner. See `ProcessRole`.
+// The host serves app, HTTP and CLI roles. Inference runs in installed helpers.
 if let status = AppWebPDFWorker.runIfRequested(arguments: CommandLine.arguments) {
     exit(status)
 }
@@ -18,11 +16,8 @@ if let status = AppBenchmarkCommand.runIfRequested(
 
 switch ProcessRole(invokedAs: CommandLine.arguments[0]) {
 case .decodeService:
-    Task {
-        await TUFFDecodeServiceMain.main()
-        exit(0)
-    }
-    dispatchMain()
+    FileHandle.standardError.write(Data("Inference helpers are installed with each model in TUFF 9.0.\n".utf8))
+    exit(1)
 case .server:
     Task {
         exit(await RouterServerCommand.main(Array(CommandLine.arguments.dropFirst())))

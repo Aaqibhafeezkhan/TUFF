@@ -3,6 +3,12 @@ import Testing
 @testable import TUFFAppCore
 
 @Suite(.serialized) struct AppConversationPersistenceTests {
+    @Test func localChatRootUsesScopedApplicationSupport() {
+        let root = AppConversationRepository.defaultRootURL(environment:
+            ["TUFF_APPLICATION_SUPPORT_ROOT": "/tmp/tuff-isolation-fixture"])
+        #expect(root.path == "/tmp/tuff-isolation-fixture/TUFF/Chats/v1")
+        #expect(root != AppConversationRepository.defaultRootURL(environment: [:]))
+    }
     private func makeRepository() -> (URL, AppConversationRepository) {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("tuff-chats-\(UUID().uuidString)", isDirectory: true)

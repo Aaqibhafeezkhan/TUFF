@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Synchronization
 
 public protocol SourceByteProvider {
     func copyBatch(
@@ -13,20 +14,125 @@ public protocol SourceByteProvider {
     ) async throws
 }
 
-public final class HTTPRangeSourceByteProvider: SourceByteProvider {
+public final class HTTPRangeSourceByteProvider: SourceByteProvider, Sendable {
     private let remote: HuggingFaceRemoteSource
     private let files: [String: RemoteFileInfo]
     private let writeTileBytes: Int
+    private let concurrentTransfers: Int
 
     public init(remote: HuggingFaceRemoteSource,
                 files: [String: RemoteFileInfo],
-                writeTileBytes: Int = WriterCore.tileBytes) {
+                writeTileBytes: Int = WriterCore.tileBytes, concurrentTransfers: Int = 2) {
         self.remote = remote
         self.files = files
         self.writeTileBytes = writeTileBytes
+        self.concurrentTransfers = concurrentTransfers
     }
 
+    private struct WorkResult: Sendable {
+        let completed: RemoteCompletedRange
+        let sourceRead: UInt64, outputWritten: UInt64, intentional: UInt64, tiles: UInt64
+        let largestScratch: Int, largestTransfer: Int, largestHeap: Int
+        let rangeRequests: UInt64, downloaded: UInt64, rangeRetries: UInt64
+        let retries: [RepackAudit.RemoteRetryRecord]
+    }
+    private final class Progress: Sendable {
+        let state = Mutex((values: [String: UInt64](), hasCommit: false))
+        let report: @Sendable (UInt64) -> Void
+        init(_ report: @escaping @Sendable (UInt64) -> Void) { self.report = report }
+        func update(_ id: String, bytes: UInt64) {
+            state.withLock { value in
+                value.values[id] = max(value.values[id] ?? 0, bytes)
+                if value.hasCommit { report(value.values.values.reduce(0, +)) }
+            }
+        }
+        func committed() {
+            state.withLock { value in
+                value.hasCommit = true
+                report(value.values.values.reduce(0, +))
+            }
+        }
+    }
     public func copyBatch(
+        _ copies: [CoalescedRangeCopy], completedRangeIDs: Set<String>,
+        partialDirectory: String, temporaryPath: String, audit: RepackAudit,
+        progress: @escaping @Sendable (UInt64) -> Void,
+        commit: (RemoteCompletedRange) throws -> Void
+    ) async throws {
+        guard (1...4).contains(concurrentTransfers), writeTileBytes > 0,
+              writeTileBytes <= BoundedScratch.defaultLimitBytes else {
+            throw RepackError.configurationInvalid(detail: "invalid bounded range concurrency or tile size")
+        }
+        if concurrentTransfers == 1 {
+            try await copyBatchSerial(copies, completedRangeIDs: completedRangeIDs,
+                partialDirectory: partialDirectory, temporaryPath: temporaryPath, audit: audit,
+                progress: progress, commit: commit)
+            return
+        }
+        // Parallel writes are permitted only after proving that every output
+        // interval is disjoint, including transformed scale/bias destinations.
+        try RangeCopyPlanner.validateDestinationIntervals(copies.flatMap(\.destinations), outputRoot: partialDirectory)
+        let previous = try Posix.entryKind(temporaryPath)
+        if previous == .regular { try FileManager.default.removeItem(atPath: temporaryPath) }
+        else if previous != .absent { throw RepackError.configurationInvalid(detail: "unsafe stale range temporary") }
+        let prefix = (temporaryPath as NSString).lastPathComponent + ".worker-"
+        let parent = (temporaryPath as NSString).deletingLastPathComponent
+        for name in try FileManager.default.contentsOfDirectory(atPath: parent) where name.hasPrefix(prefix) {
+            let path = (parent as NSString).appendingPathComponent(name)
+            guard try Posix.entryKind(path) == .regular else {
+                throw RepackError.configurationInvalid(detail: "unsafe stale range temporary")
+            }
+            try FileManager.default.removeItem(atPath: path)
+        }
+        let pending = copies.filter { !completedRangeIDs.contains($0.id) }
+        let reporting = Progress(progress)
+        try await withThrowingTaskGroup(of: WorkResult.self) { group in
+            var next = 0
+            func submit(_ copy: CoalescedRangeCopy) {
+                group.addTask { [self] in
+                    let local = RepackAudit()
+                    let completion = Mutex<RemoteCompletedRange?>(nil)
+                    let path = temporaryPath + ".worker-" + UUID().uuidString
+                    defer { try? FileManager.default.removeItem(atPath: path) }
+                    try await copyBatchSerial([copy], completedRangeIDs: [], partialDirectory: partialDirectory,
+                        temporaryPath: path, audit: local,
+                        progress: { reporting.update(copy.id, bytes: $0) },
+                        commit: { value in completion.withLock { $0 = value } })
+                    guard let completed = completion.withLock({ $0 }) else {
+                        throw RepackError.configurationInvalid(detail: "range completed without a checkpoint digest")
+                    }
+                    return WorkResult(completed: completed, sourceRead: local.sourceBytesRead,
+                        outputWritten: local.outputBytesWritten, intentional: local.intentionalCopyBytes,
+                        tiles: local.byteCopyTiles, largestScratch: local.largestScratchBytes,
+                        largestTransfer: local.largestRemoteTransferBytes, largestHeap: local.largestRemotePayloadHeapBytes,
+                        rangeRequests: local.remoteRangeRequests, downloaded: local.remoteBytesDownloaded,
+                        rangeRetries: local.remoteRangeRetries, retries: local.remoteRetries)
+                }
+            }
+            while next < min(concurrentTransfers, pending.count) { submit(pending[next]); next += 1 }
+            while let result = try await group.next() {
+                try Task.checkCancellation()
+                // Only this parent writes the checkpoint and shared audit. A
+                // failed worker leaves its range uncommitted and safe to resume.
+                try commit(result.completed)
+                reporting.committed()
+                audit.sourceBytesRead += result.sourceRead
+                audit.outputBytesWritten += result.outputWritten
+                audit.intentionalCopyBytes += result.intentional
+                audit.byteCopyTiles += result.tiles
+                audit.largestScratchBytes = max(audit.largestScratchBytes, result.largestScratch)
+                audit.largestRemoteTransferBytes = max(audit.largestRemoteTransferBytes, result.largestTransfer)
+                audit.largestRemotePayloadHeapBytes = max(audit.largestRemotePayloadHeapBytes, result.largestHeap)
+                audit.remoteRangeRequests += result.rangeRequests
+                audit.remoteBytesDownloaded += result.downloaded
+                audit.remoteRangeRetries += result.rangeRetries
+                audit.remoteRetries += result.retries
+                if next < pending.count { submit(pending[next]); next += 1 }
+            }
+        }
+    }
+
+    private func copyBatchSerial(
         _ copies: [CoalescedRangeCopy],
         completedRangeIDs: Set<String>,
         partialDirectory: String,
@@ -187,31 +293,18 @@ public final class HTTPRangeSourceByteProvider: SourceByteProvider {
         var destination = destinationOffset
         while remaining > 0 {
             try Task.checkCancellation()
-            let count: Int
-            switch transform {
-            case .identity:
-                count = min(Int(remaining), scratch.count)
-            case .fp32ToBF16:
-                guard scratch.count >= 4, remaining.isMultiple(of: 4) else {
-                    throw RepackError.configurationInvalid(
-                        detail: "FP32 range or conversion tile is not element-aligned")
-                }
-                count = min(Int(remaining), scratch.count) & ~3
+            let alignment = Int(transform.sourceAlignment)
+            guard scratch.count >= alignment, remaining.isMultiple(of: transform.sourceAlignment) else {
+                throw RepackError.configurationInvalid(detail: "conversion tile is not aligned")
             }
+            let count = min(Int(remaining), scratch.count) / alignment * alignment
             try Posix.preadAll(
                 fd: sourceFD,
                 path: sourcePath,
                 buf: scratch.baseAddress!,
                 count: count,
                 offset: source)
-            let outputCount: Int
-            switch transform {
-            case .identity:
-                outputCount = count
-            case .fp32ToBF16:
-                outputCount = WriterCore.convertFP32ToBF16InPlace(
-                    scratch.baseAddress!, byteCount: count)
-            }
+            let outputCount = try WriterCore.convertInPlace(scratch.baseAddress!, byteCount: count, transform: transform)
             try Posix.pwriteAll(
                 fd: destinationFD,
                 path: destinationPath,

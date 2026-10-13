@@ -126,7 +126,12 @@ jobs:
           persist-credentials: false
       # Ad-hoc signing and ephemeral update keys only. No production signing
       # key exists in this repository's Actions configuration.
+      - name: Package ephemeral inference engines
+        run: Scripts/package_engines.sh "$RUNNER_TEMP/engines" "$RUNNER_TEMP/private/engine-key" 1.0.0
       - name: Package the app
+        env:
+          TUFF_LOCAL_BUILD: "1"
+          TUFF_ENGINE_CATALOG_PATH: ${{ runner.temp }}/engines/engine-catalog.json
         run: |
           version="$(ruby -e 'puts File.read("Sources/TUFFModelCatalog/TUFFVersion.swift")[/static let current\s*=\s*"([^"]+)"/, 1]')"
           Scripts/package_app.sh "$version" "$RUNNER_TEMP/package"

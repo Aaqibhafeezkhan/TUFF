@@ -56,10 +56,7 @@ public struct ExpertCachePlan: Sendable, Equatable {
     }
 }
 
-public enum ExpertCachePolicy: String, Sendable {
-    case lru
-    case lfu
-}
+public typealias ExpertCachePolicy = TUFFRuntimeDescriptions.ExpertCachePolicy
 
 /// `pread`-based routed-expert streamer with a fixed per-layer slot cache.
 public final class PreadExpertStreamer: @unchecked Sendable {
@@ -109,7 +106,8 @@ public final class PreadExpertStreamer: @unchecked Sendable {
                  device: MTLDevice,
                  slotCount: Int,
                  cachePolicy: ExpertCachePolicy = .lfu,
-                 fileDescriptor: Int32?) throws {
+                 fileDescriptor: Int32?,
+                 bypassFilesystemCache: Bool = false) throws {
         precondition(slotCount > 0, "slotCount must be positive")
         self.layout = layout
         self.slotCount = slotCount
@@ -124,6 +122,7 @@ public final class PreadExpertStreamer: @unchecked Sendable {
         self.fd = openedFD
         var closeFDOnFailure = true
         defer { if closeFDOnFailure { close(openedFD) } }
+        if bypassFilesystemCache { _ = fcntl(openedFD, F_NOCACHE, 1) }
 
         var fileStats = stat()
         guard fstat(openedFD, &fileStats) == 0,

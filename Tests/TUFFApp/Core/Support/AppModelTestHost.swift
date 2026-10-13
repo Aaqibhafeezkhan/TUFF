@@ -1,3 +1,4 @@
+@testable import TUFFEngineAdapter
 import Foundation
 import TUFFModelCatalog
 @testable import TUFFAppCore

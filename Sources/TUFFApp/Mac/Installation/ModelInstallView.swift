@@ -34,10 +34,7 @@ struct ModelInstallView: View {
             Text("Choose a model")
                 .appFont(.title.bold())
                 .accessibilityHeading(.h1)
-            Text("TUFF needs one of these installed before it can generate text. "
-                 + "Each one downloads independently, so you can install as many "
-                 + "as you have room for and switch between them. A download "
-                 + "keeps running while you use another model.")
+            Text("Download a model to start chatting. You can add more later.")
                 .appFont(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -47,21 +44,20 @@ struct ModelInstallView: View {
 
     private var locationCard: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Install location for \(model.selectedDescriptor.displayName)")
-                .appFont(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-            Text(model.modelPathText)
-                .appFont(.caption.monospaced())
-                .foregroundStyle(.tertiary)
-                .lineLimit(2)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            HStack {
-                Spacer()
-                Button("Check Again", action: model.recheckModelAtCurrentLocation)
-                    .disabled(model.isInstallingModel)
-                    .help("Re-scan every model's directory, "
-                          + "for a model installed outside the app")
+            DisclosureGroup("Install location") {
+                Text(model.modelPathText)
+                    .appFont(.caption.monospaced())
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack {
+                    Spacer()
+                    Button("Check Again", action: model.recheckModelAtCurrentLocation)
+                        .disabled(model.isInstallingModel)
+                        .help("Re-scan every model's directory, "
+                              + "for a model installed outside the app")
+                }
             }
         }
         .padding(18)

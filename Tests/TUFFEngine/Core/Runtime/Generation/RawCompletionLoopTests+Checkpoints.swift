@@ -11,13 +11,17 @@ extension RawCompletionLoopTests {
     {
         let vocabSize: Int
         private let terminalToken: Int32
+        private let checkpointBytes: Int
+        private let device: MTLDevice?
         private(set) var continuationPosition = 0
         private(set) var prefillRanges: [Range<Int>] = []
         private(set) var checkpointPositions: [Int] = []
 
-        init(vocabSize: Int, terminalToken: Int32) {
+        init(vocabSize: Int, terminalToken: Int32, checkpointBytes: Int = 0, device: MTLDevice? = nil) {
             self.vocabSize = vocabSize
             self.terminalToken = terminalToken
+            self.checkpointBytes = checkpointBytes
+            self.device = device
         }
 
         func reset() { continuationPosition = 0 }
@@ -42,11 +46,12 @@ extension RawCompletionLoopTests {
         }
 
         var supportsPrefixCheckpoints: Bool { true }
-        var prefixCheckpointByteEstimate: Int { 0 }
+        var prefixCheckpointByteEstimate: Int { checkpointBytes }
         func capturePrefixCheckpoint() throws -> RunnerStateSnapshot {
             checkpointPositions.append(continuationPosition)
             return RunnerStateSnapshot(
-                owner: ObjectIdentifier(self), storage: nil, segments: [],
+                owner: ObjectIdentifier(self), storage: checkpointBytes > 0
+                    ? device?.makeBuffer(length: checkpointBytes, options: .storageModeShared) : nil, segments: [],
                 host: .init(position: continuationPosition, ngramContext: [], ropeDelta: 0))
         }
         func rewind(to checkpoint: RunnerStateSnapshot) throws {}
@@ -55,6 +60,36 @@ extension RawCompletionLoopTests {
             let pointer = logits.contents().bindMemory(to: Float16.self, capacity: vocabSize)
             for index in 0..<vocabSize { pointer[index] = -30 }
             pointer[Int(terminalToken)] = 30
+        }
+    }
+
+    @Test func giantExpertWorkingSetsAvoidDuplicateFileCachesOnlyOnConstrainedDevices() {
+        let stride: UInt64 = 7_864_320
+        #expect(Model.shouldBypassExpertFilesystemCache(expertStride: stride, minimumSlots: 10,
+            layers: 60, physicalMemory: 16 << 30))
+        #expect(!Model.shouldBypassExpertFilesystemCache(expertStride: stride, minimumSlots: 10,
+            layers: 60, physicalMemory: 32 << 30))
+        #expect(!Model.shouldBypassExpertFilesystemCache(expertStride: 1 << 20, minimumSlots: 8,
+            layers: 30, physicalMemory: 16 << 30))
+        #expect(Model.shouldBypassExpertFilesystemCache(expertStride: .max, minimumSlots: 10,
+            layers: 60, physicalMemory: 16 << 30))
+    }
+
+    @Test func checkpointCopiesRespectTheBudgetBeforeAllocation() async throws {
+        let context = try MetalContext()
+        let tokenizer = try await GFTokenizer.load()
+        for budget in [0, 16] {
+            let producer = CheckpointingProducer(vocabSize: tokenizer.vocabSize,
+                terminalToken: tokenizer.eosID, checkpointBytes: 16, device: context.device)
+            let scratch = try RawCompletionScratch(context: context, vocab: tokenizer.vocabSize)
+            let result = try await runRawCompletion(producer: producer, tokenizer: tokenizer,
+                promptIds: Array(repeating: tokenizer.encode("a", addBOS: false)[0], count: 40),
+                config: GenerationConfig(maxNewTokens: 4, temperature: 0), context: context, scratch: scratch,
+                prefillConfig: .production(chunkTokens: 32), prefixCheckpointPositions: [25, 40],
+                checkpointBudgetBytes: budget) { _ in }
+            #expect(producer.checkpointPositions == (budget == 0 ? [] : [25]))
+            #expect(result.prefixCheckpoints.reduce(0) { $0 + $1.byteCount } <= budget)
+            #expect(producer.continuationPosition == 40)
         }
     }
 

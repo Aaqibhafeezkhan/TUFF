@@ -39,38 +39,7 @@ enum GPTOSSExpertRuntimeError: Error, Equatable {
 /// vectors scale with `queryCapacity * topK`. Down-projection partials stay
 /// FP32: a valid expert output can exceed FP16 before route weighting, and
 /// cancellation across experts must happen before any narrowing conversion.
-struct GPTOSSExpertScratchLayout: Sendable, Equatable {
-    static let maximumPrefillQueries = PrefillRuntimeConfig.maxChunkTokens
-
-    let hiddenSize: Int
-    let intermediateSize: Int
-    let topK: Int
-    let queryCapacity: Int
-
-    init(hiddenSize: Int, intermediateSize: Int,
-         topK: Int = 4, queryCapacity: Int) {
-        precondition(hiddenSize > 0 && hiddenSize.isMultiple(of: 32))
-        precondition(intermediateSize > 0 && intermediateSize.isMultiple(of: 32))
-        precondition(topK > 0)
-        self.hiddenSize = hiddenSize
-        self.intermediateSize = intermediateSize
-        self.topK = topK
-        self.queryCapacity = max(1, min(queryCapacity, Self.maximumPrefillQueries))
-    }
-
-    var routeCapacity: Int { queryCapacity * topK }
-    var mlp1Elements: Int { 2 * intermediateSize }
-    var activationElements: Int { intermediateSize }
-    var routePartialElements: Int { routeCapacity * hiddenSize }
-    var privateBytes: Int {
-        (mlp1Elements + activationElements) * MemoryLayout<Float16>.stride
-            + routePartialElements * MemoryLayout<Float>.stride
-    }
-    var sharedBytes: Int {
-        routeCapacity * MemoryLayout<Float16>.stride
-    }
-    var totalBytes: Int { privateBytes + sharedBytes }
-}
+package typealias GPTOSSExpertScratchLayout = TUFFRuntimeDescriptions.GPTOSSExpertScratchLayout
 
 struct GPTOSSExpertScratchBuffers {
     let layout: GPTOSSExpertScratchLayout

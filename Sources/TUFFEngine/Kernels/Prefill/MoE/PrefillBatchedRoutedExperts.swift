@@ -16,7 +16,7 @@ import Metal
 /// Rows are processed in microbatches of at most `maxRows`, which bounds the
 /// scratch whatever the chunk size and routing skew.
 final class PrefillBatchedRoutedExperts {
-    static let maxRows = 1_024
+    static let maxRows = RuntimeAllocationGeometry.maximumBatchedExpertRows
 
     private let qmm: MPPPrefillAffineQMM
     private let gatherPSO: MTLComputePipelineState

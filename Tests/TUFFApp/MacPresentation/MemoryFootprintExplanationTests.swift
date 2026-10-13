@@ -12,18 +12,19 @@ import Testing
         // "experts" would claim the 12.9 GB routed pool is inside the footprint.
         // Only the 16 pread slot buffers are.
         #expect(!text.contains("experts"))
-        #expect(text.contains("the KV cache, working buffers and expert slots."))
+        #expect(text.contains("the KV cache, working buffers, expert slots and staged weights."))
     }
 
     @Test func theExplanationIsTheChargedLineAndTheExclusion() {
         let text = MemoryFootprintExplanation.text(chargedBytes: Self.chargedBytes)
         #expect(text == """
             \(MetricFormat.memory(Self.chargedBytes)) charged to the app \u{2014} the KV cache, \
-            working buffers and expert slots.
+            working buffers, expert slots and staged weights.
 
-            The model's weights and the image tower are not counted here: the GPU reads them \
-            straight from disk, and macOS keeps them as cached files it can drop at any moment, \
-            charged to no app. To see them: Activity Monitor > Memory > Cached Files.
+            File-backed resident weights and the image tower may be excluded from \
+            this footprint. It is not total RAM use. Auto's calculated allocation \
+            includes mapped weights and staging. File cache usage is shown in \
+            Activity Monitor > Memory > Cached Files.
             """)
     }
 

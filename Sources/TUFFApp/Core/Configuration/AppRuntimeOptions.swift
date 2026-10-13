@@ -1,5 +1,5 @@
 import Foundation
-import TUFFEngine
+import TUFFRuntimeDescriptions
 
 public enum AppExpertCachePolicy: String, CaseIterable, Sendable, Identifiable {
     case lfu
@@ -18,7 +18,7 @@ public enum AppRDAdvicePolicy: String, Codable, CaseIterable, Sendable, Identifi
     public var id: String { rawValue }
     public var label: String { rawValue.capitalized }
 
-    var runtimeValue: RDAdvicePolicyMode {
+    package var runtimeValue: RDAdvicePolicyMode {
         switch self {
         case .off: return .off
         case .default: return .default
@@ -41,7 +41,7 @@ public enum AppModelVerification: String, CaseIterable, Sendable, Identifiable {
         }
     }
 
-    var runtimeValue: ModelIntegrityPolicy {
+    package var runtimeValue: ModelIntegrityPolicy {
         switch self {
         case .fullSha256: return .fullSha256
         case .trustedInstall: return .sizeCheckTrustedReceipt
@@ -59,7 +59,9 @@ public struct AppRuntimeOptions: Equatable, Sendable {
     public var prefillChunkTokens: Int
     public var rdadvisePolicy: AppRDAdvicePolicy
     public var modelVerification: AppModelVerification
+    public var denseResidencyPolicy: DenseResidencyPolicy
     public var visionResidencyPolicy: VisionResidencyPolicy
+    public var retainedConversationBytes: Int?
 
     public init(expertCacheSlots: Int = 16,
                 expertCachePolicy: AppExpertCachePolicy = .lfu,
@@ -67,7 +69,8 @@ public struct AppRuntimeOptions: Equatable, Sendable {
                 prefillChunkTokens: Int = 128,
                 rdadvisePolicy: AppRDAdvicePolicy = .off,
                 modelVerification: AppModelVerification = .fullSha256,
-                visionResidencyPolicy: VisionResidencyPolicy = .onDemand) {
+                visionResidencyPolicy: VisionResidencyPolicy = .onDemand,
+                denseResidencyPolicy: DenseResidencyPolicy = .resident, retainedConversationBytes: Int? = nil) {
         self.expertCacheSlots = expertCacheSlots
         self.expertCachePolicy = expertCachePolicy
         self.prefillEnabled = prefillEnabled
@@ -75,9 +78,18 @@ public struct AppRuntimeOptions: Equatable, Sendable {
         self.rdadvisePolicy = rdadvisePolicy
         self.modelVerification = modelVerification
         self.visionResidencyPolicy = visionResidencyPolicy
+        self.denseResidencyPolicy = denseResidencyPolicy
+        self.retainedConversationBytes = retainedConversationBytes
     }
 
     public func validate() throws {
+        guard retainedConversationBytes.map({ (0...(1 << 30)).contains($0) }) ?? true else {
+            throw AppInferenceError.invalidRequest("invalid retained conversation budget")
+        }
+        if case .bounded(let layers) = denseResidencyPolicy,
+           !layers.allSatisfy({ $0 >= 0 && $0 < 1024 }) {
+            throw AppInferenceError.invalidRequest("invalid resident dense layers")
+        }
         guard Self.allowedSlotCounts.contains(expertCacheSlots) else {
             throw AppInferenceError.invalidRequest(
                 "expert cache slots must be one of \(Self.allowedSlotCounts)")
@@ -130,12 +142,14 @@ public struct AppRuntimeOptions: Equatable, Sendable {
 }
 
 public struct AppLoadedRuntimeKey: Equatable, Sendable {
+    public var retainedConversationBytes: Int?
     public var modelDirectory: URL
     public var maxContextTokens: Int
     public var expertCacheSlots: Int
     public var expertCachePolicy: AppExpertCachePolicy
     public var rdadvisePolicy: AppRDAdvicePolicy
     public var modelVerification: AppModelVerification
+    public var denseResidencyPolicy: DenseResidencyPolicy
     public var visionResidencyPolicy: VisionResidencyPolicy
     public var forceLogitsHead: Bool
 
@@ -144,12 +158,14 @@ public struct AppLoadedRuntimeKey: Equatable, Sendable {
                 options: AppRuntimeOptions,
                 forceLogitsHead: Bool = false) {
         self.modelDirectory = modelDirectory.standardizedFileURL
+        self.retainedConversationBytes = options.retainedConversationBytes
         self.maxContextTokens = maxContextTokens
         self.expertCacheSlots = options.expertCacheSlots
         self.expertCachePolicy = options.expertCachePolicy
         self.rdadvisePolicy = options.rdadvisePolicy
         self.modelVerification = options.modelVerification
         self.visionResidencyPolicy = options.visionResidencyPolicy
+        self.denseResidencyPolicy = options.denseResidencyPolicy
         self.forceLogitsHead = forceLogitsHead
     }
 
@@ -169,6 +185,7 @@ public struct AppLoadedRuntimeKey: Equatable, Sendable {
             prefillChunkTokens: prefillChunkTokens,
             rdadvisePolicy: rdadvisePolicy,
             modelVerification: modelVerification,
-            visionResidencyPolicy: visionResidencyPolicy)
+            visionResidencyPolicy: visionResidencyPolicy,
+            denseResidencyPolicy: denseResidencyPolicy, retainedConversationBytes: retainedConversationBytes)
     }
 }

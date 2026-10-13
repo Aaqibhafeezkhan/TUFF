@@ -1,8 +1,21 @@
 import Testing
+import Foundation
 import TUFFEngine
 @testable import TUFFCLICore
 
 @Suite struct CLIArgumentsTests {
+    @Test func topKHelpExplainsHowToDisableTruncation() {
+        #expect(Args.usage.contains("0 = off with --top-p 1 or --temperature 0"))
+    }
+    @Test func automaticMemoryFlagAndOlderJSONPayloadsRemainCompatible() throws {
+        let arguments = try Args.parse(["--model", "m.gturbo", "--prompt", "hi", "--memory-auto"])
+        #expect(arguments.automaticMemory == true)
+        var older = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(arguments)) as? [String: Any])
+        older.removeValue(forKey: "automaticMemory")
+        let decoded = try JSONDecoder().decode(Args.self, from: JSONSerialization.data(withJSONObject: older))
+        #expect(decoded.automaticMemory == nil)
+        #expect(decoded.model == arguments.model)
+    }
     @Test func defaultsUseProductionGenerationValues() throws {
         let arguments = try Args.parse(["--model", "m.gturbo", "--prompt", "hi"])
         #expect(arguments.model == "m.gturbo")
@@ -71,7 +84,7 @@ import TUFFEngine
 
     @Test func helpListsExactlyThePublicOptions() {
         let expected: Set<String> = [
-            "--model", "--prompt", "--messages-file", "--max-new", "--max-context",
+            "--model", "--prompt", "--messages-file", "--max-new", "--max-context", "--memory-auto",
             "--system-prompt",
             "--thinking", "--reasoning",
             "--temperature", "--top-k", "--top-p", "--repetition-penalty",
@@ -81,6 +94,7 @@ import TUFFEngine
             "--rdadvise", "--help",
             "--chat-prompt", "--image", "--vision-pack", "--vision-residency",
             "--speculative", "--speculative-draft-tokens",
+            "--dense-residency", "--dense-weight-budget-mb",
         ]
         let words = Args.usage.split { $0.isWhitespace || $0 == "(" || $0 == ")" }
         let options = Set(words.map(String.init).filter { $0.hasPrefix("--") })

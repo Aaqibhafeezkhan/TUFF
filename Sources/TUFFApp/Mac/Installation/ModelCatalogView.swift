@@ -15,26 +15,32 @@ struct ModelCatalogView: View {
     /// inspector, where the row sits in a narrow column.
     var compact: Bool = false
     var showsAddOns: Bool = true
+    @State private var expandedGroups: Set<ModelCatalogGroup> = [.streaming, .resident]
 
     var body: some View {
         VStack(alignment: .leading, spacing: compact ? 8 : 14) {
-            // Grouped by how the model is run, because that is the difference
-            // that decides whether it fits this Mac. A streaming model's size
-            // is governed by disk and a resident one's by memory, so listing a
-            // 61 GiB model beside a 4 GiB one with nothing to separate them
-            // made the catalogue look like a straight size ranking.
+            // Legacy models stay available in their own catalog section.
             ForEach(ModelCatalogGroup.allCases) { group in
                 let installs = model.installs.filter {
                     group.contains($0.descriptor)
                 }
                 if !installs.isEmpty {
-                    if !compact { groupHeader(group) }
-                    ForEach(installs) { install in
-                        ModelCatalogRow(
-                            model: model,
-                            install: install,
-                            compact: compact,
-                            showsAddOns: showsAddOns)
+                    DisclosureGroup(isExpanded: Binding(
+                        get: { expandedGroups.contains(group) },
+                        set: { expanded in
+                            if expanded { expandedGroups.insert(group) }
+                            else { expandedGroups.remove(group) }
+                        }
+                    )) {
+                        VStack(alignment: .leading, spacing: compact ? 8 : 12) {
+                            ForEach(installs) { install in
+                                ModelCatalogRow(model: model, install: install,
+                                    compact: compact, showsAddOns: showsAddOns)
+                            }
+                        }
+                        .padding(.top, 8)
+                    } label: {
+                        groupHeader(group)
                     }
                 }
             }
@@ -49,24 +55,27 @@ struct ModelCatalogView: View {
     }
 }
 
-/// How a model is run, which is what decides what it needs from the Mac.
+/// Maintenance status takes precedence over the maintained-model layout groups.
 enum ModelCatalogGroup: String, CaseIterable, Identifiable {
     case streaming
     case resident
+    case legacy
 
     var id: String { rawValue }
 
     func contains(_ descriptor: AppModelInstallDescriptor) -> Bool {
         switch self {
-        case .streaming: descriptor.usesExpertCache
-        case .resident: !descriptor.usesExpertCache
+        case .streaming: !descriptor.isLegacy && descriptor.usesExpertCache
+        case .resident: !descriptor.isLegacy && !descriptor.usesExpertCache
+        case .legacy: descriptor.isLegacy
         }
     }
 
     var title: String {
         switch self {
-        case .streaming: "Streamed from SSD"
-        case .resident: "Loaded Fully into Memory"
+        case .streaming: "MoE"
+        case .resident: "Dense"
+        case .legacy: "Legacy"
         }
     }
 }
@@ -216,61 +225,25 @@ struct ModelCatalogRow: View {
         return .notInstalled
     }
 
-    /// The four numbers that decide whether to download this, on one line.
-    ///
-    /// They used to be four stacked label/value rows, plus a green "Compatible
-    /// with this Mac" on every compatible card, plus the free space on this
-    /// Mac — six lines of chrome per model, five of which said nothing was
-    /// wrong. What is left is the facts, and the warnings only when there is
-    /// something to warn about.
     private var storage: some View {
         VStack(alignment: .leading, spacing: 6) {
-            SpecLine(specs: [
-                Spec(label: "Download",
-                     value: MetricFormat.storage(
-                        install.descriptor.approximateDownloadBytes)),
-                Spec(label: "On disk",
-                     value: MetricFormat.storage(install.descriptor.installedBytes)),
-                // One spec, two figures. As separate specs the second read as a
-                // rival to the "Recommended" badge on the model's own name.
-                Spec(label: "Memory", value: memorySpecValue),
-            ])
-            .help("\(MetricFormat.memory(hardwareEligibility.minimumUnifiedMemoryBytes)) "
-                  + "is the floor below which this model will not load. "
-                  + "\(MetricFormat.memory(install.descriptor.recommendedUnifiedMemoryBytes)) "
-                  + "is where its default context and cache settings fit with "
-                  + "macOS and other apps still running.")
-
+            Text((install.descriptor.customIdentity == nil
+                ? MetricFormat.storage(install.descriptor.approximateDownloadBytes) + " download · "
+                : "Local checkpoint · ")
+                + MetricFormat.memory(hardwareEligibility.minimumUnifiedMemoryBytes)
+                + " RAM minimum")
+                .appFont(.caption)
+                .foregroundStyle(.secondary)
             if !hardwareEligibility.isCompatible,
                let explanation = hardwareEligibility.explanation {
                 warning(explanation, symbol: "memorychip")
-                if model.bypassModelRestrictions {
-                    warning("Restrictions are bypassed, so this can still be "
-                            + "downloaded and loaded. It may swap heavily or be "
-                            + "terminated by macOS.",
-                            symbol: "exclamationmark.triangle")
-                }
             }
             if let requirement = install.requirement, !install.isInstalled,
                !requirement.canInstall {
-                warning("\(MetricFormat.storage(requirement.shortfallBytes)) more "
-                        + "free space is required; this Mac has "
-                        + "\(MetricFormat.storage(requirement.availableBytes)).",
-                        symbol: "externaldrive.badge.exclamationmark")
+                warning("Free " + MetricFormat.storage(requirement.shortfallBytes)
+                    + " more storage to download.", symbol: "externaldrive")
             }
         }
-    }
-
-    /// "8 GB min" when that is also the comfortable size, and both figures when
-    /// they differ. Printing "8 GB min · 8 GB recommended" says nothing twice.
-    private var memorySpecValue: String {
-        let minimum = hardwareEligibility.minimumUnifiedMemoryBytes
-        let recommended = install.descriptor.recommendedUnifiedMemoryBytes
-        guard recommended > minimum else {
-            return "\(MetricFormat.memory(minimum)) min"
-        }
-        return "\(MetricFormat.memory(minimum)) min · "
-            + "\(MetricFormat.memory(recommended)) recommended"
     }
 
     private func warning(_ text: String, symbol: String) -> some View {
@@ -451,9 +424,6 @@ struct ModelCatalogRow: View {
             }
             .disabled(!model.canCancelVisionInstall)
         } else if visionIsInstalled {
-            Label("Image Support installed", systemImage: "checkmark.circle.fill")
-                .appFont(.caption)
-                .foregroundStyle(.green)
             Button("Remove", role: .destructive) {
                 showingVisionRemoveConfirmation = true
             }
@@ -496,10 +466,7 @@ struct ModelCatalogRow: View {
 
     @ViewBuilder
     private var visionMessage: some View {
-        if !install.isInstalled {
-            Label("Install the text model first", systemImage: "arrow.down.circle")
-                .foregroundStyle(.secondary)
-        } else if !model.isVisionRuntimeSupported {
+        if !model.isVisionRuntimeSupported {
             Label("Image input requires an M2 or newer Mac", systemImage: "memorychip")
                 .foregroundStyle(.orange)
         } else if model.isVisionInstallTarget(install),
@@ -603,68 +570,5 @@ struct ModelCatalogRow: View {
         let percent = MetricFormat.percent(fraction * 100)
         guard let eta = install.etaText else { return percent }
         return "\(percent), \(eta)"
-    }
-}
-
-/// One labelled figure in a model's spec line.
-struct Spec: Identifiable {
-    let label: String
-    let value: String
-    var id: String { label }
-}
-
-/// A model's numbers as one wrapping line rather than a stack of rows.
-///
-/// A row per figure gave each of them a full line of the card and a lot of
-/// vertical whitespace between the name and the button, which is what made the
-/// catalogue feel heavy. These read left to right and wrap when the column is
-/// narrow.
-struct SpecLine: View {
-    let specs: [Spec]
-
-    var body: some View {
-        ViewThatFits(in: .horizontal) {
-            line(spacing: 14)
-            grid
-        }
-        .appFont(.caption)
-        .accessibilityElement(children: .combine)
-    }
-
-    private func line(spacing: CGFloat) -> some View {
-        HStack(spacing: spacing) {
-            ForEach(specs) { spec in
-                spec.view
-            }
-        }
-    }
-
-    /// Two columns when one line will not fit, which keeps a narrow window
-    /// from turning four figures into four lines.
-    private var grid: some View {
-        let half = (specs.count + 1) / 2
-        return VStack(alignment: .leading, spacing: 4) {
-            ForEach(0..<half, id: \.self) { row in
-                HStack(spacing: 14) {
-                    specs[row].view
-                    if row + half < specs.count {
-                        specs[row + half].view
-                    }
-                    Spacer(minLength: 0)
-                }
-            }
-        }
-    }
-}
-
-private extension Spec {
-    var view: some View {
-        HStack(spacing: 4) {
-            Text(label)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .monospacedDigit()
-        }
-        .fixedSize()
     }
 }

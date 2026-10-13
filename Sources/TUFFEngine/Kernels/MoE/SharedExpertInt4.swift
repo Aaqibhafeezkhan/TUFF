@@ -38,13 +38,20 @@ public final class SharedExpertInt4 {
                        y: MTLBuffer, yOffset: Int = 0,
                        scratchGate: MTLBuffer, scratchGateOffset: Int = 0,
                        scratchUp: MTLBuffer, scratchUpOffset: Int = 0,
-                       scratchAct: MTLBuffer, scratchActOffset: Int = 0) throws {
+                       scratchAct: MTLBuffer, scratchActOffset: Int = 0,
+                       outputGate: MTLBuffer? = nil, outputGateOffset: Int = 0) throws {
         guard gate.rows == up.rows, gate.cols == up.cols,
               down.rows == gate.cols, down.cols == gate.rows else {
             throw SharedExpertError.dimensionMismatch(
                 "gate=(\(gate.rows),\(gate.cols)) up=(\(up.rows),\(up.cols)) down=(\(down.rows),\(down.cols))")
         }
         let intermediate = Int(gate.rows)
+        if let outputGate {
+            guard outputGateOffset >= 0, outputGateOffset % 2 == 0,
+                  outputGateOffset <= outputGate.length - 2 else {
+                throw SharedExpertError.scratchTooSmall("scalar gate range exceeds buffer")
+            }
+        }
         let required = intermediate * MemoryLayout<Float16>.stride
         guard scratchGateOffset >= 0, scratchGateOffset + required <= scratchGate.length,
               scratchUpOffset >= 0, scratchUpOffset + required <= scratchUp.length,
@@ -93,7 +100,8 @@ public final class SharedExpertInt4 {
                     biases: down.biases, biasesOffset: down.biasesOffset,
                     x: scratchAct, xOffset: scratchActOffset,
                     y: y, yOffset: yOffset,
-                    m: down.rows, n: down.cols)
+                    m: down.rows, n: down.cols,
+                    outputGate: outputGate, outputGateOffset: outputGateOffset)
     }
 }
 
@@ -130,15 +138,18 @@ public final class SharedExpertRuntime {
                        y: MTLBuffer, yOffset: Int = 0,
                        scratchGate: MTLBuffer, scratchGateOffset: Int = 0,
                        scratchUp: MTLBuffer, scratchUpOffset: Int = 0,
-                       scratchAct: MTLBuffer, scratchActOffset: Int = 0) throws {
+                       scratchAct: MTLBuffer, scratchActOffset: Int = 0,
+                       outputGate: MTLBuffer? = nil, outputGateOffset: Int = 0) throws {
         switch implementation {
         case .int4(let runtime):
             try runtime.encode(commandBuffer: commandBuffer, x: x, xOffset: xOffset,
                                gate: gate, up: up, down: down, y: y, yOffset: yOffset,
                                scratchGate: scratchGate, scratchGateOffset: scratchGateOffset,
                                scratchUp: scratchUp, scratchUpOffset: scratchUpOffset,
-                               scratchAct: scratchAct, scratchActOffset: scratchActOffset)
+                               scratchAct: scratchAct, scratchActOffset: scratchActOffset,
+                               outputGate: outputGate, outputGateOffset: outputGateOffset)
         case .int8(let runtime):
+            guard outputGate == nil else { throw SharedExpertError.unsupportedWeightBits(weightBits) }
             try runtime.encode(commandBuffer: commandBuffer, x: x, xOffset: xOffset,
                                gate: gate, up: up, down: down, y: y, yOffset: yOffset,
                                scratchAct: scratchAct, scratchActOffset: scratchActOffset)

@@ -1,32 +1,32 @@
 import Foundation
 
-enum ServerLog {
-    static func accepted(id: String, streaming: Bool) {
+package enum ServerLog {
+    package static func accepted(id: String, streaming: Bool) {
         write("request \(id) accepted streaming=\(streaming)")
     }
 
-    static func prepared(id: String, promptTokens: Int?) {
+    package static func prepared(id: String, promptTokens: Int?) {
         let count = promptTokens.map(String.init) ?? "backend-managed"
         write("request \(id) prepared prompt=\(count)")
     }
 
-    static func queued(id: String) {
+    package static func queued(id: String) {
         write("request \(id) queued")
     }
 
-    static func generating(id: String) {
+    package static func generating(id: String) {
         write("request \(id) generating")
     }
 
-    static func modelLoaded(_ model: String) {
+    package static func modelLoaded(_ model: String) {
         write("model \(model) loaded")
     }
 
-    static func modelUnloaded(_ model: String) {
+    package static func modelUnloaded(_ model: String) {
         write("model \(model) unloaded")
     }
 
-    static func completed(id: String,
+    package static func completed(id: String,
                           duration: Duration,
                           completion: ServerCompletion) {
         let usage = completion.usage
@@ -41,23 +41,23 @@ enum ServerLog {
     /// belongs to the request between the preceding `generating` and the
     /// following `completed`. Carries a reason code only, never prompt content.
 
-    static func visionPackInvalid(at url: URL, error: Error) {
+    package static func visionPackInvalid(at url: URL, error: Error) {
         write("vision pack at \(url.path) is invalid: \(String(reflecting: error))")
     }
 
-    static func visionRuntimeUnsupported(at url: URL, error: Error) {
+    package static func visionRuntimeUnsupported(at url: URL, error: Error) {
         write("vision runtime for pack at \(url.path) is unsupported: "
             + String(reflecting: error))
     }
 
-    static func visionRuntimeUnsupported() {
+    package static func visionRuntimeUnsupported() {
         write("vision runtime is unsupported: the image tower requires an M2 or newer Mac")
     }
 
     /// A prefix that could not be continued because its bridge failed to
     /// render. Carries the underlying error, because this miss means the
     /// template and the cached turn disagree, which no other miss does.
-    static func promptCacheBridgeFailed(error: Error) {
+    package static func promptCacheBridgeFailed(error: Error) {
         write("prompt cache miss reason=bridge-render-failed "
             + "error=\(String(reflecting: error))")
     }
@@ -67,18 +67,18 @@ enum ServerLog {
     /// added because excluding it from logging altogether left the request's last
     /// line as `generating` forever: an operator could not tell a running request
     /// from an abandoned one, or from a crashed one. Carries no content.
-    static func cancelled(id: String, phase: String, duration: Duration) {
+    package static func cancelled(id: String, phase: String, duration: Duration) {
         write(cancelledMessage(id: id, phase: phase, duration: duration))
     }
 
     /// Split out so the wording can be checked without a log sink: this line
     /// must stay distinguishable from `failed`, must name the phase, and must
     /// carry no prompt or generated content.
-    static func cancelledMessage(id: String, phase: String, duration: Duration) -> String {
+    package static func cancelledMessage(id: String, phase: String, duration: Duration) -> String {
         "request \(id) cancelled by client in \(format(duration)) phase=\(phase)"
     }
 
-    static func failed(id: String,
+    package static func failed(id: String,
                        phase: String,
                        status: UInt,
                        error: Error) {

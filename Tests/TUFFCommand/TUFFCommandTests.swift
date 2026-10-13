@@ -5,6 +5,18 @@ import TUFFModelCatalog
 
 @Suite("Unified tuff command")
 struct TUFFCommandTests {
+    @Test func explicitMemoryControlsRemainManual() throws {
+        let plan = try TUFFCommand.plan(arguments: ["prompt", "hello", "--model", "ornith-397b",
+                "--expert-cache-slots", "10", "--dense-weight-budget-mb", "2500"],
+            executableURL: URL(fileURLWithPath: "/repo/.build/debug/TUFFCommand"),
+            currentDirectoryURL: URL(fileURLWithPath: "/repo"),
+            applicationSupportURL: URL(fileURLWithPath: "/support"),
+            fileExists: { $0 == "/repo/.build/debug/TUFFCLI" })
+        guard case .run(_, let arguments) = plan else { Issue.record("expected prompt command"); return }
+        #expect(!arguments.contains("--memory-auto"))
+        #expect(option("--expert-cache-slots", in: arguments) == "10")
+        #expect(option("--dense-weight-budget-mb", in: arguments) == "2500")
+    }
     private let repository = URL(fileURLWithPath: "/repo", isDirectory: true)
     private let appSupport = URL(
         fileURLWithPath: "/Users/test/Library/Application Support", isDirectory: true)
@@ -36,6 +48,7 @@ struct TUFFCommandTests {
         ])
         #expect(option("--max-context", in: arguments) == "4096")
         #expect(option("--expert-cache-slots", in: arguments) == "16")
+        #expect(arguments.contains("--memory-auto"))
         #expect(option("--thinking", in: arguments) == "on")
         #expect(option("--system-prompt", in: arguments)
             == TUFFModelCatalog.minimaxM27.defaultSystemPrompt)

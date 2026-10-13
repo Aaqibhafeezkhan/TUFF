@@ -1,6 +1,8 @@
 import Foundation
 
 public enum AppModelLoadPhase: Equatable, Sendable {
+    case calibratingAuto
+    case preparingEngine
     case validatingDirectory
     case tokenizer
     case verifyingWeights
@@ -11,6 +13,8 @@ public enum AppModelLoadPhase: Equatable, Sendable {
 
     public var label: String {
         switch self {
+        case .calibratingAuto: return "Tuning Auto (15-second probe budget)"
+        case .preparingEngine: return "Preparing inference engine"
         case .validatingDirectory: return "Validating model directory"
         case .tokenizer: return "Loading tokenizer"
         case .verifyingWeights: return "Verifying weights"

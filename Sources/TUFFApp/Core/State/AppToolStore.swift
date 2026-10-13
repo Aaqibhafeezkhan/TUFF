@@ -28,8 +28,8 @@ public enum AppToolSupport: Equatable, Sendable {
 
     public static func forModel(_ id: TUFFModelID) -> AppToolSupport {
         switch id {
-        case .gemma4_26B_A4B, .qwen38FlashNext, .gemma4_12B_QAT, .gemma4_E4B, .gemma4_E2B,
-             .qwen36_35B_A3B, .gptOss_20B:
+        case .gemma4_26B_A4B, .gemma4_26B_Heretic, .qwen38FlashNext, .gemma4_12B_QAT, .gemma4_E4B, .gemma4_E2B,
+             .qwen36_35B_A3B, .gptOss_20B, .ornith15_9B, .ornith15_35B_A3B, .qwen38_27B, .ornith15_397B:
             .validated
         case .gptOss_120B, .minimaxM27:
             .untested

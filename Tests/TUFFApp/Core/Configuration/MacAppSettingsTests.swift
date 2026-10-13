@@ -327,7 +327,7 @@ import TUFFModelCatalog
         let minimax = AppModelSettingsProfile.defaults(for: "minimax-m2.7")
         #expect(minimax.systemPrompt
             == "You are MiniMax M2.7, a helpful AI assistant. "
-                + "You are running in a SSD MoE streaming app on Mac called TUFF.")
+                + "You are running locally on a Mac in an app called TUFF.")
     }
 
     @Test func versionFourAddsDefaultsWithoutReplacingCustomSystemPrompts() throws {
@@ -676,7 +676,7 @@ import TUFFModelCatalog
             contextTokens: 32_768,
             expertCacheSlots: 24,
             temperature: 0.4,
-            prefillEnabled: false), for: key)
+            prefillEnabled: false, denseResidentLayerCount: 3), for: key)
         try MacAppSettingsFileStore.save(
             initial, forModelDirectory: modelDirectory)
         let model = makeAppModel(
@@ -687,12 +687,12 @@ import TUFFModelCatalog
             model.installs.first { $0.id == model.selectedModelID })
 
         #expect(model.automaticMemory)
-        // Auto overrode the saved 32K and 24 slots with its own plan: the
-        // checkpoint's qualified slot count, and a context it chose.
+        // Auto chooses a legal allocation from all-layer layout counts on
+        // this fixture's small device, while retaining the manual profile.
         #expect(model.maxContextTokens != 32_768)
-        #expect(model.runtimeOptions.expertCacheSlots
-            == TUFFModelCatalog.gemma4_26B_A4B.runtimeDefaults.expertCacheSlots)
-        #expect(model.runtimeOptions.prefillEnabled)
+        #expect(AppRuntimeOptions.allowedSlotCounts.contains(model.runtimeOptions.expertCacheSlots))
+        #expect(model.runtimeOptions.expertCacheSlots != 24)
+        #expect(model.runtimeOptions.prefillEnabled == (model.runtimeOptions.expertCacheSlots >= 16))
 
         var effective = model.settingsProfile(for: selected)
         effective.temperature = 0.6
@@ -708,6 +708,7 @@ import TUFFModelCatalog
         #expect(whileAutomatic.contextTokens == 32_768)
         #expect(whileAutomatic.expertCacheSlots == 24)
         #expect(!whileAutomatic.prefillEnabled)
+        #expect(whileAutomatic.denseResidentLayerCount == 3)
         #expect(whileAutomatic.temperature == 0.6)
 
         model.setAutomaticMemory(false, for: selected)
@@ -716,6 +717,7 @@ import TUFFModelCatalog
         #expect(model.maxContextTokens == 32_768)
         #expect(model.runtimeOptions.expertCacheSlots == 24)
         #expect(!model.runtimeOptions.prefillEnabled)
+        #expect(model.runtimeOptions.denseResidencyPolicy == .bounded(residentLayers: [0, 1, 2]))
     }
 
     /// Edits made through the profile controls are coalesced rather than

@@ -402,7 +402,7 @@ public final class RemoteVisionPackInstaller {
             outputBytes: visionPlan.weightsFileSize))
         let requirement = try DiskSpaceChecker.requireAvailable(
             path: paths.parentDirectory,
-            bytes: remainingBytes + UInt64(options.rangeChunkBytes),
+            bytes: remainingBytes + UInt64(options.rangeChunkBytes) * 2,
             reserveBytes: options.minFreeReserveBytes)
         progress(.checkingDisk(requirement))
         try Task.checkCancellation()

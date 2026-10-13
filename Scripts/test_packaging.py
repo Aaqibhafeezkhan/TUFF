@@ -20,9 +20,10 @@ def check(app):
     cli = app / 'Contents/Resources/bin/tuff'
     assert subprocess.check_output([str(cli), '--version'], text=True).strip() == f'tuff {version}'
     assert 'tuff prompt' in subprocess.check_output([str(cli), '--help'], text=True)
-    # One engine executable serves every role, picked by the name it starts under.
+    # Lightweight host roles share one executable. Family helpers are installed
+    # on demand and must never be embedded in the app.
     main = app / 'Contents/MacOS/TUFF'
-    for link in ['MacOS/TUFFDecodeService', 'Resources/bin/TUFFCLI', 'Resources/bin/TUFFServer']:
+    for link in ['Resources/bin/TUFFCLI', 'Resources/bin/TUFFServer']:
         path = app / 'Contents' / link
         assert path.is_symlink() and path.resolve() == main.resolve(), link
     for name in ['TUFFCLI', 'TUFFServer']:
@@ -35,7 +36,11 @@ def check(app):
     assert job['BundleProgram'] == 'Contents/Resources/bin/TUFFServer'
     assert job['ProgramArguments'] == ['TUFFServer', '--background']
     assert job['RunAtLoad'] and job['KeepAlive'] == {'SuccessfulExit': False}
-    for name in ['TUFF_TUFFEngine.bundle', 'TUFF_TUFFAppCore.bundle', 'SwiftMath_SwiftMath.bundle']:
+    assert not (app / 'Contents/MacOS/TUFFDecodeService').exists()
+    assert not (app / 'Contents/MacOS/TUFFInferenceEngine').exists()
+    assert not (app / 'Contents/Resources/TUFF_TUFFEngine.bundle').exists()
+    assert (app / 'Contents/Resources/engine-catalog.json').is_file()
+    for name in ['TUFF_TUFFAppCore.bundle', 'SwiftMath_SwiftMath.bundle']:
         assert (app / 'Contents/Resources' / name).is_dir(), name
     with tempfile.TemporaryDirectory(prefix='tuff-package-mismatch-') as tmp:
         result = subprocess.run([str(ROOT / 'Scripts/package_app.sh'), '0.0.0', tmp], capture_output=True, text=True)

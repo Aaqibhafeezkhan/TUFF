@@ -2,9 +2,6 @@ import Testing
 import TUFFAppCore
 @testable import TUFFMac
 
-/// The catalogue is grouped by how a model is run, because that is what decides
-/// what it needs from the Mac: a streamed model is bounded by free disk, a
-/// resident one by memory. Listed together they read as a size ranking.
 @Suite @MainActor struct ModelCatalogGroupTests {
     @Test func everyCatalogueModelLandsInExactlyOneGroup() {
         for descriptor in AppModelInstallDescriptor.catalog {
@@ -14,16 +11,16 @@ import TUFFAppCore
         }
     }
 
-    /// The split is the expert cache, which is the thing that makes a model
-    /// stream rather than load.
+    /// Maintained models follow their weight layout; Legacy is separate.
     @Test func groupingFollowsTheExpertCache() {
         for descriptor in AppModelInstallDescriptor.catalog {
             let streamed = ModelCatalogGroup.streaming.contains(descriptor)
-            #expect(streamed == descriptor.usesExpertCache)
+            #expect(streamed == (descriptor.usesExpertCache && !descriptor.isLegacy))
+            #expect(ModelCatalogGroup.legacy.contains(descriptor) == descriptor.isLegacy)
         }
     }
 
-    /// Both groups have to be populated, or the headers are noise.
+    /// Empty sections should not replace the current catalog groups.
     @Test func theShippedCatalogueUsesBothGroups() {
         for group in ModelCatalogGroup.allCases {
             #expect(AppModelInstallDescriptor.catalog.contains { group.contains($0) },

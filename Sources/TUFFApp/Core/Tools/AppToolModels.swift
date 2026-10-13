@@ -1,5 +1,5 @@
 import Foundation
-import TUFFEngine
+import TUFFInferenceTypes
 
 /// What a chat message may use. Chosen in the composer per message and stored
 /// with the turn, so a saved chat renders the same tool declarations it was
@@ -31,7 +31,7 @@ public struct AppToolCall: Codable, Equatable, Sendable, Identifiable {
         self.arguments = arguments
     }
 
-    public var historical: GFTokenizer.HistoricalToolCall {
+    public var historical: InferenceToolCall {
         .init(id: id, name: name, arguments: arguments)
     }
 }

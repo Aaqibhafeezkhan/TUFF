@@ -30,27 +30,40 @@ things help:
 - **Batched prefill.** Prompts are processed in chunks, so each expert is
   read once per chunk instead of once per token.
 
-Dense models like Gemma 4 12B have no experts and run like any GPU engine.
+Dense models have no routed experts. Auto keeps every projection resident when
+it safely fits. Oversized dense packs can retain selected whole layers and stage
+the remaining layers through one bounded buffer after prior GPU work completes.
+Reading most weights for every token can be very slow. Affine MoE models can also
+stage their attention/shared projections; lookahead is disabled while staging.
+GPT-OSS row-access projections currently remain resident.
 
 ## Memory planning
 
 Before loading, TUFF estimates everything it will allocate: expert slots, the
 KV cache for the chosen context, prefill scratch and a safety margin.
 **Auto** settings must fit in 75% of the Mac's memory. The estimate is
-deliberately cautious; actual use is usually lower because weights are
-file-backed. See [`InferenceMemoryPlan.swift`](../Sources/TUFFEngine/Runtime/Configuration/InferenceMemoryPlan.swift).
+deliberately cautious and includes resident mappings, all expert layers, row
+tables, state, scratch, staging, retained snapshots and transition overlap.
+Sustained pressure reduces the budget. Repeated comparable local timings can
+favor a smaller cache; one fast warm run does not establish SSD speed.
+See [`AppAutomaticLayoutPlanner.swift`](../Sources/TUFFApp/Core/Configuration/AppAutomaticLayoutPlanner.swift).
 
 ## Processes
 
-The app ships one executable that acts differently depending on the name it
-was started under ([`ProcessRole.swift`](../Sources/TUFFApp/Mac/App/ProcessRole.swift)):
+The app ships a lightweight host executable whose role depends on its invoked
+name ([`ProcessRole.swift`](../Sources/TUFFApp/Mac/App/ProcessRole.swift)):
 
 | Started as | Does |
 | --- | --- |
 | `TUFF` | The app (or the benchmark, with `--benchmark`) |
-| `TUFFDecodeService` | Runs the model for chat, in its own process |
 | `TUFFServer` | The Background API |
-| `TUFFCLI` | Command-line inference |
+| `TUFFCLI` | Launches the installed helper for command-line inference |
+
+Family inference helpers and shaders are authenticated external packages,
+installed with their first dependent model and shared by compatible models.
+The host, CLI and HTTP server contain no family engine. The installed
+`TUFFInferenceEngine` handles chat sockets, CLI requests and API RPC. Required
+model bindings and live helper leases protect engines during cleanup.
 
 Chat talks to the decode service over a Unix socket, so a GPU problem can't
 take your chats down with it.
@@ -59,7 +72,10 @@ take your chats down with it.
 
 | Directory | What's there |
 | --- | --- |
-| [`Sources/TUFFModelCatalog`](../Sources/TUFFModelCatalog) | The nine models: sources, hashes, memory floors, defaults. Start here for anything model-specific. |
+| [`Sources/TUFFModelCatalog`](../Sources/TUFFModelCatalog) | Sources, hashes, memory floors, defaults and Legacy maintenance status. |
+| [`Sources/TUFFRuntimeManagement`](../Sources/TUFFRuntimeManagement) | Signed engine manifests, downloads, installation, repair, bindings and leases. |
+| [`Sources/TUFFRuntimeDescriptions`](../Sources/TUFFRuntimeDescriptions) | Architecture and runtime contracts without Metal. |
+| [`Sources/TUFFModelMetadata`](../Sources/TUFFModelMetadata) | Pack metadata, receipts and calculated weight layouts. |
 | [`Sources/TUFFFormat`](../Sources/TUFFFormat) | The `.gturbo` format. |
 | [`Sources/TUFFRepack`](../Sources/TUFFRepack) | Download, verify and repack, with resume. |
 | [`Sources/TUFFEngine`](../Sources/TUFFEngine) | Metal setup, expert streaming, forward passes, prefill, KV cache, sampling, tokenizers, and the shaders. |

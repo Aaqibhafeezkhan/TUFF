@@ -6,6 +6,15 @@ import Metal
 /// Shared-prefix snapshots on disk: loaded only for exactly the same model,
 /// settings, build and tokens, and never trusted when damaged.
 @Suite(.serialized) struct PrefixSnapshotDiskStoreTests {
+    @Test func isolatedBuildKeepsPrefixWritesInsideItsDataRoot() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("prefix-scope-\(UUID().uuidString)")
+        let scoped = try #require(PrefixSnapshotDiskStore.standard(modelID: "model", buildIdentity: "build",
+            environment: ["TUFF_APPLICATION_SUPPORT_ROOT": root.path]))
+        #expect(scoped.directory.path.hasPrefix(root.standardizedFileURL.path + "/"))
+        #expect(!FileManager.default.fileExists(atPath: root.path))
+        #expect(PrefixSnapshotDiskStore.standard(modelID: "model", buildIdentity: "build",
+            environment: ["TUFF_APPLICATION_SUPPORT_ROOT": root.path, "TUFF_PREFIX_DISK_CACHE_MB": "0"]) == nil)
+    }
     let device = MTLCreateSystemDefaultDevice()!
     final class Owner: StateSnapshottingRunner {
         var stateSnapshotByteEstimate: Int? { nil }

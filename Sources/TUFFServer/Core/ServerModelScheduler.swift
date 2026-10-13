@@ -241,6 +241,7 @@ public actor ServerModelScheduler {
         transition = "unloading \(current.id)"
         resident = nil
         publish()
+        await current.backend.unload()
         await unloader(current.id, current.backend)
         transition = nil
         publish()

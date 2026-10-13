@@ -221,7 +221,7 @@ def tools_workload(service, args, options, rows, context):
 
 
 def model_options(args, model):
-    catalog = {'gemma4': ('gemma4.gturbo', 16, 512), 'qwen38-flash-next': ('qwen38-flash-next.gturbo', 32, 2048),
+    catalog = {'gemma4': ('gemma4.gturbo', 16, 512), 'qwen38-flash-next': ('qwen38-flash-next.gturbo', 16, 2048),
                'gemma4-e4b': ('gemma4-e4b.gturbo', 16, 512), 'gemma4-e2b': ('gemma4-e2b.gturbo', 16, 512),
                'gemma4-12b-qat': ('gemma4-12b-qat.gturbo', 16, 512), 'minimax-m2.7': ('minimax-m2.7.gturbo', 16, 512),
                'qwen36': ('qwen36.gturbo', 16, 512), 'gpt-oss-20b': ('gpt-oss-20b.gturbo', 16, 512)}

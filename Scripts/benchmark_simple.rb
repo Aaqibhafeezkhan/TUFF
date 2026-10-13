@@ -213,7 +213,7 @@ options[:models].each do |model|
   path = model_path(BENCHMARK_MODELS.fetch(model), options[:model_root])
   abort "installed model is missing: #{path}" unless File.directory?(path)
 end
-busy = safe_capture("pgrep", "-fl", "TUFFServer|TUFFDecodeService|TUFFCLI")
+busy = safe_capture("pgrep", "-fl", "TUFFServer|TUFFDecodeService|TUFFInferenceEngine|TUFFCLI")
 abort "a TUFF model process is already running:\n#{busy}" unless busy.empty?
 
 FileUtils.mkdir_p(options[:output])

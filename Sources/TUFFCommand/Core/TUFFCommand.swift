@@ -165,6 +165,14 @@ public enum TUFFCommand {
                 || containsAny(["--prompt", "--chat-prompt", "--messages-file"], in: forwarded)
         else { throw TUFFCommandError.missingPrompt }
 
+        // Explicit memory controls remain manual. The ordinary prompt command
+        // uses the same bounded planner as the app, including MoE projections.
+        if model.descriptor != nil, !containsAny(["--memory-auto", "--expert-cache-slots", "--dense-residency",
+                         "--dense-weight-budget-mb", "--prefill", "--prefill-chunk-tokens",
+                         "--prefill-chunk-max"], in: forwarded), forwarded != ["--help"] {
+            forwarded += ["--memory-auto"]
+        }
+
         if let descriptor = model.descriptor {
             addDefault("--max-context", value: descriptor.runtimeDefaults.contextTokens, to: &forwarded)
             addDefault(

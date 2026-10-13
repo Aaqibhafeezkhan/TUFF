@@ -56,6 +56,7 @@ struct SearchSettingsView: View {
             }
         }
         .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
         .onAppear { model.toolStore.refreshKeyPresence() }
         .confirmationDialog("Remove every folder and delete the search index?",
                             isPresented: $confirmingRemoval) {

@@ -1,5 +1,7 @@
 import Foundation
-import TUFFEngine
+import TUFFInferenceTypes
+import TUFFRuntimeDescriptions
+import TUFFModelMetadata
 
 /// A model a request was routed to.
 public struct ServerRoutedModel: Equatable, Sendable {

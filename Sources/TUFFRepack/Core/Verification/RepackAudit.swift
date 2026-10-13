@@ -48,7 +48,7 @@ public final class RepackAudit {
         public let sha256: String
     }
 
-    public struct RemoteRetryRecord {
+    public struct RemoteRetryRecord: Sendable {
         public let label: String
         public let attempt: Int
         public let detail: String

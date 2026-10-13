@@ -1,5 +1,6 @@
 import Foundation
-import TUFFEngine
+import TUFFModelMetadata
+import TUFFRuntimeDescriptions
 import TUFFRepackCore
 
 public enum AppVisionPackInstallationStatus: Equatable, Sendable {

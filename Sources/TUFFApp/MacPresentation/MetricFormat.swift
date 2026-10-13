@@ -46,7 +46,7 @@ public enum MetricFormat {
 
     public static func memory(_ bytes: UInt64?) -> String {
         guard let bytes else { return "\u{2014}" }
-        return memoryFormatter.string(fromByteCount: Int64(bytes))
+        return memoryFormatter.string(fromByteCount: Int64(clamping: bytes))
     }
 
     public static func storage(_ bytes: UInt64) -> String {

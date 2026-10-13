@@ -1,7 +1,10 @@
 import Foundation
 import Synchronization
-import TUFFEngine
+import TUFFInferenceTypes
+import TUFFRuntimeDescriptions
+import TUFFModelMetadata
 import TUFFModelCatalog
+import TUFFAppCore
 
 /// Installed catalog models, looked up by any name a client might send.
 public struct ServerInstalledModels: Sendable {
@@ -64,6 +67,10 @@ public struct ServerInstalledModels: Sendable {
     /// The working set plus the retained-conversation budget. A model with
     /// its image pack already reserves the whole budget, which covers both.
     public func estimatedBytes(for descriptor: TUFFModelDescriptor) -> UInt64 {
+        if let plan = automaticPlan(for: descriptor) {
+            return visionCapability(for: descriptor) == "ready"
+                ? max(device.safeAppMemoryBudgetBytes, plan.estimatedWorkingSetBytes) : plan.estimatedWorkingSetBytes
+        }
         let plan = inferencePlan(for: descriptor)
         let estimate = descriptor.estimatedInferenceWorkingSetBytes(
             contextTokens: plan.contextTokens,
@@ -79,11 +86,15 @@ public struct ServerInstalledModels: Sendable {
 
     /// Retained conversation state this model's session may keep.
     public func retainedConversationBytes(for descriptor: TUFFModelDescriptor) -> Int {
+        if let automatic = automaticPlan(for: descriptor) {
+            return automatic.retainedConversationBytes ?? Int(ConversationRetentionBudget.defaultCapBytes)
+        }
         let plan = inferencePlan(for: descriptor)
         return descriptor.retainedConversationBudgetBytes(
             contextTokens: plan.contextTokens,
             expertCacheSlots: plan.expertCacheSlots,
-            prefillChunkTokens: descriptor.recommendedPrefillChunkTokens(on: device),
+            prefillChunkTokens: automaticPlan(for: descriptor)?.prefillChunkTokens
+                ?? descriptor.recommendedPrefillChunkTokens(on: device),
             device: device,
             imagePackInstalled: visionCapability(for: descriptor) == "ready")
     }
@@ -94,6 +105,7 @@ public struct ServerInstalledModels: Sendable {
     /// Machines that cannot afford the growth retain the qualified settings.
     public func inferencePlan(for descriptor: TUFFModelDescriptor)
         -> (contextTokens: Int, expertCacheSlots: Int) {
+        if let plan = automaticPlan(for: descriptor) { return (plan.contextTokens, plan.expertCacheSlots) }
         let defaults = descriptor.runtimeDefaults
         let chunk = descriptor.recommendedPrefillChunkTokens(on: device)
         func fits(context: Int, slots: Int) -> Bool {
@@ -111,9 +123,17 @@ public struct ServerInstalledModels: Sendable {
         return (context, slots)
     }
 
+    public func automaticPlan(for descriptor: TUFFModelDescriptor) -> AppAutomaticMemoryPlan? {
+        guard let summary = AppAutomaticMemoryPlanner.layoutSummary(at: directory(for: descriptor)) else { return nil }
+        return AppAutomaticMemoryPlanner.plan(for: AppModelInstallDescriptor(catalog: descriptor),
+            on: device, profile: .balanced, layoutSummary: summary)
+    }
+
     /// The same settings `tuff serve` chooses for a model on this Mac.
-    public func runtimeConfiguration(for descriptor: TUFFModelDescriptor) -> RuntimeConfiguration {
-        let slots = inferencePlan(for: descriptor).expertCacheSlots
+    public func runtimeConfiguration(for descriptor: TUFFModelDescriptor,
+                                     resolvedPlan: AppAutomaticMemoryPlan? = nil) -> RuntimeConfiguration {
+        let automatic = resolvedPlan ?? automaticPlan(for: descriptor)
+        let slots = automatic?.expertCacheSlots ?? inferencePlan(for: descriptor).expertCacheSlots
         return RuntimeConfiguration(
             expertCacheSlots: slots,
             expertCachePolicy: .lfu,
@@ -122,7 +142,8 @@ public struct ServerInstalledModels: Sendable {
             // it does not require the affine runner's two top-8 tile banks.
             prefillEnabled: descriptor.family == .gptOss
                 || slots >= RuntimeConfiguration.minimumExpertCacheSlotsForChunkedPrefill,
-            prefillChunkTokens: descriptor.recommendedPrefillChunkTokens(on: device),
+            prefillChunkTokens: automatic?.prefillChunkTokens
+                ?? descriptor.recommendedPrefillChunkTokens(on: device),
             // The fused greedy head; a sampled request switches the runner to
             // its logits head for that request.
             forceLogitsHead: false)
@@ -319,6 +340,10 @@ private final class LeasedServerBackend: @unchecked Sendable, ServerInferenceBac
     }
     deinit { backend = nil; lease.release() }
     var visionCapability: String { backend!.visionCapability }
+    func unload() async {
+        await backend!.unload()
+        lease.release()
+    }
     func prepare(_ request: ValidatedChatRequest) async throws -> ServerPreparedRequest {
         try await backend!.prepare(request)
     }

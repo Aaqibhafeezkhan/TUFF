@@ -1,3 +1,4 @@
+import TUFFRuntimeDescriptions
 import Foundation
 
 /// Model family discriminator, mirrored into `manifest.json -> arch.family`
@@ -21,6 +22,10 @@ enum RepackModelVariant: String, Sendable, Equatable {
     case gptOss_120B = "gpt-oss-120b"
     case minimaxM27 = "minimax-m2.7"
     case qwen38FlashNext = "qwen3.8-flash-next"
+    case ornith15_9B = "ornith-1.5-9b"
+    case ornith15_35B_A3B = "ornith-1.5-35b-a3b"
+    case ornith15_397B = "ornith-1.5-397b"
+    case qwen38_27B = "qwen3.8-27b"
 }
 
 /// Which dense Gemma a checkpoint is, from its own shape.
@@ -126,7 +131,7 @@ struct ArchInfo: Sendable, Equatable {
     var indexerNumHeads: Int = 0
     var indexerNumKVHeads: Int = 0
 
-    static func load(configPath: String) throws -> ArchInfo {
+    static func load(configPath: String, variant: RepackModelVariant? = nil) throws -> ArchInfo {
         let data = try Data(contentsOf: URL(fileURLWithPath: configPath))
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw RepackError.configJsonInvalid(path: configPath, detail: "not a JSON object")
@@ -137,11 +142,15 @@ struct ArchInfo: Sendable, Equatable {
         if (root["model_type"] as? String) == "minimax_m2" {
             return try loadMiniMaxM27(configPath: configPath, config: root)
         }
-        guard let tc = root["text_config"] as? [String: Any] else {
+        guard let tc = (root["text_config"] as? [String: Any])
+                ?? ((root["model_type"] as? String)?.hasPrefix("qwen3_5") == true ? root : nil) else {
             throw RepackError.configJsonInvalid(path: configPath, detail: "no text_config")
         }
-        if (root["model_type"] as? String) == "qwen3_5_moe" {
-            return try loadQwen36(configPath: configPath, tc: tc)
+        if ["qwen3_5_moe", "qwen3_5_moe_text"].contains(root["model_type"] as? String ?? "") {
+            return try loadQwen36(configPath: configPath, tc: tc, variant: variant)
+        }
+        if ["qwen3_5", "qwen3_5_text"].contains(root["model_type"] as? String ?? "") {
+            return try loadQwen36(configPath: configPath, tc: tc, dense: true, variant: variant)
         }
         if (root["model_type"] as? String) == "qwen4_exp" {
             return try loadQwen4Exp(configPath: configPath, tc: tc)
@@ -531,7 +540,8 @@ struct ArchInfo: Sendable, Equatable {
     // MARK: - Qwen 3.6 MoE (`model_type == "qwen3_5_moe"`)
 
     private static func loadQwen36(configPath: String,
-                                   tc: [String: Any]) throws -> ArchInfo {
+                                   tc: [String: Any], dense: Bool = false,
+                                   variant: RepackModelVariant? = nil) throws -> ArchInfo {
         func i(_ k: String) throws -> Int {
             guard let n = (tc[k] as? Int) ?? (tc[k] as? NSNumber)?.intValue else {
                 throw RepackError.configJsonInvalid(path: configPath, detail: "missing \(k)")
@@ -568,10 +578,21 @@ struct ArchInfo: Sendable, Equatable {
         let act = (tc["hidden_act"] as? String) ?? "silu"
         let headDim = try i("head_dim")
 
+        let selectedVariant: RepackModelVariant
+        if let variant { selectedVariant = variant }
+        else if dense {
+            switch (try i("hidden_size"), try i("num_hidden_layers")) {
+            case (4096, 32): selectedVariant = .ornith15_9B
+            case (5120, 64): selectedVariant = .qwen38_27B
+            default: throw RepackError.configJsonInvalid(path: configPath, detail: "unsupported dense Qwen dimensions")
+            }
+        } else if try i("hidden_size") == 4096 && i("num_hidden_layers") == 60 {
+            selectedVariant = .ornith15_397B
+        } else { selectedVariant = .qwen36_35B_A3B }
         let arch = ArchInfo(
             hiddenSize: try i("hidden_size"),
-            intermediateSize: try i("shared_expert_intermediate_size"),
-            moeIntermediateSize: try i("moe_intermediate_size"),
+            intermediateSize: try i(dense ? "intermediate_size" : "shared_expert_intermediate_size"),
+            moeIntermediateSize: dense ? 0 : try i("moe_intermediate_size"),
             numHeads: try i("num_attention_heads"),
             numKVHeads: try i("num_key_value_heads"),
             numFullKVHeads: try i("num_key_value_heads"),
@@ -584,28 +605,55 @@ struct ArchInfo: Sendable, Equatable {
             fullRopeTheta: theta,
             partialRotaryFactor: prf,
             numLayers: try i("num_hidden_layers"),
-            numExperts: try i("num_experts"),
-            topKExperts: try i("num_experts_per_tok"),
+            numExperts: dense ? 0 : try i("num_experts"),
+            topKExperts: dense ? 0 : try i("num_experts_per_tok"),
             tieWordEmbeddings: tie,
             attentionKEqV: false,
             fullAttentionLayerMask: mask,
             hiddenActivation: act,
             family: .qwen36,
-            variant: .qwen36_35B_A3B,
+            variant: selectedVariant,
+            feedForwardKind: dense ? .dense : .mixtureOfExperts,
             attnOutputGate: gate,
             attentionScale: 1.0 / Double(headDim).squareRoot(),
             embeddingScaledBySqrtHidden: false,
             routerScaled: false,
             ffnSandwichNorms: false,
-            sharedExpertGated: true,
+            sharedExpertGated: !dense,
             ropeNeoxSubdim: true,
             linearNumKHeads: try i("linear_num_key_heads"),
             linearNumVHeads: try i("linear_num_value_heads"),
             linearKeyHeadDim: try i("linear_key_head_dim"),
             linearValueHeadDim: try i("linear_value_head_dim"),
             linearConvKernelSize: try i("linear_conv_kernel_dim"))
-        try crossCheckProductionQwen36(arch, configPath: configPath)
+        if selectedVariant == .qwen36_35B_A3B {
+            try crossCheckProductionQwen36(arch, configPath: configPath)
+        } else {
+            try crossCheckQwen35Contract(arch, configPath: configPath)
+        }
         return arch
+    }
+
+    private static func crossCheckQwen35Contract(_ a: ArchInfo, configPath: String) throws {
+        guard let variant = TUFFRuntimeDescriptions.ModelVariant(rawValue: a.variant.rawValue),
+              let b = TUFFRuntimeDescriptions.ArchConfig.registeredArchitectures[variant],
+              a.hiddenSize == b.hiddenSize, a.intermediateSize == b.intermediateSize,
+              a.moeIntermediateSize == b.moeIntermediateSize, a.numLayers == b.numLayers,
+              a.numHeads == b.numHeads, a.numKVHeads == b.numKVHeads,
+              a.headDim == b.headDim, a.vocabSize == b.vocabSize,
+              a.numExperts == b.numExperts, a.topKExperts == b.topKExperts,
+              a.tieWordEmbeddings == b.tieWordEmbeddings,
+              a.fullAttentionLayerMask == b.fullAttentionLayerMask,
+              a.hiddenActivation == b.hiddenActivation, a.attnOutputGate == b.attnOutputGate,
+              a.ropeTheta == b.ropeTheta, a.partialRotaryFactor == b.partialRotaryFactor,
+              a.linearNumKHeads == b.linearAttention.numKHeads,
+              a.linearNumVHeads == b.linearAttention.numVHeads,
+              a.linearKeyHeadDim == b.linearAttention.keyHeadDim,
+              a.linearValueHeadDim == b.linearAttention.valueHeadDim,
+              a.linearConvKernelSize == b.linearAttention.convKernelSize else {
+            throw RepackError.configJsonInvalid(path: configPath,
+                detail: "config does not match pinned \(a.variant.rawValue) block contract")
+        }
     }
 
     // MARK: - Qwen3.8 Flash Next (qwen4_exp)

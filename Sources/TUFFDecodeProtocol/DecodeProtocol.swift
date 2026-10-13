@@ -1,5 +1,5 @@
 import Foundation
-import TUFFEngine
+import TUFFInferenceTypes
 
 public struct DecodeRuntimeOptions: Codable, Sendable, Equatable {
     public var expertCacheSlots: Int
@@ -9,6 +9,10 @@ public struct DecodeRuntimeOptions: Codable, Sendable, Equatable {
     public var rdadvisePolicy: String
     public var modelVerification: String
     public var visionResidencyPolicy: String?
+    /// Nil selects full residency; an empty list streams every layer.
+    public var denseResidentLayers: [Int]?
+    public var denseWeightBudgetBytes: UInt64?
+    public var retainedConversationBytes: Int?
 
     public init(expertCacheSlots: Int = 16,
                 expertCachePolicy: String = "lfu",
@@ -16,7 +20,9 @@ public struct DecodeRuntimeOptions: Codable, Sendable, Equatable {
                 prefillChunkTokens: Int = 128,
                 rdadvisePolicy: String = "off",
                 modelVerification: String = "full-sha256",
-                visionResidencyPolicy: String? = nil) {
+                visionResidencyPolicy: String? = nil,
+                denseResidentLayers: [Int]? = nil,
+                denseWeightBudgetBytes: UInt64? = nil, retainedConversationBytes: Int? = nil) {
         self.expertCacheSlots = expertCacheSlots
         self.expertCachePolicy = expertCachePolicy
         self.prefillEnabled = prefillEnabled
@@ -24,6 +30,9 @@ public struct DecodeRuntimeOptions: Codable, Sendable, Equatable {
         self.rdadvisePolicy = rdadvisePolicy
         self.modelVerification = modelVerification
         self.visionResidencyPolicy = visionResidencyPolicy
+        self.denseResidentLayers = denseResidentLayers
+        self.denseWeightBudgetBytes = denseWeightBudgetBytes
+        self.retainedConversationBytes = retainedConversationBytes
     }
 }
 
@@ -81,11 +90,11 @@ public struct DecodeToolResult: Codable, Sendable, Equatable {
 public struct DecodeToolRound: Codable, Sendable, Equatable {
     public var thinking: String?
     public var content: String
-    public var calls: [GFTokenizer.HistoricalToolCall]
+    public var calls: [InferenceToolCall]
     public var results: [DecodeToolResult]
 
     public init(thinking: String? = nil, content: String = "",
-                calls: [GFTokenizer.HistoricalToolCall], results: [DecodeToolResult]) {
+                calls: [InferenceToolCall], results: [DecodeToolResult]) {
         self.thinking = thinking
         self.content = content
         self.calls = calls
@@ -161,9 +170,10 @@ public struct DecodeGenerationRequest: Codable, Sendable {
     public var generationID: UUID
     /// Declared tools, rounds already run for this message, and the chat it
     /// belongs to. All absent from clients before 8.0.
-    public var tools: [GFTokenizer.FunctionDefinition]?
+    public var tools: [InferenceFunctionDefinition]?
     public var currentRounds: [DecodeToolRound]?
     public var conversationKey: String?
+    public var preservesFullHistory: Bool
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -193,10 +203,11 @@ public struct DecodeGenerationRequest: Codable, Sendable {
             DecodeRuntimeOptions.self, forKey: .runtimeOptions)
         generationID = try container.decode(UUID.self, forKey: .generationID)
         tools = try container.decodeIfPresent(
-            [GFTokenizer.FunctionDefinition].self, forKey: .tools)
+            [InferenceFunctionDefinition].self, forKey: .tools)
         currentRounds = try container.decodeIfPresent(
             [DecodeToolRound].self, forKey: .currentRounds)
         conversationKey = try container.decodeIfPresent(String.self, forKey: .conversationKey)
+        preservesFullHistory = try container.decodeIfPresent(Bool.self, forKey: .preservesFullHistory) ?? false
     }
 
     public init(prompt: String, systemPrompt: String? = nil,
@@ -212,9 +223,9 @@ public struct DecodeGenerationRequest: Codable, Sendable {
                 seed: UInt64? = nil,
                 runtimeOptions: DecodeRuntimeOptions = DecodeRuntimeOptions(),
                 generationID: UUID = UUID(),
-                tools: [GFTokenizer.FunctionDefinition]? = nil,
+                tools: [InferenceFunctionDefinition]? = nil,
                 currentRounds: [DecodeToolRound]? = nil,
-                conversationKey: String? = nil) {
+                conversationKey: String? = nil, preservesFullHistory: Bool = false) {
         self.prompt = prompt
         self.systemPrompt = systemPrompt
         self.assistantPrefix = assistantPrefix
@@ -235,10 +246,12 @@ public struct DecodeGenerationRequest: Codable, Sendable {
         self.tools = tools
         self.currentRounds = currentRounds
         self.conversationKey = conversationKey
+        self.preservesFullHistory = preservesFullHistory
     }
 }
 
 public enum DecodeServiceCommand: Codable, Sendable {
+    case hello(DecodeEngineHello)
     case load(DecodeLoadRequest)
     case generate(DecodeGenerationRequest)
     case cancel
@@ -247,6 +260,7 @@ public enum DecodeServiceCommand: Codable, Sendable {
 }
 
 public enum DecodeServiceEventKind: String, Codable, Sendable {
+    case hello
     case loading
     case ready
     case prefill
@@ -318,6 +332,7 @@ public struct DecodePrefillDiagnostics: Codable, Sendable, Equatable {
 }
 
 public struct DecodeServiceEvent: Codable, Sendable {
+    public var capabilities: DecodeEngineCapabilities?
     public var kind: DecodeServiceEventKind
     public var generationID: UUID
     public var sequence: UInt64
@@ -345,7 +360,7 @@ public struct DecodeServiceEvent: Codable, Sendable {
     public var droppedTurns: Int?
     /// Calls the model made, on a finished event. Parsed and validated
     /// against the declared tool names; nothing has run.
-    public var toolCalls: [GFTokenizer.HistoricalToolCall]?
+    public var toolCalls: [InferenceToolCall]?
     /// A machine-readable failure, so the app can tell a malformed tool call
     /// from other errors.
     public var errorKind: String?

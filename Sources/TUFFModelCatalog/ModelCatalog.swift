@@ -11,6 +11,11 @@ public enum TUFFModelID: String, Codable, CaseIterable, Sendable {
     case gptOss_120B = "gpt-oss-120b"
     case minimaxM27 = "minimax-m2.7"
     case qwen38FlashNext = "qwen3.8-flash-next"
+    case ornith15_9B = "ornith-1.5-9b"
+    case ornith15_35B_A3B = "ornith-1.5-35b-a3b"
+    case ornith15_397B = "ornith-1.5-397b"
+    case qwen38_27B = "qwen3.8-27b"
+    case gemma4_26B_Heretic = "gemma4-26b-heretic"
 }
 
 public enum TUFFModelFamily: String, Codable, Sendable {
@@ -31,6 +36,10 @@ public enum TUFFArchitectureID: String, Codable, Sendable {
     case gptOss_120B = "gpt-oss-120b"
     case minimaxM27 = "minimax-m2.7"
     case qwen38FlashNext = "qwen3.8-flash-next"
+    case ornith15_9B = "ornith-1.5-9b"
+    case ornith15_35B_A3B = "ornith-1.5-35b-a3b"
+    case ornith15_397B = "ornith-1.5-397b"
+    case qwen38_27B = "qwen3.8-27b"
 }
 
 public enum TUFFFeedForwardKind: String, Codable, Sendable {
@@ -116,11 +125,23 @@ public extension TUFFArchitectureProfile {
         weightLayout: .affine)
 }
 
+public extension TUFFArchitectureProfile {
+    static let ornith15_9B = TUFFArchitectureProfile(id: .ornith15_9B, family: .qwen36, feedForwardKind: .dense, weightLayout: .affine)
+    static let ornith15_35B_A3B = TUFFArchitectureProfile(id: .ornith15_35B_A3B, family: .qwen36, feedForwardKind: .mixtureOfExperts, weightLayout: .affine)
+    static let ornith15_397B = TUFFArchitectureProfile(id: .ornith15_397B, family: .qwen36, feedForwardKind: .mixtureOfExperts, weightLayout: .affine)
+    static let qwen38_27B = TUFFArchitectureProfile(id: .qwen38_27B, family: .qwen36, feedForwardKind: .dense, weightLayout: .affine)
+}
+
 public enum TUFFReasoningControl: String, Codable, Sendable {
     case toggle
     case toggleWithPreservation
     case graded
     case alwaysOn
+}
+
+public enum TUFFModelMaintenanceStatus: String, Codable, Sendable {
+    case maintained
+    case legacy
 }
 
 public enum TUFFModelQualification: String, Codable, Sendable {
@@ -422,7 +443,8 @@ public struct TUFFModelDescriptor: Codable, Equatable, Sendable, Identifiable {
         switch id {
         case .gemma4_E2B, .gemma4_E4B, .gptOss_20B, .gptOss_120B: 131_072
         case .minimaxM27: 204_800
-        case .gemma4_12B_QAT, .gemma4_26B_A4B, .qwen36_35B_A3B, .qwen38FlashNext: 262_144
+        case .gemma4_12B_QAT, .gemma4_26B_A4B, .gemma4_26B_Heretic, .qwen36_35B_A3B, .qwen38FlashNext,
+             .ornith15_9B, .ornith15_35B_A3B, .ornith15_397B, .qwen38_27B: 262_144
         }
     }
 
@@ -439,6 +461,7 @@ public struct TUFFModelDescriptor: Codable, Equatable, Sendable, Identifiable {
     public let hardware: TUFFModelHardwareRequirements
     public let memory: TUFFModelMemoryProfile
     public let qualification: TUFFModelQualification
+    public let maintenanceStatus: TUFFModelMaintenanceStatus
     public let runtimeDefaults: TUFFModelRuntimeDefaults
     public let capabilities: Set<TUFFModelCapability>
     public let reasoningControl: TUFFReasoningControl?
@@ -461,7 +484,8 @@ public struct TUFFModelDescriptor: Codable, Equatable, Sendable, Identifiable {
                 runtimeDefaults: TUFFModelRuntimeDefaults = TUFFModelRuntimeDefaults(),
                 capabilities: Set<TUFFModelCapability>,
                 reasoningControl: TUFFReasoningControl?,
-                addons: [TUFFModelAddonDescriptor] = []) {
+                addons: [TUFFModelAddonDescriptor] = [],
+                maintenanceStatus: TUFFModelMaintenanceStatus = .maintained) {
         self.id = id
         self.selector = selector
         self.aliases = aliases
@@ -476,15 +500,52 @@ public struct TUFFModelDescriptor: Codable, Equatable, Sendable, Identifiable {
         self.hardware = hardware
         self.memory = memory
         self.qualification = qualification
+        self.maintenanceStatus = maintenanceStatus
         self.runtimeDefaults = runtimeDefaults
         self.capabilities = capabilities
         self.reasoningControl = reasoningControl
         self.addons = addons
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case id, selector, aliases, apiModelID, displayName, shortName, summary
+        case family, architecture, installDirectoryName, source, hardware, memory
+        case qualification, maintenanceStatus, runtimeDefaults, capabilities, reasoningControl, addons
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        let id = try values.decode(TUFFModelID.self, forKey: .id)
+        let defaultMaintenance: TUFFModelMaintenanceStatus
+        switch id {
+        case .gptOss_20B, .gptOss_120B, .minimaxM27: defaultMaintenance = .legacy
+        default: defaultMaintenance = .maintained
+        }
+        self.init(id: id,
+            selector: try values.decode(String.self, forKey: .selector),
+            aliases: try values.decode([String].self, forKey: .aliases),
+            apiModelID: try values.decode(String.self, forKey: .apiModelID),
+            displayName: try values.decode(String.self, forKey: .displayName),
+            shortName: try values.decode(String.self, forKey: .shortName),
+            summary: try values.decode(String.self, forKey: .summary),
+            family: try values.decode(TUFFModelFamily.self, forKey: .family),
+            architecture: try values.decode(TUFFArchitectureProfile.self, forKey: .architecture),
+            installDirectoryName: try values.decode(String.self, forKey: .installDirectoryName),
+            source: try values.decode(TUFFModelSource.self, forKey: .source),
+            hardware: try values.decode(TUFFModelHardwareRequirements.self, forKey: .hardware),
+            memory: try values.decode(TUFFModelMemoryProfile.self, forKey: .memory),
+            qualification: try values.decode(TUFFModelQualification.self, forKey: .qualification),
+            runtimeDefaults: try values.decode(TUFFModelRuntimeDefaults.self, forKey: .runtimeDefaults),
+            capabilities: try values.decode(Set<TUFFModelCapability>.self, forKey: .capabilities),
+            reasoningControl: try values.decodeIfPresent(TUFFReasoningControl.self, forKey: .reasoningControl),
+            addons: try values.decode([TUFFModelAddonDescriptor].self, forKey: .addons),
+            maintenanceStatus: try values.decodeIfPresent(TUFFModelMaintenanceStatus.self,
+                forKey: .maintenanceStatus) ?? defaultMaintenance)
+    }
+
     public var defaultSystemPrompt: String {
         "You are \(shortName), a helpful AI assistant. "
-            + "You are running in a SSD MoE streaming app on Mac called TUFF."
+            + "You are running locally on a Mac in an app called TUFF."
     }
 
     /// Prefill chunk size for this model on `device`.
@@ -677,7 +738,7 @@ public enum TUFFModelCatalog {
         selector: "gemma4-e2b",
         aliases: ["e2b"],
         apiModelID: "gemma-4-e2b-it",
-        displayName: "Gemma 4 E2B IT 4-bit",
+        displayName: "Gemma 4 E2B Q4",
         shortName: "Gemma 4 E2B",
         summary: "The smallest Gemma. Same architecture as E4B — per-layer embeddings and shared KV projections — at roughly half the weights.",
         family: .gemma4,
@@ -729,7 +790,7 @@ public enum TUFFModelCatalog {
         selector: "gemma4-e4b",
         aliases: ["e4b"],
         apiModelID: "gemma-4-e4b-it",
-        displayName: "Gemma 4 E4B IT 4-bit",
+        displayName: "Gemma 4 E4B Q4",
         shortName: "Gemma 4 E4B",
         summary: "Small dense Gemma with per-layer embeddings and shared KV projections.",
         family: .gemma4,
@@ -780,7 +841,7 @@ public enum TUFFModelCatalog {
         selector: "gemma4-12b-qat",
         aliases: ["12b", "12b-qat"],
         apiModelID: "gemma-4-12b-it-qat",
-        displayName: "Gemma 4 12B IT QAT 4-bit",
+        displayName: "Gemma 4 12B QAT",
         shortName: "Gemma 4 12B QAT",
         summary: "Dense Gemma 4 Unified with 8-bit QAT MLPs and optional image input.",
         family: .gemma4,
@@ -829,8 +890,8 @@ public enum TUFFModelCatalog {
         id: .gemma4_26B_A4B,
         selector: "gemma4",
         apiModelID: "gemma-4-26b-a4b-it",
-        displayName: "Gemma 4 26B-A4B IT 4-bit",
-        shortName: "Gemma 4 26B",
+        displayName: "Gemma 4 26B-A4B Q4",
+        shortName: "Gemma 4 26B-A4B",
         summary: "26B total, 3.9B active. A balanced Gemma model with optional image input.",
         family: .gemma4,
         architecture: .gemma4_26B_A4B,
@@ -866,8 +927,8 @@ public enum TUFFModelCatalog {
         id: .qwen36_35B_A3B,
         selector: "qwen36",
         apiModelID: "qwen3.6-35b-a3b",
-        displayName: "Qwen3.6 35B-A3B 4-bit",
-        shortName: "Qwen3.6 35B",
+        displayName: "Qwen 3.6 35B-A3B Q4",
+        shortName: "Qwen 3.6 35B-A3B",
         summary: "35B total, 3B active. Hybrid linear/full attention, so its "
             + "KV cache stays small at long context; larger install.",
         family: .qwen36,
@@ -907,7 +968,7 @@ public enum TUFFModelCatalog {
         selector: "gpt-oss-20b",
         aliases: ["gpt-oss"],
         apiModelID: "gpt-oss-20b",
-        displayName: "GPT-OSS 20B",
+        displayName: "GPT-OSS 20B Q4",
         shortName: "GPT-OSS 20B",
         summary: "Official MXFP4 checkpoint with Harmony reasoning and tool calls.",
         family: .gptOss,
@@ -932,7 +993,8 @@ public enum TUFFModelCatalog {
             topK: 0,
             topP: 1.0),
         capabilities: [.textGeneration, .reasoning],
-        reasoningControl: .graded)
+        reasoningControl: .graded,
+        maintenanceStatus: .legacy)
 
     /// Official Harmony checkpoint, qualified at 4K context on a 16 GB M2.
     /// Streamed experts keep the full 61 GiB installation out of the working
@@ -941,7 +1003,7 @@ public enum TUFFModelCatalog {
         id: .gptOss_120B,
         selector: "gpt-oss-120b",
         apiModelID: "gpt-oss-120b",
-        displayName: "GPT-OSS 120B",
+        displayName: "GPT-OSS 120B Q4",
         shortName: "GPT-OSS 120B",
         summary: "Maximum-quality GPT-OSS checkpoint with streamed MXFP4 experts.",
         family: .gptOss,
@@ -966,7 +1028,8 @@ public enum TUFFModelCatalog {
             topK: 0,
             topP: 1.0),
         capabilities: [.textGeneration, .reasoning],
-        reasoningControl: .graded)
+        reasoningControl: .graded,
+        maintenanceStatus: .legacy)
 
     /// MiniMax M2.7 streamed from the pinned MLX 4-bit checkpoint. Its 229B
     /// total parameters remain file-backed; only the selected eight experts
@@ -976,7 +1039,7 @@ public enum TUFFModelCatalog {
         selector: "minimax-m2.7",
         aliases: ["minimax", "m2.7"],
         apiModelID: "minimax-m2.7",
-        displayName: "MiniMax M2.7 4-bit",
+        displayName: "MiniMax M2.7 Q4",
         shortName: "MiniMax M2.7",
         summary: "229B total with eight active experts, streamed for 16 GB Macs.",
         family: .minimaxM2,
@@ -999,7 +1062,8 @@ public enum TUFFModelCatalog {
             topK: 40,
             topP: 0.95),
         capabilities: [.textGeneration, .reasoning],
-        reasoningControl: .alwaysOn)
+        reasoningControl: .alwaysOn,
+        maintenanceStatus: .legacy)
 
     /// Qwen3.8 Flash Next, the `qwen4_exp` architecture: 48 decoder layers of
     /// which 36 are gated-DeltaNet linear attention and 12 are full attention,
@@ -1026,8 +1090,8 @@ public enum TUFFModelCatalog {
         selector: "qwen38-flash-next",
         aliases: ["flash-next", "qwen-flash"],
         apiModelID: "qwen3.8-flash-next",
-        displayName: "Qwen3.8 Flash Next 4-bit",
-        shortName: "Qwen3.8 Flash Next",
+        displayName: "Qwen 3.8 Flash Next Q4",
+        shortName: "Qwen 3.8 Flash Next",
         summary: "512 experts per layer with 10 active, hybrid linear "
             + "attention, and a 24 KiB-per-token KV cache.",
         family: .qwen4Exp,
@@ -1044,7 +1108,7 @@ public enum TUFFModelCatalog {
         // 4,731,174,912 bytes of routed-expert cache. The remainder is an
         // allowance for scratch, logits and staging buffers.
         //
-        // 32 slots, measured rather than reasoned. A 512-expert layer argues
+        // Earlier long-answer measurements slightly favored 32 slots. A 512-expert layer argues
         // for a large cache — 32 slots hold 6.3% of one — but each slot is its
         // own Metal buffer and a command buffer that references it pays for it
         // whether or not the token routed there. On a 160-token answer:
@@ -1056,6 +1120,9 @@ public enum TUFFModelCatalog {
         // 48 was the first choice here, from the hit-rate argument alone. It
         // is 1.7x slower than 32 and costs 2.4 GB more, which is the same
         // trade `AppAutomaticMemoryPlanner` documents for Gemma 4 26B-A4B.
+        // 9.0 starts at 16: the earlier 16/32 results are within the 5% tie
+        // threshold, while new 16 GB tests show 32 can cause swap writes.
+        // Calibration may still select a larger cache with safe evidence.
         memory: TUFFModelMemoryProfile(
             qualifiedDefaultWorkingSetBytes: 8_634_412_544,
             defaultContextTokens: 2_048,
@@ -1065,7 +1132,7 @@ public enum TUFFModelCatalog {
         qualification: .qualified,
         runtimeDefaults: TUFFModelRuntimeDefaults(
             contextTokens: 2_048,
-            expertCacheSlots: 32,
+            expertCacheSlots: 16,
             temperature: 1.0,
             topK: 20,
             topP: 0.95),
@@ -1095,6 +1162,101 @@ public enum TUFFModelCatalog {
                 minimumUnifiedMemoryBytes: 16 * oneGiB,
                 minimumAppleSiliconGeneration: 2))])
 
+
+    public static let ornith15_9B = TUFFModelDescriptor(
+        id: .ornith15_9B, selector: "ornith-9b", apiModelID: "ornith-9b",
+        displayName: "Ornith 1.5 9B Q4", shortName: "Ornith 1.5 9B",
+        summary: "Dense 9B text model. Auto retains whole layers when they fit and streams the remainder.", family: .qwen36, architecture: .ornith15_9B,
+        installDirectoryName: "ornith-9b.gturbo",
+        source: TUFFModelSource(repoID: "ornith-ai/Ornith-1.5-9B-MLX-4bit", revision: "a48173b246ac705be75c05bedf1a0666db522d53",
+            sourceIndexSHA256: "215f9abadc1cea4d465b01c036dffcac5a84c2fb2386777863eff6928b91ed0b", manifestModelID: "ornith-ai/Ornith-1.5-9B-MLX-4bit",
+            approximateDownloadBytes: 5100000000, installedBytes: 5100000000, reserveBytes: oneGiB),
+        hardware: TUFFModelHardwareRequirements(minimumUnifiedMemoryBytes: eightGiB),
+        memory: TUFFModelMemoryProfile(qualifiedDefaultWorkingSetBytes: 1400000000,
+            expertCacheBytesPerSlot: 0, kvCache: TUFFKVCacheProfile(fullAttentionBytesPerToken: 32768)),
+        qualification: .qualified,
+        runtimeDefaults: TUFFModelRuntimeDefaults(temperature: 0.7, topK: 20, topP: 0.8),
+        capabilities: [.textGeneration, .reasoning], reasoningControl: .toggleWithPreservation)
+
+    public static let ornith15_35B_A3B = TUFFModelDescriptor(
+        id: .ornith15_35B_A3B, selector: "ornith-35b", apiModelID: "ornith-35b",
+        displayName: "Ornith 1.5 35B-A3B Q4", shortName: "Ornith 1.5 35B-A3B",
+        summary: "35B total, 3B active. Streams routed experts with a bounded cache.", family: .qwen36, architecture: .ornith15_35B_A3B,
+        installDirectoryName: "ornith-35b.gturbo",
+        source: TUFFModelSource(repoID: "ornith-ai/Ornith-1.5-35B-A3B-MLX-4bit", revision: "19504d912fa8fc7622bf6b1de3db5d5d890b1f02",
+            sourceIndexSHA256: "c118f13c0dcb729e4ca2e3d653ab193067551eb1a6410badb5192eb426104f36", manifestModelID: "ornith-ai/Ornith-1.5-35B-A3B-MLX-4bit",
+            approximateDownloadBytes: 19600000000, installedBytes: 19800000000, reserveBytes: oneGiB),
+        hardware: TUFFModelHardwareRequirements(minimumUnifiedMemoryBytes: eightGiB),
+        memory: TUFFModelMemoryProfile(qualifiedDefaultWorkingSetBytes: 2000000000,
+            expertCacheBytesPerSlot: 70778880, kvCache: TUFFKVCacheProfile(fullAttentionBytesPerToken: 20480)),
+        qualification: .qualified,
+        runtimeDefaults: TUFFModelRuntimeDefaults(temperature: 0.7, topK: 20, topP: 0.8),
+        capabilities: [.textGeneration, .reasoning], reasoningControl: .toggleWithPreservation)
+
+    public static let qwen38_27B = TUFFModelDescriptor(
+        id: .qwen38_27B, selector: "qwen38-27b", apiModelID: "qwen38-27b",
+        displayName: "Qwen 3.8 27B Q4", shortName: "Qwen 3.8 27B",
+        summary: "Dense 27B model. Bounded layer streaming supports smaller memory budgets; disk speed limits decode.", family: .qwen36, architecture: .qwen38_27B,
+        installDirectoryName: "qwen38-27b.gturbo",
+        source: TUFFModelSource(repoID: "mlx-community/Qwen3.8-27B-4bit", revision: "10c35caafbb80f7dc6a7a432cdd11af10a6d4818",
+            sourceIndexSHA256: "13b840162b4cb35c66fef7df072f7dbb4717908204364f5e5d9f9655a2758fa8", manifestModelID: "mlx-community/Qwen3.8-27B-4bit",
+            approximateDownloadBytes: 16200000000, installedBytes: 15500000000, reserveBytes: oneGiB),
+        hardware: TUFFModelHardwareRequirements(minimumUnifiedMemoryBytes: eightGiB),
+        memory: TUFFModelMemoryProfile(qualifiedDefaultWorkingSetBytes: 1400000000,
+            expertCacheBytesPerSlot: 0, kvCache: TUFFKVCacheProfile(fullAttentionBytesPerToken: 65536)),
+        qualification: .qualified,
+        runtimeDefaults: TUFFModelRuntimeDefaults(temperature: 0.7, topK: 20, topP: 0.8),
+        capabilities: [.textGeneration, .reasoning], reasoningControl: .toggleWithPreservation)
+
+    public static let ornith15_397B = TUFFModelDescriptor(
+        id: .ornith15_397B, selector: "ornith-397b", apiModelID: "ornith-397b",
+        displayName: "Ornith 1.5 397B Q4", shortName: "Ornith 1.5 397B",
+        summary: "397B MoE. Streams routed experts and retains only the projection layers that fit. Requires a large local install.",
+        family: .qwen36, architecture: .ornith15_397B, installDirectoryName: "ornith-397b.gturbo",
+        source: TUFFModelSource(repoID: "gratex/Ornith-1.5-397B-W4A16-g32-sym",
+            revision: "62fbf868ef177baf41f47c3e0001699a4ec54f02",
+            sourceIndexSHA256: "99e7ee7bbbf6f18184967b4be9a118f63c16c2fcbbe0bb8876088eaa9f03c177",
+            manifestModelID: "gratex/Ornith-1.5-397B-W4A16-g32-sym",
+            approximateDownloadBytes: 239_000_000_000, installedBytes: 249_000_000_000, reserveBytes: oneGiB),
+        hardware: TUFFModelHardwareRequirements(minimumUnifiedMemoryBytes: 16 * oneGiB),
+        memory: TUFFModelMemoryProfile(qualifiedDefaultWorkingSetBytes: 8_000_000_000,
+            expertCacheBytesPerSlot: 471_859_200, kvCache: TUFFKVCacheProfile(fullAttentionBytesPerToken: 30_720)),
+        qualification: .qualified,
+        runtimeDefaults: TUFFModelRuntimeDefaults(contextTokens: 2_048, expertCacheSlots: 16,
+            temperature: 0.7, topK: 20, topP: 0.8),
+        capabilities: [.textGeneration, .reasoning], reasoningControl: .toggleWithPreservation)
+
+    /// Community abliterated derivative. It shares Gemma's architecture and
+    /// engine, but never shares a checkpoint identity, install or settings.
+    public static let gemma4_26B_Heretic = TUFFModelDescriptor(
+        id: .gemma4_26B_Heretic, selector: "gemma4-heretic", apiModelID: "gemma4-heretic",
+        displayName: "Gemma 4 26B-A4B Heretic Q4", shortName: "Gemma 4 26B-A4B Heretic",
+        summary: "An abliterated Gemma variant for text and images, converted by mlx-community.",
+        family: .gemma4, architecture: .gemma4_26B_A4B,
+        installDirectoryName: "gemma4-heretic.gturbo",
+        source: TUFFModelSource(repoID: "mlx-community/gemma-4-26B-A4B-it-heretic-4bit",
+            revision: "1f1ae59040a78b1d717618f44c82757255925d26",
+            sourceIndexSHA256: "5455e83705bbdd4e3702c7d4f9d49d4900e84533036628f74500538075dd5c80",
+            manifestModelID: "mlx-community/gemma-4-26B-A4B-it-heretic-4bit",
+            approximateDownloadBytes: 15_000_000_000, installedBytes: 15_000_000_000,
+            reserveBytes: oneGiB),
+        hardware: gemma4_26B_A4B.hardware,
+        memory: TUFFModelMemoryProfile(qualifiedDefaultWorkingSetBytes: 2_600_000_000,
+            expertCacheBytesPerSlot: 100_761_600, kvCache: gemma4_26B_A4B.memory.kvCache),
+        qualification: .qualified,
+        runtimeDefaults: gemma4_26B_A4B.runtimeDefaults,
+        capabilities: [.textGeneration, .imageInput, .reasoning], reasoningControl: .toggle,
+        addons: [TUFFModelAddonDescriptor(
+            id: "gemma4-heretic-image-input", displayName: "Gemma Heretic Image Support", kind: .imageInput,
+            source: TUFFModelSource(repoID: "mlx-community/gemma-4-26B-A4B-it-heretic-4bit",
+                revision: "1f1ae59040a78b1d717618f44c82757255925d26",
+                sourceIndexSHA256: "5455e83705bbdd4e3702c7d4f9d49d4900e84533036628f74500538075dd5c80",
+                manifestModelID: "mlx-community/gemma-4-26B-A4B-it-heretic-4bit",
+                approximateDownloadBytes: 1_580_286_570, installedBytes: 1_148_567_552,
+                reserveBytes: oneGiB),
+            hardware: TUFFModelHardwareRequirements(minimumUnifiedMemoryBytes: eightGiB,
+                minimumAppleSiliconGeneration: 2))])
+
     public static let all: [TUFFModelDescriptor] = [
         gemma4_E2B,
         gemma4_E4B,
@@ -1105,6 +1267,11 @@ public enum TUFFModelCatalog {
         gptOss_120B,
         minimaxM27,
         qwen38FlashNext,
+        ornith15_9B,
+        ornith15_35B_A3B,
+        ornith15_397B,
+        qwen38_27B,
+        gemma4_26B_Heretic,
     ]
     public static let `default` = gemma4_26B_A4B
 

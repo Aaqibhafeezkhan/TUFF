@@ -2,6 +2,7 @@
 """Model-free tests for the release cask pinning step."""
 
 import hashlib
+import os
 from pathlib import Path
 import plistlib
 import re
@@ -31,7 +32,13 @@ class HomebrewReleaseTests(unittest.TestCase):
         self.assertRegex(self.original, r'(?m)^  sha256 "[0-9a-f]{64}"$')
         source = (homebrew.ROOT / "Sources/TUFFModelCatalog/TUFFVersion.swift").read_text()
         version = re.search(r'static let current\s*=\s*"([^"]+)"', source)[1]
-        self.assertIn(f'  version "{version}"', self.original)
+        if os.environ.get("TUFF_LOCAL_BUILD") == "1":
+            # A locally qualified unreleased app must not repoint Homebrew to
+            # a nonexistent public artifact or invent its release checksum.
+            published = re.search(r'(?m)^  version "([0-9]+\.[0-9]+\.[0-9]+)"$', self.original)[1]
+            self.assertLessEqual(tuple(map(int, published.split('.'))), tuple(map(int, version.split('.'))))
+        else:
+            self.assertIn(f'  version "{version}"', self.original)
         self.assertIn("/TUFF/releases/download/v#{version}/TUFF-v#{version}-macos-arm64.zip", self.original)
 
     def test_pins_exact_archive_digest_and_preserves_install_artifacts(self):

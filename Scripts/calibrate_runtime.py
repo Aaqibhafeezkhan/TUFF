@@ -131,8 +131,8 @@ def main():
             raise ValueError('at least three repetitions and a gain between zero and one are required')
         if args.context < 2048 or args.max_new < 2 or args.timeout <= 0:
             raise ValueError('context must be at least 2048, max-new at least 2 and timeout positive')
-        if args.service.name != 'TUFFDecodeService' or '/Applications/' in str(args.service.resolve()):
-            raise ValueError('use a packaged TUFFDecodeService outside /Applications')
+        if args.service.name not in ('TUFFDecodeService', 'TUFFInferenceEngine') or '/Applications/' in str(args.service.resolve()):
+            raise ValueError('use an installed TUFFInferenceEngine or development TUFFDecodeService outside /Applications')
         models = list(dict.fromkeys(args.models.split(',')))
         for model in models:
             model_options(args, model)

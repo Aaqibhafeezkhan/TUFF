@@ -1,5 +1,7 @@
 import Foundation
-import TUFFEngine
+import TUFFInferenceTypes
+import TUFFRuntimeDescriptions
+import TUFFModelMetadata
 
 public struct OpenAIErrorEnvelope: Codable, Equatable, Sendable {
     public struct Detail: Codable, Equatable, Sendable {
@@ -510,7 +512,7 @@ public struct OpenAIModelList: Codable, Equatable, Sendable {
     public let data: [Model]
 }
 
-public enum ServerRequestError: Error, Equatable, Sendable {
+public enum ServerRequestError: Error, Codable, Equatable, Sendable {
     case invalid(message: String, param: String?, code: String)
     case unknownModel
     case queueFull
@@ -539,8 +541,8 @@ public enum ServerRequestError: Error, Equatable, Sendable {
     }
 }
 
-public struct ValidatedChatRequest: Sendable {
-    public let messages: [GFTokenizer.Message]
+public struct ValidatedChatRequest: Codable, Sendable {
+    public let messages: [InferenceChatMessage]
     public let multimodalMessages: [MultimodalMessage]?
     public let imageFiles: [UUID: URL]
     /// Content SHA-256 of each message's images, in order, aligned with
@@ -548,7 +550,7 @@ public struct ValidatedChatRequest: Sendable {
     /// identify an image across turns; the content hash can. Empty for
     /// text-only requests.
     public let imageIdentities: [[String]]
-    public let tools: [GFTokenizer.FunctionDefinition]
+    public let tools: [InferenceFunctionDefinition]
     public let stream: Bool
     public let includeUsage: Bool
     public let generationConfig: GenerationConfig
@@ -564,16 +566,22 @@ public struct ValidatedChatRequest: Sendable {
     /// and the validator's store each stage under their own lease, and a
     /// request may carry files from both, so dropping either would delete
     /// files the other path staged before `generate` reads them.
-    fileprivate let attachmentLeases: [ServerAttachmentLease]
+    fileprivate var attachmentLeases: [ServerAttachmentLease] = []
     /// See `OpenAIChatRequest.promptCacheKey`.
     public var promptCacheKey: String?
 
+    private enum CodingKeys: String, CodingKey {
+        case messages, multimodalMessages, imageFiles, imageIdentities, tools
+        case stream, includeUsage, generationConfig, maximumCompletionTokens
+        case reasoning, preserveThinking, reasoningEffort, harmonyCurrentDate, promptCacheKey
+    }
+
     public init(
-        messages: [GFTokenizer.Message],
+        messages: [InferenceChatMessage],
         multimodalMessages: [MultimodalMessage]? = nil,
         imageFiles: [UUID: URL] = [:],
         imageIdentities: [[String]] = [],
-        tools: [GFTokenizer.FunctionDefinition],
+        tools: [InferenceFunctionDefinition],
         stream: Bool,
         includeUsage: Bool,
         generationConfig: GenerationConfig,
@@ -600,11 +608,11 @@ public struct ValidatedChatRequest: Sendable {
     }
 
     fileprivate init(
-        messages: [GFTokenizer.Message],
+        messages: [InferenceChatMessage],
         multimodalMessages: [MultimodalMessage]?,
         imageFiles: [UUID: URL],
         imageIdentities: [[String]],
-        tools: [GFTokenizer.FunctionDefinition],
+        tools: [InferenceFunctionDefinition],
         stream: Bool,
         includeUsage: Bool,
         generationConfig: GenerationConfig,
@@ -728,7 +736,7 @@ public enum OpenAIRequestValidator {
             }
             reasoning = .off
             reasoningEffort = request.reasoningEffort ?? .medium
-            harmonyCurrentDate = HarmonyPromptRenderer.calendarDate()
+            harmonyCurrentDate = InferenceCalendarDate.calendarDate()
         } else if dialect == .minimax {
             guard request.reasoningEffort == nil else {
                 throw invalid(
@@ -826,7 +834,7 @@ public enum OpenAIRequestValidator {
     }
 
     private static func validateTool(_ tool: OpenAITool,
-                                     dialect: ChatDialect) throws -> GFTokenizer.FunctionDefinition {
+                                     dialect: ChatDialect) throws -> InferenceFunctionDefinition {
         guard tool.type == "function" else {
             throw invalid("only function tools are supported", "tools", "unsupported_tool")
         }
@@ -849,7 +857,7 @@ public enum OpenAIRequestValidator {
             throw invalid("tool schema contains a number that cannot be represented exactly",
                           "tools", "invalid_tool_schema")
         }
-        return GFTokenizer.FunctionDefinition(name: name,
+        return InferenceFunctionDefinition(name: name,
                                               description: tool.function.description ?? "",
                                               parameters: parameters)
     }
@@ -890,7 +898,7 @@ public enum OpenAIRequestValidator {
     }
 
     private struct ValidatedMessages {
-        let messages: [GFTokenizer.Message]
+        let messages: [InferenceChatMessage]
         let multimodal: [MultimodalMessage]?
         let imageFiles: [UUID: URL]
         let imageIdentities: [[String]]
@@ -907,7 +915,7 @@ public enum OpenAIRequestValidator {
             throw invalid("messages must not be empty", "messages", "invalid_message")
         }
         var knownCalls: [String: (name: String, resolved: Bool)] = [:]
-        var result: [GFTokenizer.Message] = []
+        var result: [InferenceChatMessage] = []
         var multimodal: [MultimodalMessage] = []
         var imageFiles: [UUID: URL] = [:]
         var imageIdentities: [[String]] = []
@@ -915,7 +923,7 @@ public enum OpenAIRequestValidator {
         var store: ServerAttachmentStore?
         var sawConversationMessage = false
         for message in input {
-            guard let role = GFTokenizer.Role(rawValue: message.role) else {
+            guard let role = InferenceChatRole(rawValue: message.role) else {
                 throw invalid("unsupported message role \(message.role)",
                               "messages", "invalid_message")
             }
@@ -988,7 +996,7 @@ public enum OpenAIRequestValidator {
             // per-file, per-request, and count resource caps; no further count
             // check belongs here.
 
-            let calls: [GFTokenizer.HistoricalToolCall] = try (message.toolCalls ?? []).map { call in
+            let calls: [InferenceToolCall] = try (message.toolCalls ?? []).map { call in
                 guard role == .assistant, call.type == "function",
                       !call.id.isEmpty, knownCalls[call.id] == nil else {
                     throw invalid("invalid or duplicate historical tool call",
@@ -1014,7 +1022,7 @@ public enum OpenAIRequestValidator {
                         "invalid_tool_arguments")
                 }
                 knownCalls[call.id] = (call.function.name, false)
-                return GFTokenizer.HistoricalToolCall(
+                return InferenceToolCall(
                     id: call.id, name: call.function.name, arguments: arguments)
             }
             if role == .tool {
@@ -1036,7 +1044,7 @@ public enum OpenAIRequestValidator {
                 throw invalid("reasoning_content is supported only in assistant messages",
                               "messages", "invalid_message")
             }
-            result.append(GFTokenizer.Message(role: role,
+            result.append(InferenceChatMessage(role: role,
                                               content: content,
                                               thinking: message.reasoningContent,
                                               toolCalls: calls,

@@ -13,16 +13,16 @@ public enum MemoryFootprintExplanation {
     /// are inside the footprint, the 12.9 GB routed-expert pool is not.
     private static func chargedLine(bytes: UInt64?) -> String {
         "\(MetricFormat.memory(bytes)) charged to the app \u{2014} the KV cache, "
-            + "working buffers and expert slots."
+            + "working buffers, expert slots and staged weights."
     }
 
     /// Figure-free on purpose, so rows that show a different number (peak, for
     /// instance) can carry the same framing without contradicting themselves.
     public static let exclusionNote =
-        "The model's weights and the image tower are not counted here: the GPU "
-        + "reads them straight from disk, and macOS keeps them as cached files "
-        + "it can drop at any moment, charged to no app. To see them: Activity "
-        + "Monitor > Memory > Cached Files."
+        "File-backed resident weights and the image tower may be excluded from "
+        + "this footprint. It is not total RAM use. Auto's calculated allocation "
+        + "includes mapped weights and staging. File cache usage is shown in "
+        + "Activity Monitor > Memory > Cached Files."
 
     /// The tower stays wording, never a live figure: a number here invites
     /// adding it to the charged headline, which would restate the bug this

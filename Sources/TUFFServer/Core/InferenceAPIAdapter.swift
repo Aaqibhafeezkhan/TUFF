@@ -1,6 +1,8 @@
 import Foundation
 import CoreFoundation
-import TUFFEngine
+import TUFFInferenceTypes
+import TUFFRuntimeDescriptions
+import TUFFModelMetadata
 
 /// Text and JSON-function subsets. These adapters never execute tools, retain
 /// responses by ID, or pretend to provide a hosted provider's model features.

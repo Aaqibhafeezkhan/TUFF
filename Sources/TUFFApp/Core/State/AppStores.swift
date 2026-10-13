@@ -1,6 +1,8 @@
 import Foundation
 import Observation
-import TUFFEngine
+import TUFFInferenceTypes
+import TUFFRuntimeDescriptions
+import TUFFModelMetadata
 
 public enum AppRunState: Equatable, Sendable {
     case idle

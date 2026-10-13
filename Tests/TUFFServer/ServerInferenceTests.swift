@@ -1,8 +1,10 @@
+@testable import TUFFServerEngine
 import CoreGraphics
 import Foundation
 import ImageIO
 import Metal
 import Testing
+import TUFFModelCatalog
 import UniformTypeIdentifiers
 @testable import TUFFEngine
 @testable import TUFFServerCore
@@ -19,6 +21,10 @@ struct ServerVisionCapabilityTests {
         #expect(ServerModelSession.registryModelID(
             for: .qwen36_35B_A3B, fallback: "fallback")
             == "qwen3.6-35b-a3b")
+        #expect(ServerModelSession.registryModelID(
+            for: .gemma4_26B_A4B,
+            fallback: TUFFModelCatalog.gemma4_26B_Heretic.source.manifestModelID)
+            == "gemma4-heretic")
     }
 
     @Test func assistantDecoderKeepsThoughtOutOfVisibleOutput() async throws {

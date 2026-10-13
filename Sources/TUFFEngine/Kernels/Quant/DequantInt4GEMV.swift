@@ -23,6 +23,7 @@ final class DequantInt4GEMV {
     ]
 
     private let pipeline: MTLComputePipelineState
+    private let gatedPipeline: MTLComputePipelineState
     private let specializedPipelines: [Shape: MTLComputePipelineState]
 
     /// Affine group size this instance decodes. Every checkpoint in the
@@ -53,6 +54,8 @@ final class DequantInt4GEMV {
             "dequant_int4_gemv_simd",
             constants: groupConstants,
             maxTotalThreadsPerThreadgroup: 512)
+        self.gatedPipeline = try context.pipeline("dequant_int4_gemv_gated",
+            constants: groupConstants, maxTotalThreadsPerThreadgroup: 512)
 
         let shapes = Self.realDecodeShapes
             + additionalShapes.map { Shape(m: UInt32($0.m), n: UInt32($0.n)) }
@@ -82,14 +85,16 @@ final class DequantInt4GEMV {
                 y: MTLBuffer,
                 yOffset: Int = 0,
                 m: UInt32,
-                n: UInt32) {
+                n: UInt32, outputGate: MTLBuffer? = nil, outputGateOffset: Int = 0,
+                queryCount: Int = 1) {
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return }
         encode(encoder: encoder,
                weights: weights, weightsOffset: weightsOffset,
                scales: scales, scalesOffset: scalesOffset,
                biases: biases, biasesOffset: biasesOffset,
                x: x, xOffset: xOffset, y: y, yOffset: yOffset,
-               m: m, n: n)
+               m: m, n: n, outputGate: outputGate, outputGateOffset: outputGateOffset,
+               queryCount: queryCount)
         encoder.endEncoding()
     }
 
@@ -107,7 +112,9 @@ final class DequantInt4GEMV {
                 y: MTLBuffer,
                 yOffset: Int = 0,
                 m: UInt32,
-                n: UInt32) {
+                n: UInt32, outputGate: MTLBuffer? = nil, outputGateOffset: Int = 0,
+                queryCount: Int = 1) {
+        precondition(queryCount > 0 && (queryCount == 1 || outputGate != nil))
         precondition(n % UInt32(groupSize) == 0,
                      "N must be a multiple of \(groupSize)")
         // The kernel reads packed weights through a `ushort*`; the repacker
@@ -115,7 +122,8 @@ final class DequantInt4GEMV {
         precondition(weightsOffset % 2 == 0,
                      "dequant_int4_gemv_simd needs a 2-aligned weightsOffset, got \(weightsOffset)")
         encoder.setComputePipelineState(
-            specializedPipelines[Shape(m: m, n: n)] ?? pipeline)
+            outputGate == nil ? (specializedPipelines[Shape(m: m, n: n)] ?? pipeline) : gatedPipeline)
+        if let outputGate { encoder.setBuffer(outputGate, offset: outputGateOffset, index: 7) }
         encoder.setBuffer(weights, offset: weightsOffset, index: 0)
         encoder.setBuffer(scales, offset: scalesOffset, index: 1)
         encoder.setBuffer(biases, offset: biasesOffset, index: 2)
@@ -132,7 +140,7 @@ final class DequantInt4GEMV {
             depth: 1)
         let threadgroupCount = MTLSize(
             width: (Int(m) + Self.rowsPerThreadgroup - 1) / Self.rowsPerThreadgroup,
-            height: 1,
+            height: queryCount,
             depth: 1)
         encoder.dispatchThreadgroups(threadgroupCount,
                                      threadsPerThreadgroup: threadgroupSize)

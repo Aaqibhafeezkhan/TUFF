@@ -31,6 +31,8 @@ checksum="$archive.sha256"
 update_feed_url="${TUFF_UPDATE_FEED_URL:-https://github.com/rexmhall09/TUFF/releases/latest/download/appcast.xml}"
 update_public_key="${TUFF_UPDATE_PUBLIC_ED_KEY:-}"
 update_public_key_file="$repository_root/Config/UpdateSigningPublicKey.txt"
+automatic_updates=true
+if [[ "${TUFF_LOCAL_BUILD:-0}" == 1 ]]; then automatic_updates=false; fi
 if [[ -z "$update_public_key" && -f "$update_public_key_file" ]]; then
   IFS= read -r update_public_key < "$update_public_key_file"
 fi
@@ -70,19 +72,15 @@ fi
 
 required_binaries=(
   TUFF
-  TUFFDecodeService
   TUFFCommand
   TUFFCLI
   TUFFRepack
   TUFFServer
 )
 required_bundles=(
-  TUFF_TUFFEngine.bundle
   TUFF_TUFFAppCore.bundle
   TUFF_TUFFMac.bundle
-  swift-crypto_Crypto.bundle
   swift-nio_NIOPosix.bundle
-  swift-transformers_Hub.bundle
   SwiftMath_SwiftMath.bundle
 )
 required_frameworks=(Sparkle.framework)
@@ -99,18 +97,14 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" \
   "$app/Contents/Frameworks"
 signed_binaries="$temporary_directory/signed-binaries"
 mkdir -p "$signed_binaries"
-# TUFF is also the decode service, the server and the command-line runner. The
-# bundle links those names to it and it picks a role from the name it was
-# started under, so the engine ships once instead of four times: the archive
-# went from 21.8 MB to 10.4 MB. The separate executables SwiftPM builds are
-# for development builds only.
+# App, CLI and HTTP host roles share the small host executable. Inference
+# helpers and shaders live in authenticated packages outside this bundle.
 shipped_binaries=(TUFF TUFFCommand TUFFRepack)
 for name in "${shipped_binaries[@]}"; do
   install -m 0755 "$binary_directory/$name" "$signed_binaries/$name"
 done
 
-# Drop local symbols before signing. The engine is linked statically, and
-# symbol tables were more than half of each binary. `-x` keeps external symbols, so dynamic
+# Drop local symbols before signing. `-x` keeps external symbols, so dynamic
 # lookup and Sparkle's framework linkage are untouched; what is lost is
 # function names in a crash report, which an ad-hoc-signed build has no
 # symbol server for anyway. Stripping must happen before codesign — doing it
@@ -136,7 +130,6 @@ for name in "${shipped_binaries[@]}"; do
   codesign --verify --strict --verbose=2 "$signed_binaries/$name"
 done
 install -m 0755 "$signed_binaries/TUFF" "$app/Contents/MacOS/TUFF"
-ln -s TUFF "$app/Contents/MacOS/TUFFDecodeService"
 mkdir -p "$app/Contents/Resources/bin"
 install -m 0755 "$signed_binaries/TUFFCommand" \
   "$app/Contents/Resources/bin/tuff"
@@ -152,6 +145,17 @@ done
 for name in "${required_bundles[@]}"; do
   ditto "$binary_directory/$name" "$app/Contents/Resources/$name"
 done
+
+engine_catalog="${TUFF_ENGINE_CATALOG_PATH:-}"
+if [[ -z "$engine_catalog" || ! -f "$engine_catalog" ]]; then
+  echo "Set TUFF_ENGINE_CATALOG_PATH to a verified engine catalogue (Scripts/package_engines.sh builds local packages)." >&2
+  exit 1
+fi
+install -m 0644 "$engine_catalog" "$app/Contents/Resources/engine-catalog.json"
+if nm -gU "$signed_binaries/TUFF" | grep -E 'RealForwardRunner|GPTOSSForwardRunner|MetalContext' >/dev/null; then
+  echo "host unexpectedly includes an inference runtime" >&2
+  exit 1
+fi
 
 # Vendor/SwiftMath carries only Latin Modern Math, the default the renderer
 # uses; it never sets `MathImage.font`. SwiftMath loads the font by name the
@@ -239,9 +243,10 @@ if [[ -n "$update_public_key" ]]; then
   plutil -insert SUPublicEDKey -string "$update_public_key" "$info_plist"
   plutil -insert SURequireSignedFeed -bool true "$info_plist"
   plutil -insert SUVerifyUpdateBeforeExtraction -bool true "$info_plist"
-  plutil -insert SUEnableAutomaticChecks -bool true "$info_plist"
-  plutil -insert SUAllowsAutomaticUpdates -bool true "$info_plist"
-  plutil -insert SUAutomaticallyUpdate -bool true "$info_plist"
+  plutil -insert SUEnableAutomaticChecks -bool "$automatic_updates" "$info_plist"
+  plutil -insert SUAllowsAutomaticUpdates -bool "$automatic_updates" "$info_plist"
+  plutil -insert SUAutomaticallyUpdate -bool "$automatic_updates" "$info_plist"
+  if [[ "$automatic_updates" == false ]]; then plutil -insert TUFFLocalBuild -bool true "$info_plist"; fi
 else
   echo "warning: no Sparkle update public key; in-app updates are disabled" >&2
 fi
@@ -260,14 +265,13 @@ plutil -lint "$agent_plist"
 fi
 plutil -lint "$info_plist"
 if [[ -n "$update_public_key" ]]; then
-  [[ "$(plutil -extract SUEnableAutomaticChecks raw "$info_plist")" == "true" ]]
-  [[ "$(plutil -extract SUAllowsAutomaticUpdates raw "$info_plist")" == "true" ]]
-  [[ "$(plutil -extract SUAutomaticallyUpdate raw "$info_plist")" == "true" ]]
+  [[ "$(plutil -extract SUEnableAutomaticChecks raw "$info_plist")" == "$automatic_updates" ]]
+  [[ "$(plutil -extract SUAllowsAutomaticUpdates raw "$info_plist")" == "$automatic_updates" ]]
+  [[ "$(plutil -extract SUAutomaticallyUpdate raw "$info_plist")" == "$automatic_updates" ]]
 fi
 
 main_architectures="$(lipo -archs "$app/Contents/MacOS/TUFF")"
-service_architectures="$(lipo -archs "$app/Contents/MacOS/TUFFDecodeService")"
-if [[ "$main_architectures" != "arm64" || "$service_architectures" != "arm64" ]]; then
+if [[ "$main_architectures" != "arm64" ]]; then
   echo "release app must contain arm64-only executables" >&2
   exit 1
 fi
@@ -300,7 +304,7 @@ test -f "$extracted/TUFF.app/Contents/Frameworks/Sparkle.framework/Sparkle"
 test -x "$extracted/TUFF.app/Contents/Resources/bin/tuff"
 "$extracted/TUFF.app/Contents/Resources/bin/tuff" --help \
   | grep -F 'tuff prompt' >/dev/null
-for link in MacOS/TUFFDecodeService Resources/bin/TUFFCLI Resources/bin/TUFFServer; do
+for link in Resources/bin/TUFFCLI Resources/bin/TUFFServer; do
   test -L "$extracted/TUFF.app/Contents/$link"
 done
 "$extracted/TUFF.app/Contents/Resources/bin/TUFFCLI" --help \

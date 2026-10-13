@@ -1,7 +1,8 @@
 import Foundation
 import TUFFModelCatalog
-import TUFFEngine
+import TUFFRuntimeDescriptions
 import TUFFRepackCore
+import TUFFRuntimeManagement
 
 public enum AppReasoningControl: Equatable, Sendable {
     case toggle
@@ -87,6 +88,9 @@ public struct AppModelInstallDescriptor: Equatable, Sendable {
     public let installedBytes: UInt64
     public let rangeStagingBytes: UInt64
     public let reserveBytes: UInt64
+    public let customIdentity: String?
+    public let customArchitectureTemplate: TUFFModelID?
+    public let customManifestSHA256: String?
 
     public init(catalog descriptor: TUFFModelDescriptor) {
         let source = descriptor.source
@@ -97,7 +101,7 @@ public struct AppModelInstallDescriptor: Equatable, Sendable {
             sourceIndexSHA256: source.sourceIndexSHA256,
             approximateDownloadBytes: source.approximateDownloadBytes,
             installedBytes: source.installedBytes,
-            rangeStagingBytes: UInt64(RemoteChunkPolicy.defaultBytes),
+            rangeStagingBytes: UInt64(RemoteChunkPolicy.defaultBytes) * 2,
             reserveBytes: source.reserveBytes)
     }
 
@@ -110,7 +114,7 @@ public struct AppModelInstallDescriptor: Equatable, Sendable {
             sourceIndexSHA256: source.sourceIndexSHA256,
             approximateDownloadBytes: source.approximateDownloadBytes,
             installedBytes: source.installedBytes,
-            rangeStagingBytes: UInt64(RemoteChunkPolicy.defaultBytes),
+            rangeStagingBytes: UInt64(RemoteChunkPolicy.defaultBytes) * 2,
             reserveBytes: source.reserveBytes)
     }
 
@@ -121,7 +125,10 @@ public struct AppModelInstallDescriptor: Equatable, Sendable {
                 approximateDownloadBytes: UInt64,
                 installedBytes: UInt64,
                 rangeStagingBytes: UInt64,
-                reserveBytes: UInt64) {
+                reserveBytes: UInt64,
+                customIdentity: String? = nil,
+                customArchitectureTemplate: TUFFModelID? = nil,
+                customManifestSHA256: String? = nil) {
         self.displayName = displayName
         self.repoID = repoID
         self.revision = revision
@@ -130,10 +137,33 @@ public struct AppModelInstallDescriptor: Equatable, Sendable {
         self.installedBytes = installedBytes
         self.rangeStagingBytes = rangeStagingBytes
         self.reserveBytes = reserveBytes
+        self.customIdentity = customIdentity
+        self.customArchitectureTemplate = customArchitectureTemplate
+        self.customManifestSHA256 = customManifestSHA256
     }
 
     public var requiredFreeBytes: UInt64 {
-        installedBytes + rangeStagingBytes + reserveBytes
+        installedBytes + rangeStagingBytes + reserveBytes + engineInstallationTemporaryBytes
+    }
+
+    private var engineRelease: InferenceEngineRelease? {
+        guard let architecture = planningCatalogID.flatMap(TUFFModelCatalog.model(id:))?.architecture.id.rawValue,
+              let controller = try? InferenceEngineEnvironment.controller() else { return nil }
+        return try? controller.catalog.release(architectureID: architecture,
+            macOSMajorVersion: ProcessInfo.processInfo.operatingSystemVersion.majorVersion)
+    }
+    public var engineDownloadBytes: UInt64 { engineRelease?.archiveBytes ?? 0 }
+    public var projectionLayerCount: Int {
+        guard let architecture = planningCatalogID.flatMap(TUFFModelCatalog.model(id:))?.architecture,
+              architecture.weightLayout == .affine,
+              let variant = ModelVariant(rawValue: architecture.id.rawValue) else { return 0 }
+        return ArchConfig.registeredArchitectures[variant]?.numLayers ?? 0
+    }
+    public var engineInstalledBytes: UInt64 { engineRelease?.installedBytes ?? 0 }
+    /// Conservative peak if the shared family engine needs installation/repair.
+    public var engineInstallationTemporaryBytes: UInt64 {
+        guard let release = engineRelease else { return 0 }
+        return release.archiveBytes + release.installedBytes * 2 + (1 << 20)
     }
 
     public static let `default` = AppModelInstallDescriptor(
@@ -161,7 +191,8 @@ public struct AppModelInstallDescriptor: Equatable, Sendable {
 
     /// Basename of the installed `.gturbo` directory for this descriptor.
     public var installDirectoryName: String {
-        catalogDescriptor?.installDirectoryName
+        if let customIdentity { return "\(customIdentity).gturbo" }
+        return catalogDescriptor?.installDirectoryName
             ?? (self == .qwen36 ? "qwen36.gturbo" : "gemma4.gturbo")
     }
 
@@ -174,15 +205,19 @@ public struct AppModelInstallDescriptor: Equatable, Sendable {
     /// Test-only/custom descriptors keep their install basename as a safe
     /// fallback so they never collide with a shipped model profile.
     public var catalogID: TUFFModelID? {
-        catalogDescriptor?.id
+        customIdentity == nil ? catalogDescriptor?.id : nil
     }
+    public var planningCatalogID: TUFFModelID? { customArchitectureTemplate ?? catalogID }
+    public var isCustomCheckpoint: Bool { customIdentity != nil }
+
+    public var isLegacy: Bool { catalogDescriptor?.maintenanceStatus == .legacy }
 
     public var settingsProfileKey: String {
         catalogID?.rawValue ?? id
     }
 
     public var apiModelID: String {
-        catalogDescriptor?.apiModelID ?? settingsProfileKey
+        isCustomCheckpoint ? settingsProfileKey : (catalogDescriptor?.apiModelID ?? settingsProfileKey)
     }
 
     /// The model family this descriptor installs.
@@ -203,7 +238,7 @@ public struct AppModelInstallDescriptor: Equatable, Sendable {
     /// Whether this exact checkpoint has a qualified image companion. Custom
     /// descriptors retain the v1 behavior for tests and local builds.
     public var supportsImageInput: Bool {
-        catalogDescriptor?.capabilities.contains(.imageInput) ?? true
+        !isCustomCheckpoint && (catalogDescriptor?.capabilities.contains(.imageInput) ?? true)
     }
 
     /// Chunk size the app runs prefill at for this model on `device`; see
@@ -337,13 +372,13 @@ public struct AppModelInstallDescriptor: Equatable, Sendable {
     }
 
     public var shortName: String {
-        catalogDescriptor?.shortName ?? displayName
+        isCustomCheckpoint ? displayName : (catalogDescriptor?.shortName ?? displayName)
     }
 
     public var defaultSystemPrompt: String {
         catalogDescriptor?.defaultSystemPrompt
             ?? "You are \(shortName), a helpful AI assistant. "
-                + "You are running in a SSD MoE streaming app on Mac called TUFF."
+                + "You are running locally on a Mac in an app called TUFF."
     }
 
     /// The descriptor the app products select at launch. Defaults to Gemma 4.
@@ -358,9 +393,10 @@ public struct AppModelInstallDescriptor: Equatable, Sendable {
         let environment = ProcessInfo.processInfo.environment
         let environmentValue = environment["TUFF_MODEL"]
             ?? environment["TURBO_FIELDFARE_MODEL"]
-        let preferenceValue = UserDefaults(suiteName: "TUFF")?
+        let suite = TUFFApplicationDirectories.preferencesSuiteName(environment: environment)
+        let preferenceValue = UserDefaults(suiteName: suite)?
             .string(forKey: "model")
-            ?? UserDefaults(suiteName: "TurboFieldfare")?.string(forKey: "model")
+            ?? (suite == "TUFF" ? UserDefaults(suiteName: "TurboFieldfare")?.string(forKey: "model") : nil)
         guard let selector = environmentValue ?? preferenceValue,
               let descriptor = TUFFModelCatalog.model(selector: selector) else {
             return .default
@@ -420,8 +456,16 @@ public struct AppModelInstallDescriptor: Equatable, Sendable {
         catalogDescriptor.flatMap { ModelVariant(rawValue: $0.architecture.id.rawValue) }
     }
 
+    /// A companion belongs to the checkpoint, not merely its architecture.
+    public var imageCompanion: AppModelInstallDescriptor? {
+        guard !isCustomCheckpoint, let catalogDescriptor,
+              let addon = catalogDescriptor.addons.first(where: { $0.kind == .imageInput }) else { return nil }
+        return AppModelInstallDescriptor(addon: addon)
+    }
+
     private var catalogDescriptor: TUFFModelDescriptor? {
-        TUFFModelCatalog.all.first {
+        if let customArchitectureTemplate { return TUFFModelCatalog.model(id: customArchitectureTemplate) }
+        return TUFFModelCatalog.all.first {
             $0.source.repoID == repoID
                 && $0.source.revision == revision
                 && $0.source.sourceIndexSHA256 == sourceIndexSHA256

@@ -4,9 +4,11 @@ import TUFFFormat
 
 public struct VerifyInstallOptions: Sendable {
     public let inputGTurbo: String
+    public let writeReceipt: Bool
 
-    public init(inputGTurbo: String) {
+    public init(inputGTurbo: String, writeReceipt: Bool = true) {
         self.inputGTurbo = inputGTurbo
+        self.writeReceipt = writeReceipt
     }
 }
 
@@ -18,10 +20,10 @@ public struct VerifyInstallResult: Sendable {
 }
 
 public enum VerifiedInstallTool {
-    // 64 MiB: sized for Qwen 3.6's ~22 MB layout.json (40 layers x 256 experts).
-    public static let metadataMaxBytes: UInt64 = 64 * 1024 * 1024
+    // Ornith 397B's completed layout is 68,280,566 bytes.
+    public static let metadataMaxBytes: UInt64 = 128 * 1024 * 1024
     public static let manifestMaxBytes: UInt64 = 4 * 1024 * 1024
-    public static let layoutMaxBytes: UInt64 = 64 * 1024 * 1024
+    public static let layoutMaxBytes: UInt64 = 128 * 1024 * 1024
 
     public static func run(options: VerifyInstallOptions) throws -> VerifyInstallResult {
         let root = URL(fileURLWithPath: options.inputGTurbo).standardizedFileURL
@@ -100,7 +102,9 @@ public enum VerifiedInstallTool {
             toolVersion: "TUFFRepack verify-install",
             files: files)
         let receiptPath = root.appendingPathComponent(VerifiedInstallReceiptWriter.fileName).path
-        try access.atomicWrite(receiptData, to: VerifiedInstallReceiptWriter.fileName)
+        if options.writeReceipt {
+            try access.atomicWrite(receiptData, to: VerifiedInstallReceiptWriter.fileName)
+        }
         return VerifyInstallResult(receiptPath: receiptPath,
                                    fileCount: files.count + 1,
                                    bytesVerified: bytesVerified,

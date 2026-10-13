@@ -1,7 +1,7 @@
 import Foundation
 
 /// Automatic context targets scale with both this model's KV cost and the
-/// Mac's memory. Expert caches retain their measured, qualified slot counts.
+/// Mac's memory. Runtime observations refine cache and chunk choices.
 public enum AppAutomaticMemoryProfile: String, Codable, CaseIterable,
                                        Identifiable, Sendable {
     case speed
@@ -20,19 +20,17 @@ public enum AppAutomaticMemoryProfile: String, Codable, CaseIterable,
     public var explanation: String {
         switch self {
         case .speed:
-            "Uses about a quarter of the context this model can fit in your Mac's memory, keeping conversations lighter."
+            "Prioritizes decode speed and a lighter context. Repeated local observations refine cache choices."
         case .balanced:
-            "Uses about half of the context this model can fit in your Mac's memory, with room for longer conversations."
+            "Balances response latency, memory and context. Larger caches are used when observations support them."
         case .context:
-            "Uses the longest supported context that fits in your Mac's memory. Long conversations take more time to process."
+            "Uses the longest supported context within the allocation budget, trading weight residency when needed."
         }
     }
 
+    // Compatibility planner for callers without a verified weight layout.
     var contextCapacityDivisor: Int {
-        switch self {
-        case .speed: 4
-        case .balanced: 2
-        case .context: 1
-        }
+        switch self { case .speed: 4; case .balanced: 2; case .context: 1 }
     }
+
 }

@@ -1,24 +1,51 @@
-import TUFFEngine
+import TUFFRuntimeDescriptions
 import TUFFModelCatalog
+import TUFFInferenceTypes
+import TUFFModelMetadata
+import Foundation
+import Synchronization
 
 /// The concrete memory settings Auto resolves for one model on one Mac.
-public struct AppAutomaticMemoryPlan: Equatable, Sendable {
+public struct AppAutomaticMemoryPlan: Codable, Equatable, Sendable {
     public let profile: AppAutomaticMemoryProfile
     public let contextTokens: Int
     public let expertCacheSlots: Int
     public let estimatedWorkingSetBytes: UInt64
     public let safeBudgetBytes: UInt64
+    public let denseResidencyPolicy: DenseResidencyPolicy
+    public let residencyMode: InferenceResidencyMode
+    public let residentLayerCount: Int?
+    public let streamedBytesPerToken: UInt64
+    public let prefillChunkTokens: Int
+    public let evidence: InferencePlanEvidence
+    public let candidateID: String?
+    public let retainedConversationBytes: Int?
 
     public init(profile: AppAutomaticMemoryProfile = .balanced,
                 contextTokens: Int,
                 expertCacheSlots: Int,
                 estimatedWorkingSetBytes: UInt64,
-                safeBudgetBytes: UInt64) {
+                safeBudgetBytes: UInt64,
+                denseResidencyPolicy: DenseResidencyPolicy = .resident,
+                residencyMode: InferenceResidencyMode = .partial,
+                residentLayerCount: Int? = nil,
+                streamedBytesPerToken: UInt64 = 0,
+                prefillChunkTokens: Int = 128,
+                evidence: InferencePlanEvidence = .fallback,
+                candidateID: String? = nil, retainedConversationBytes: Int? = nil) {
         self.profile = profile
         self.contextTokens = contextTokens
         self.expertCacheSlots = expertCacheSlots
         self.estimatedWorkingSetBytes = estimatedWorkingSetBytes
         self.safeBudgetBytes = safeBudgetBytes
+        self.denseResidencyPolicy = denseResidencyPolicy
+        self.residencyMode = residencyMode
+        self.residentLayerCount = residentLayerCount
+        self.streamedBytesPerToken = streamedBytesPerToken
+        self.prefillChunkTokens = prefillChunkTokens
+        self.evidence = evidence
+        self.candidateID = candidateID
+        self.retainedConversationBytes = retainedConversationBytes
     }
 }
 
@@ -26,13 +53,82 @@ public struct AppAutomaticMemoryPlan: Equatable, Sendable {
 /// Cache counts retain qualified defaults; larger context must fit alongside
 /// the selected chunk's scratch and ring storage.
 public enum AppAutomaticMemoryPlanner {
+    public static func estimatedAllocation(directory: URL, context: Int,
+                                            options: AppRuntimeOptions) -> InferenceMemoryEstimate? {
+        guard options.retainedConversationBytes.map({ (0...(1 << 30)).contains($0) }) ?? true else { return nil }
+        guard let summary = layoutSummary(at: directory),
+              let catalog = TUFFModelCatalog.model(manifestModelID: summary.modelID)
+                ?? TUFFModelCatalog.all.first(where: { $0.architecture.id.rawValue == summary.architectureID }) else { return nil }
+        return AppAutomaticLayoutPlanner.estimate(catalog: catalog, summary: summary,
+            context: context, slots: options.expertCacheSlots, chunk: options.prefillChunkTokens,
+            densePolicy: options.denseResidencyPolicy,
+            retainedBytes: UInt64(options.retainedConversationBytes ?? Int(ConversationRetentionBudget.defaultCapBytes)))
+    }
+    private static let summaries = Mutex<[String: ModelWeightLayoutSummary]>([:])
+    private static let plans = Mutex<[String: AppAutomaticMemoryPlan]>([:])
+    private struct BundledLayouts: Decodable {
+        struct Profile: Decodable { let sourceIndexSHA256: String; let layout: ModelWeightLayoutSummary }
+        let schemaVersion: Int
+        let profiles: [String: Profile]
+    }
+    private static let bundledLayouts: BundledLayouts? = {
+        let bundle = Bundle.main.resourceURL.flatMap {
+            Bundle(url: $0.appendingPathComponent("TUFF_TUFFAppCore.bundle"))
+        } ?? Bundle.module
+        guard let url = bundle.url(forResource: "model-layouts", withExtension: "json"),
+              let data = try? Data(contentsOf: url), data.count <= 1 << 20,
+              let decoded = try? JSONDecoder().decode(BundledLayouts.self, from: data),
+              decoded.schemaVersion == 1 else { return nil }
+        return decoded
+    }()
+    public static func predictedLayout(for descriptor: AppModelInstallDescriptor) -> ModelWeightLayoutSummary? {
+        guard let catalog = descriptor.catalogID.flatMap(TUFFModelCatalog.model(id:)),
+              let profile = bundledLayouts?.profiles[catalog.id.rawValue],
+              profile.sourceIndexSHA256 == catalog.source.sourceIndexSHA256,
+              profile.layout.architectureID == catalog.architecture.id.rawValue else { return nil }
+        return profile.layout
+    }
+    public static func layoutSummary(at directory: URL) -> ModelWeightLayoutSummary? {
+        let manifest = directory.appendingPathComponent("manifest.json")
+        let weights = directory.appendingPathComponent("model_weights.bin")
+        guard let metadata = try? FileManager.default.attributesOfItem(atPath: manifest.path),
+              let payload = try? FileManager.default.attributesOfItem(atPath: weights.path) else { return nil }
+        let key = "\(directory.standardizedFileURL.path):\(metadata[.modificationDate] ?? ""):\(metadata[.size] ?? ""):\(payload[.modificationDate] ?? ""):\(payload[.size] ?? "")"
+        if let cached = summaries.withLock({ $0[key] }) { return cached }
+        guard let summary = try? ModelWeightLayoutSummary.read(directory: directory) else { return nil }
+        summaries.withLock { if $0.count >= 64 { $0.removeAll() }; $0[key] = summary }
+        return summary
+    }
     public static func plan(
         for descriptor: AppModelInstallDescriptor,
         on device: TUFFDeviceCapabilities,
-        profile: AppAutomaticMemoryProfile = .balanced
+        profile: AppAutomaticMemoryProfile = .balanced,
+        layoutSummary: ModelWeightLayoutSummary? = nil,
+        observations: [InferencePlanObservation] = [],
+        workloadKey: String = "text-cold-short-t0",
+        modelDirectory: URL? = nil,
+        useBundledLayout: Bool = false,
+        contextTokens: Int? = nil,
+        engineIdentity: String? = nil
     ) -> AppAutomaticMemoryPlan? {
-        guard let id = descriptor.catalogID,
+        guard let id = descriptor.planningCatalogID,
               let catalog = TUFFModelCatalog.model(id: id) else { return nil }
+        if let layoutSummary = layoutSummary ?? modelDirectory.flatMap({ self.layoutSummary(at: $0) })
+            ?? (useBundledLayout ? predictedLayout(for: descriptor) : nil) {
+            let identity = AppAutoPerformanceRecords.identity(summary: layoutSummary, device: device,
+                engineIdentity: engineIdentity, modelDirectory: modelDirectory)
+            let key = "\(identity):\(profile.rawValue):\(contextTokens ?? 0):\(workloadKey):\(AppAutoMemoryPressureMonitor.shared.snapshot.pressure.rawValue):\(AppAutoPerformanceRecords.revisionToken)"
+            if observations.isEmpty, let cached = plans.withLock({ $0[key] }) { return cached }
+            let selected = AppAutomaticLayoutPlanner.plan(catalog: catalog, descriptor: descriptor,
+                device: device, profile: profile, summary: layoutSummary,
+                observations: observations.isEmpty
+                    ? AppAutoPerformanceRecords.observations(identity: identity)
+                    : observations, workloadKey: workloadKey, contextOverride: contextTokens)
+            if observations.isEmpty, let selected {
+                plans.withLock { if $0.count >= 128 { $0.removeAll() }; $0[key] = selected }
+            }
+            return selected
+        }
 
         let budget = device.safeAppMemoryBudgetBytes
         let chunk = catalog.recommendedPrefillChunkTokens(on: device)
@@ -94,7 +190,9 @@ public enum AppAutomaticMemoryPlanner {
                 contextTokens: context,
                 expertCacheSlots: slots,
                 prefillChunkTokens: chunk),
-            safeBudgetBytes: budget)
+            safeBudgetBytes: budget,
+            residencyMode: descriptor.usesExpertCache ? .partial : .resident,
+            prefillChunkTokens: chunk)
     }
 
     /// What a dense model really keeps resident: every weight, because every
@@ -121,12 +219,19 @@ public enum AppAutomaticMemoryPlanner {
     public static func applying(
         _ profile: AppModelSettingsProfile,
         for descriptor: AppModelInstallDescriptor,
-        on device: TUFFDeviceCapabilities
+        on device: TUFFDeviceCapabilities,
+        modelDirectory: URL? = nil,
+        workloadKey: String = "text-cold-short-t0",
+        useBundledLayout: Bool = false,
+        engineIdentity: String? = nil
     ) -> AppModelSettingsProfile {
         guard profile.automaticMemory,
               let plan = plan(for: descriptor,
                               on: device,
-                              profile: profile.automaticMemoryProfile) else { return profile }
+                              profile: profile.automaticMemoryProfile,
+                              workloadKey: workloadKey,
+                              modelDirectory: modelDirectory,
+                              useBundledLayout: useBundledLayout, engineIdentity: engineIdentity) else { return profile }
         var resolved = profile
         resolved.contextTokens = plan.contextTokens
         resolved.expertCacheSlots = plan.expertCacheSlots

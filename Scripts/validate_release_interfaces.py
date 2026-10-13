@@ -14,7 +14,7 @@ import subprocess
 import time
 import urllib.request
 import uuid
-from benchmark_inference import digest, prompt, shader_digest, sys_exit_signal
+from benchmark_inference import digest, prompt, shader_digest, sys_exit_signal, engine_info
 from benchmark_reporting import machine_state, require_idle_inference
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -84,12 +84,17 @@ def service_run(args, model, config):
                    prefillEnabled=config['runtime'][3]=='on', prefillChunkTokens=int(config['runtime'][5]),
                    rdadvisePolicy=config['runtime'][7], modelVerification='trusted-install')
     binary = args.app/'Contents/MacOS/TUFFDecodeService'
+    engine_arguments = []
+    if not binary.exists():
+        info = engine_info(args.app/'Contents/Resources/bin/TUFFCLI', args.model_root/Path(config['path']).name)
+        binary = Path(info['executablePath'])
+        engine_arguments = ['--engine-lock', info['lockFilePath']]
     rows = []
     for mode in args.modes.split(','):
         require_idle_inference()
         log = args.output/f'app-{model}-{mode}.stderr.txt'
         with log.open('w') as stderr:
-            proc = subprocess.Popen([str(binary)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,
+            proc = subprocess.Popen([str(binary)] + engine_arguments,stdin=subprocess.PIPE,stdout=subprocess.PIPE,
                                     stderr=stderr,bufsize=0,start_new_session=True,
                                     env=dict(os.environ,**environment_overrides(args)))
             try:
@@ -269,7 +274,8 @@ def main():
                 for row in generated:
                     row.update(variant=variant,comparison_attempt=trial,manifest_sha256=digest(manifest),
                                model_identity={k:model_identity[k] for k in ('modelID','sourceSnapshotHash','arch','quant') if k in model_identity},
-                               shaders_sha256=shader_digest(session.app/'Contents/Resources/bin/TUFFCLI'))
+                               shaders_sha256=shader_digest(session.app/'Contents/Resources/bin/TUFFCLI',
+                                   args.model_root/Path(selected['path']).name))
                 rows += generated
                 (args.output/'results.json').write_text(json.dumps(dict(harness_sha256=digest(__file__),results=rows),indent=2))
     (args.output/'results.json').write_text(json.dumps(dict(harness_sha256=digest(__file__),results=rows),indent=2))

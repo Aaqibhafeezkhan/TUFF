@@ -1,3 +1,4 @@
+import TUFFEngineAdapter
 import Foundation
 import TUFFEngine
 import TUFFAppCore
@@ -17,6 +18,9 @@ extension RealInferenceClient: DecodeServiceInference {}
 /// runs. If either direction of the transport fails, the service cancels its
 /// work, releases the session and returns.
 final class DecodeService: @unchecked Sendable {
+    private let requiresHandshake: Bool
+    private let capabilities = DecodeEngineCapabilities(
+        architectureIDs: ArchConfig.registeredArchitectures.keys.map(\.rawValue).sorted())
     private let client: any DecodeServiceInference
     private let input: FileHandle
     private let output: FileHandle
@@ -29,8 +33,10 @@ final class DecodeService: @unchecked Sendable {
     init(client: any DecodeServiceInference,
          input: FileHandle,
          output: FileHandle,
+         requiresHandshake: Bool = false,
          beforeGenerationStarts: (@Sendable (DecodeTransportLifecycle) -> Void)? = nil) {
         self.client = client
+        self.requiresHandshake = requiresHandshake
         self.input = input
         self.output = output
         self.beforeGenerationStarts = beforeGenerationStarts
@@ -45,12 +51,33 @@ final class DecodeService: @unchecked Sendable {
         startInputThread()
         var modelDirectory: URL?
         var loadedOptions: DecodeRuntimeOptions?
+        var negotiatedArchitecture: String?
         commandLoop: while let command = await nextCommand() {
             guard lifecycle.lostTransport == nil else { break }
             switch command {
+            case .hello(let request):
+                if capabilities.accepts(request) {
+                    negotiatedArchitecture = request.architectureID
+                    var reply = DecodeServiceEvent(kind: .hello, generationID: request.requestID)
+                    reply.capabilities = capabilities
+                    send(reply)
+                } else {
+                    negotiatedArchitecture = nil
+                    send(DecodeServiceEvent(kind: .failed, generationID: request.requestID,
+                        error: "engine protocol, architecture or model format is incompatible"))
+                }
             case .load(let request):
                 let directory = URL(fileURLWithPath: request.modelPath)
                 do {
+                    if requiresHandshake {
+                        guard let negotiatedArchitecture else {
+                            throw AppInferenceError.modelLoadFailed("engine handshake is required before loading a model")
+                        }
+                        let architecture = try ManifestReader.resolveArchitecture(directoryURL: directory)
+                        guard negotiatedArchitecture == architecture.variant.rawValue else {
+                            throw AppInferenceError.modelLoadFailed("engine handshake is required before loading this architecture")
+                        }
+                    }
                     let options = try Self.appRuntimeOptions(request.runtimeOptions)
                     try await client.ensureLoaded(
                         modelDirectory: directory,
@@ -243,7 +270,8 @@ final class DecodeService: @unchecked Sendable {
             runtimeOptions: options,
             tools: request.tools ?? [],
             currentRounds: (request.currentRounds ?? []).map(appToolRound),
-            conversationKey: request.conversationKey)
+            conversationKey: request.conversationKey,
+            preservesFullHistory: request.preservesFullHistory)
     }
 
     /// A round as the model reads it. Status and summaries stay in the app;
@@ -309,7 +337,10 @@ final class DecodeService: @unchecked Sendable {
             prefillChunkTokens: options.prefillChunkTokens,
             rdadvisePolicy: rdadvisePolicy,
             modelVerification: modelVerification,
-            visionResidencyPolicy: visionResidencyPolicy)
+            visionResidencyPolicy: visionResidencyPolicy,
+            denseResidencyPolicy: options.denseWeightBudgetBytes.map { .automatic(weightBudgetBytes: $0) }
+                ?? options.denseResidentLayers.map { .bounded(residentLayers: Set($0)) } ?? .resident,
+            retainedConversationBytes: options.retainedConversationBytes)
         try resolved.validate()
         return resolved
     }

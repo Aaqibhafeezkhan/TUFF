@@ -13,6 +13,7 @@ struct SourceTensor: Sendable, Hashable {
         /// The n-gram PLE carries three small integer tensors — the rolling
         /// hash multipliers and each head's offset and vocabulary size — that
         /// are read as values rather than decoded as weights.
+        case i32 = 6
         case i64  = 5
 
         var elementBytes: Int {
@@ -23,6 +24,7 @@ struct SourceTensor: Sendable, Hashable {
             case .fp32: 4
             case .u8: 1
             case .i64: 8
+            case .i32: 4
             }
         }
     }

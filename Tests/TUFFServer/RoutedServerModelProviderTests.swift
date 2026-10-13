@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import TUFFModelCatalog
 import TUFFEngine
+import TUFFAppCore
 @testable import TUFFServerCore
 
 private actor RoutedHTTPBackend: ServerInferenceBackend {
@@ -25,6 +26,18 @@ private actor RoutedHTTPBackend: ServerInferenceBackend {
 }
 
 @Suite(.serialized) struct RoutedServerModelProviderTests {
+    @Test func servingRuntimeUsesTheResolvedAllocationSnapshot() throws {
+        let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
+        let installed = provider(root).installed
+        let resolved = AppAutomaticMemoryPlan(contextTokens: 2_048, expertCacheSlots: 10,
+            estimatedWorkingSetBytes: 7 << 30, safeBudgetBytes: 8 << 30,
+            denseResidencyPolicy: .bounded(residentLayers: []), prefillChunkTokens: 32,
+            retainedConversationBytes: 0)
+        let runtime = installed.runtimeConfiguration(for: TUFFModelCatalog.ornith15_397B, resolvedPlan: resolved)
+        #expect(runtime.expertCacheSlots == 10)
+        #expect(runtime.prefillChunkTokens == 32)
+        #expect(runtime.prefillPolicy == .off)
+    }
     @Test func servingPlansGrowOnlyWithinTheMemoryBudget() throws {
         let root = try root(); defer { try? FileManager.default.removeItem(at: root) }
         let installed = provider(root).installed
@@ -125,7 +138,7 @@ private actor RoutedHTTPBackend: ServerInferenceBackend {
         for model in TUFFModelCatalog.all { try install(model, root: root) }
         let registry = TUFFResidencyRegistry(directory: root.appendingPathComponent("leases"))
         let p = provider(root, registry: registry)
-        #expect(p.modelList().data.count == TUFFModelCatalog.all.count)
+        #expect(p.modelList().data.count == TUFFModelCatalog.all.filter { $0.qualification == .qualified }.count)
         let model = TUFFModelCatalog.gemma4_26B_A4B
         let companion = try VisionPackLocation.companionURL(forTextModel: p.installed.directory(for: model))
         try FileManager.default.createDirectory(at: companion, withIntermediateDirectories: true)

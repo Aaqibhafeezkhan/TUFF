@@ -1,5 +1,5 @@
 import Foundation
-import TUFFEngine
+import TUFFInferenceTypes
 
 /// Bounds on one answer's tool use. Every figure is documented in
 /// docs/SEARCH.md; change it there too.
@@ -81,8 +81,8 @@ public enum AppToolCatalog {
     public static let maximumURLCharacters = 2_048
 
     public static func definitions(for capabilities: AppChatCapabilities)
-        -> [GFTokenizer.FunctionDefinition] {
-        var tools: [GFTokenizer.FunctionDefinition] = []
+        -> [InferenceFunctionDefinition] {
+        var tools: [InferenceFunctionDefinition] = []
         if capabilities.web {
             tools.append(.init(
                 name: AppToolName.webSearch.rawValue,

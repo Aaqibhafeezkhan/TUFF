@@ -24,18 +24,19 @@ enum ResidentWriter {
         // shards in tile-bounded pwrites.
         for e in plan.entries {
             try copyOne(srcTensor: e.sourceWeight, dstFd: fd, dstPath: plan.path,
-                        dstOffset: e.fileOffset, sizeBytes: e.sizeBytes,
+                        dstOffset: e.fileOffset, sizeBytes: e.sourceWeight.sizeBytes,
+                        transform: e.weightTransform,
                         shardsByPath: &shardsByPath, audit: audit)
             if let scales = e.sourceScales {
                 try copyOne(srcTensor: scales, dstFd: fd, dstPath: plan.path,
                             dstOffset: e.scaleOffset, sizeBytes: scales.sizeBytes,
-                            transform: e.companionTransform,
+                            transform: e.scaleTransform,
                             shardsByPath: &shardsByPath, audit: audit)
             }
             if let biases = e.sourceBiases {
                 try copyOne(srcTensor: biases, dstFd: fd, dstPath: plan.path,
                             dstOffset: e.biasOffset, sizeBytes: biases.sizeBytes,
-                            transform: e.companionTransform,
+                            transform: e.biasTransform,
                             shardsByPath: &shardsByPath, audit: audit)
             }
         }
@@ -167,13 +168,23 @@ enum ResidentWriter {
                                               dstFd: dstFd, dstPath: dstPath,
                                               dstOffset: dstOffset,
                                               audit: audit)
-        case .fp32ToBF16:
-            try WriterCore.pwriteFP32AsBF16(srcShard: shard,
-                                           srcAbsoluteOffset: srcTensor.absoluteOffset,
-                                           size: sizeBytes,
-                                           dstFd: dstFd, dstPath: dstPath,
-                                           dstOffset: dstOffset,
-                                           audit: audit)
+        default:
+            let scratch = UnsafeMutableRawBufferPointer.allocate(byteCount: WriterCore.tileBytes, alignment: 16_384)
+            defer { scratch.deallocate() }
+            audit.largestScratchBytes = max(audit.largestScratchBytes, scratch.count)
+            var remaining = sizeBytes, source = srcTensor.absoluteOffset, destination = dstOffset
+            while remaining > 0 {
+                try Task.checkCancellation()
+                let alignment = Int(transform.sourceAlignment)
+                let count = min(Int(remaining), scratch.count) / alignment * alignment
+                guard count > 0 else { throw RepackError.configurationInvalid(detail: "unaligned source conversion") }
+                memcpy(scratch.baseAddress!, shard.base.advanced(by: Int(source)), count)
+                let written = try WriterCore.convertInPlace(scratch.baseAddress!, byteCount: count, transform: transform)
+                try Posix.pwriteAll(fd: dstFd, path: dstPath, buf: scratch.baseAddress!, count: written, offset: destination)
+                audit.recordTile(bytes: count); audit.recordRead(bytes: count); audit.recordWrite(bytes: written)
+                shard.adviseDontNeed(offset: source, count: count)
+                source += UInt64(count); destination += UInt64(written); remaining -= UInt64(count)
+            }
         }
     }
 

@@ -1,4 +1,6 @@
-import TUFFEngine
+import TUFFInferenceTypes
+import TUFFRuntimeDescriptions
+import TUFFModelMetadata
 
 enum GemmaToolSchema {
     private static let types: Set<String> = [

@@ -1,5 +1,6 @@
 import AppKit
-import TUFFEngine
+import TUFFInferenceTypes
+import TUFFRuntimeDescriptions
 import TUFFAppCore
 import TUFFMacPresentation
 import SwiftUI
@@ -8,14 +9,6 @@ import UniformTypeIdentifiers
 struct PromptComposerView: View {
     @Bindable var model: AppModel
     @FocusState private var promptFocused: Bool
-    /// Which picker to present, and the flag that presents it.
-    ///
-    /// One importer, not two. Two `.fileImporter` modifiers on the same view
-    /// collide on macOS: only one of them is ever presented, so both the image
-    /// and the file item opened nothing at all. The kind is chosen before the
-    /// flag is set, and decides the allowed types and where the URLs go.
-    @State private var pickerKind: AttachmentPickerKind = .image
-    @State private var showingPicker = false
     @State private var isImageDropTargeted = false
     @State private var measuredEditorHeight = PromptComposerMetrics.baseMinimumEditorHeight
     @Environment(\.appFontScale) private var fontScale
@@ -44,17 +37,6 @@ struct PromptComposerView: View {
             footer
             if let contextNotice { contextNoticeText(contextNotice) }
         }
-        .fileImporter(
-            isPresented: $showingPicker,
-            allowedContentTypes: pickerKind.allowedContentTypes,
-            allowsMultipleSelection: true
-        ) { result in
-            switch (pickerKind, result) {
-            case (.image, .success(let urls)): model.addImages(urls)
-            case (.document, .success(let urls)): model.attachDocuments(urls)
-            case (_, .failure(let error)): model.reportImageAttachmentError(error)
-            }
-        }
         .padding(12)
         .background {
             RoundedRectangle(cornerRadius: 22)
@@ -63,6 +45,24 @@ struct PromptComposerView: View {
                     RoundedRectangle(cornerRadius: 22)
                         .stroke(.separator.opacity(0.5), lineWidth: 0.5)
                 }
+        }
+    }
+
+    /// Configure every selection mode explicitly: directory pickers and
+    /// attachment pickers can reuse AppKit's underlying open panel.
+    private func chooseAttachments(_ kind: AttachmentPickerKind) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.treatsFilePackagesAsDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.allowedContentTypes = kind.allowedContentTypes
+        panel.prompt = "Open"
+        panel.message = ""
+        guard panel.runModal() == .OK else { return }
+        switch kind {
+        case .image: model.addImages(panel.urls)
+        case .document: model.attachDocuments(panel.urls)
         }
     }
 
@@ -190,16 +190,14 @@ struct PromptComposerView: View {
     private var attachMenu: some View {
         Menu {
             Button {
-                pickerKind = .image
-                showingPicker = true
+                chooseAttachments(.image)
             } label: {
                 Label("Image…", systemImage: "photo")
             }
             .disabled(!canAddImages)
 
             Button {
-                pickerKind = .document
-                showingPicker = true
+                chooseAttachments(.document)
             } label: {
                 Label("File…", systemImage: "doc.text")
             }

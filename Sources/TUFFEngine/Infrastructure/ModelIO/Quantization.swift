@@ -1,9 +1,10 @@
 import Foundation
+import TUFFRuntimeDescriptions
 
 public enum Quantization {
 
     /// Default affine group size: one scale and bias per 64 quantized values.
-    public static let groupSize: Int = 64
+    public static let groupSize: Int = AffineQuantizationDefaults.groupSize
 
     /// Group sizes the INT4 kernels can decode. Qwen3.8 Flash Next is
     /// quantized at 32 because its n-gram PLE rows are 160 values wide and

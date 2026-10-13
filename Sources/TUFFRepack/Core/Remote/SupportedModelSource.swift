@@ -35,7 +35,7 @@ public struct SupportedModelSource: Sendable, Equatable {
     public func installOptions(outputDirectory: URL,
                                overwrite: Bool,
                                token: String?,
-                               resume: Bool = false)
+                               resume: Bool = false, dryRun: Bool = false)
         -> RemoteStreamingRepackOptions {
         RemoteStreamingRepackOptions(
             repoID: repoID,
@@ -45,7 +45,7 @@ public struct SupportedModelSource: Sendable, Equatable {
             requireKnownSource: true,
             minFreeReserveBytes: reserveBytes,
             overwrite: overwrite,
-            resume: resume)
+            resume: resume, dryRunSpaceCheck: dryRun)
     }
 
     public static let gemma4 = SupportedModelSource(catalog: TUFFModelCatalog.gemma4_26B_A4B)

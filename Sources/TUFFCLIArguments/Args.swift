@@ -1,6 +1,7 @@
-import TUFFEngine
+import TUFFInferenceTypes
+import TUFFRuntimeDescriptions
 
-public struct Args: Equatable, Sendable {
+public struct Args: Codable, Equatable, Sendable {
     public var model: String
     public var prompt: String?
     public var chatPrompt: String?
@@ -33,6 +34,10 @@ public struct Args: Equatable, Sendable {
     public var rdadvisePolicy: RDAdvicePolicyMode
     public var speculativeMode: SpeculativeDecodeMode
     public var speculativeDraftTokens: Int
+    public var denseResidencyPolicy: DenseResidencyPolicy?
+    /// Resolved by the lightweight host before sending explicit options.
+    /// Optional so older JSON argument payloads continue to decode.
+    public var automaticMemory: Bool? = nil
 
     public init(model: String,
                 prompt: String? = nil,
@@ -61,7 +66,8 @@ public struct Args: Equatable, Sendable {
                 prefillChunkMax: Int = PrefillRuntimeConfig.baselineChunkTokens,
                 rdadvisePolicy: RDAdvicePolicyMode = RuntimeConfiguration.production.rdadvisePolicy,
                 speculativeMode: SpeculativeDecodeMode = .off,
-                speculativeDraftTokens: Int = 4) {
+                speculativeDraftTokens: Int = 4,
+                denseResidencyPolicy: DenseResidencyPolicy? = nil) {
         self.model = model
         self.prompt = prompt
         self.chatPrompt = chatPrompt
@@ -90,6 +96,7 @@ public struct Args: Equatable, Sendable {
         self.rdadvisePolicy = rdadvisePolicy
         self.speculativeMode = speculativeMode
         self.speculativeDraftTokens = speculativeDraftTokens
+        self.denseResidencyPolicy = denseResidencyPolicy
     }
 }
 
@@ -157,13 +164,18 @@ extension Args {
     options:
       --max-new <int>            Generated-token limit (default 1024).
       --max-context <int>        Context limit in tokens (default 8192).
+      --memory-auto             Calculate a safe cache, projection and prefill allocation.
+      --dense-residency <auto|resident|streamed>
+                                Dense weights: retain what fits, all, or stage layers.
+      --dense-weight-budget-mb <int>
+                                Explicit dense weight allocation budget for Auto.
       --thinking <off|on>        Native chat reasoning (default off).
       --reasoning <low|medium|high>
                                 GPT-OSS only: reasoning effort (default medium).
                                  Reasoning counts toward the --max-new limit
       --temperature <float>      Sampling temperature (default 0.2, or the model's
                                  setting through tuff prompt; 0 = greedy).
-      --top-k <int>              Top-k truncation, 1...256 (default 64; 0 = off).
+      --top-k <int>              Top-k truncation, 1...256 (default 64; 0 = off with --top-p 1 or --temperature 0).
       --top-p <float>            Nucleus truncation (default 0.95).
       --repetition-penalty <f>   Repetition penalty (default 1.0).
       --seed <uint64>            Deterministic sampling seed (default off).
@@ -265,11 +277,16 @@ extension Args {
         var rdadvisePolicy = runtimeDefaults.rdadvisePolicy
         var speculativeMode: SpeculativeDecodeMode = .off
         var speculativeDraftTokens = 4
+        var denseResidencyPolicy: DenseResidencyPolicy?
+        var automaticMemory: Bool? = nil
 
         var index = 0
         while index < argv.count {
             let flag = argv[index]
             switch flag {
+            case "--memory-auto":
+                automaticMemory = true
+                index += 1
             case "--help":
                 throw ArgsError.helpRequested
             case "--quiet":
@@ -277,6 +294,21 @@ extension Args {
                 index += 1
             case "--model":
                 model = try takeValue(argv, &index, flag: flag)
+            case "--dense-residency":
+                let value = try takeValue(argv, &index, flag: flag)
+                switch value {
+                case "auto": denseResidencyPolicy = nil
+                case "resident": denseResidencyPolicy = .resident
+                case "streamed": denseResidencyPolicy = .bounded(residentLayers: [])
+                default: throw ArgsError.invalidValue(flag: flag, value: value)
+                }
+            case "--dense-weight-budget-mb":
+                let value = try takeValue(argv, &index, flag: flag)
+                guard let megabytes = UInt64(value), megabytes > 0,
+                      megabytes <= UInt64.max / (1 << 20) else {
+                    throw ArgsError.invalidValue(flag: flag, value: value)
+                }
+                denseResidencyPolicy = .automatic(weightBudgetBytes: megabytes * (1 << 20))
             case "--prompt":
                 prompt = try takeValue(argv, &index, flag: flag)
             case "--chat-prompt":
@@ -459,7 +491,7 @@ extension Args {
                 flag: "--top-p",
                 value: "\(topP) requires --top-k between 1 and 256")
         }
-        let arguments = Args(model: model,
+        var arguments = Args(model: model,
                              prompt: prompt,
                              chatPrompt: chatPrompt,
                              systemPrompt: systemPrompt,
@@ -486,7 +518,9 @@ extension Args {
                              prefillChunkMax: prefillChunkMax,
                              rdadvisePolicy: rdadvisePolicy,
                              speculativeMode: speculativeMode,
-                             speculativeDraftTokens: speculativeDraftTokens)
+                             speculativeDraftTokens: speculativeDraftTokens,
+                             denseResidencyPolicy: denseResidencyPolicy)
+        arguments.automaticMemory = automaticMemory
         _ = try arguments.resolvedRuntimeConfiguration(
             forceLogitsHead: false, chunkedPrefillNeedsSlotFloor: false)
         return arguments

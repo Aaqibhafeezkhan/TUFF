@@ -1,3 +1,4 @@
+import TUFFInferenceTypes
 import Foundation
 import Hub
 import Tokenizers
@@ -38,12 +39,7 @@ public enum GFTokenizerError: Error, CustomStringConvertible {
 ///
 /// Harmony is detected first by `<|start|>`, then ChatML by `<|im_end|>`;
 /// everything else uses the Gemma 4 contract.
-public enum ChatDialect: String, Sendable {
-    case gemma
-    case chatml
-    case harmony
-    case minimax
-}
+public typealias ChatDialect = TUFFRuntimeDescriptions.ChatDialect
 
 /// Model-supported reasoning switch used by chat prompt renderers.
 ///
@@ -51,10 +47,7 @@ public enum ChatDialect: String, Sendable {
 /// expose a true on/off template switch, so keeping this type narrow prevents a
 /// caller from silently mapping `low` or `high` onto a model that cannot honor
 /// that distinction.
-public enum ChatReasoning: String, Codable, Sendable, Equatable, CaseIterable {
-    case off
-    case on
-}
+public typealias ChatReasoning = TUFFInferenceTypes.ChatReasoning
 
 /// Detokenization pipeline declared by `tokenizer.json`. Resolved from the
 /// decoder declaration rather than from the chat dialect, because it is the
@@ -554,77 +547,10 @@ public struct GFTokenizer: @unchecked Sendable {
 
     // MARK: - Chat template
 
-    public enum Role: String, Codable, Sendable {
-        case system, developer, user, assistant, tool
-    }
-    public struct HistoricalToolCall: Codable, Sendable, Equatable {
-        public let id: String
-        public let name: String
-        public let arguments: JSONValue
-
-        public init(id: String, name: String, arguments: JSONValue) {
-            self.id = id
-            self.name = name
-            self.arguments = arguments
-        }
-    }
-
-    public struct FunctionDefinition: Codable, Sendable, Equatable {
-        public let name: String
-        public let description: String
-        public let parameters: JSONValue
-
-        public init(name: String, description: String, parameters: JSONValue) {
-            self.name = name
-            self.description = description
-            self.parameters = parameters
-        }
-    }
-
-    public struct Message: Codable, Sendable, Equatable {
-        public let role: Role
-        public let content: String?
-        public let thinking: String?
-        public let toolCalls: [HistoricalToolCall]
-        public let toolCallID: String?
-        public let name: String?
-
-        public init(role: Role, content: String) {
-            self.role = role
-            self.content = content
-            self.thinking = nil
-            self.toolCalls = []
-            self.toolCallID = nil
-            self.name = nil
-        }
-
-        public init(role: Role,
-                    content: String?,
-                    toolCalls: [HistoricalToolCall] = [],
-                    toolCallID: String? = nil,
-                    name: String? = nil) {
-            self.role = role
-            self.content = content
-            self.thinking = nil
-            self.toolCalls = toolCalls
-            self.toolCallID = toolCallID
-            self.name = name
-        }
-
-        public init(role: Role,
-                    content: String?,
-                    thinking: String?,
-                    toolCalls: [HistoricalToolCall] = [],
-                    toolCallID: String? = nil,
-                    name: String? = nil) {
-            self.role = role
-            self.content = content
-            self.thinking = thinking
-            self.toolCalls = toolCalls
-            self.toolCallID = toolCallID
-            self.name = name
-        }
-    }
+    public typealias Role = TUFFInferenceTypes.InferenceChatRole
+    public typealias Message = TUFFInferenceTypes.InferenceChatMessage
+    public typealias HistoricalToolCall = InferenceToolCall
+    public typealias FunctionDefinition = InferenceFunctionDefinition
 
     /// Text-only, no-tool rendering of the pinned checkpoints' bundled
     /// `chat_template.jinja`. Keeping this narrow makes unsupported tool/media

@@ -1,3 +1,5 @@
+import TUFFRuntimeManagement
+import TUFFModelCatalog
 import Foundation
 import TUFFRepackCore
 import Synchronization
@@ -26,19 +28,33 @@ public final class RepackModelInstallerClient: AppModelInstallerClient, Sendable
     public init(descriptor: AppModelInstallDescriptor = .default) {
         self.descriptor = descriptor
         self.runInstall = { outputDirectory, progress in
-            let paths = try RemoteInstallPaths(outputDirectory: outputDirectory.path)
-            let resume = FileManager.default.fileExists(atPath: paths.checkpointFile)
-            let options = RemoteStreamingRepackOptions(
-                repoID: descriptor.repoID,
-                revision: descriptor.revision,
-                outputDir: outputDirectory.path,
-                token: ProcessInfo.processInfo.environment["HF_TOKEN"],
-                requireKnownSource: true,
-                minFreeReserveBytes: descriptor.reserveBytes,
-                overwrite: true,
-                resume: resume)
-            let result = try await RemoteStreamingRepacker(options: options).run(progress: progress)
-            return URL(fileURLWithPath: result.outputDir).standardizedFileURL
+            guard let id = descriptor.catalogID, let model = TUFFModelCatalog.model(id: id) else {
+                throw InferenceEngineCatalogError.noCompatibleEngine(descriptor.displayName)
+            }
+            let engine = try await InferenceEngineEnvironment.acquire(
+                architectureID: model.architecture.id.rawValue,
+                quantizationLayout: model.architecture.weightLayout.rawValue)
+            do {
+                let paths = try RemoteInstallPaths(outputDirectory: outputDirectory.path)
+                let resume = FileManager.default.fileExists(atPath: paths.checkpointFile)
+                let options = RemoteStreamingRepackOptions(
+                    repoID: descriptor.repoID,
+                    revision: descriptor.revision,
+                    outputDir: outputDirectory.path,
+                    token: ProcessInfo.processInfo.environment["HF_TOKEN"],
+                    requireKnownSource: true,
+                    minFreeReserveBytes: descriptor.reserveBytes,
+                    overwrite: true,
+                    resume: resume)
+                let result = try await RemoteStreamingRepacker(options: options).run(progress: progress)
+                let directory = URL(fileURLWithPath: result.outputDir).standardizedFileURL
+                try await InferenceEngineEnvironment.bind(engine, to: directory)
+                await engine.release()
+                return directory
+            } catch {
+                await engine.release()
+                throw error
+            }
         }
         self.runDiscard = { outputDirectory in
             try RemoteStreamingRepacker.discardPartial(
@@ -73,7 +89,7 @@ public final class RepackModelInstallerClient: AppModelInstallerClient, Sendable
             remainingBytes = descriptor.installedBytes
         }
         let requested = remainingBytes.addingReportingOverflow(
-            descriptor.rangeStagingBytes)
+            descriptor.rangeStagingBytes + descriptor.engineInstallationTemporaryBytes)
         guard !requested.overflow else {
             throw RepackError.configurationInvalid(
                 detail: "model install requirement overflows UInt64")

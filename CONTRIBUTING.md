@@ -35,6 +35,8 @@ Significant contributions are mentioned in the release notes.
 
 ```sh
 swift package resolve
+bash Scripts/package_engines.sh dist/local-engines dist/local-private/signing-key 1.0.0
+export TUFF_ENGINE_CATALOG_PATH="$PWD/dist/local-engines/engine-catalog.json"
 swift build -c release
 Scripts/test.sh                      # all Swift tests, serially
 Scripts/test.sh --filter SuiteName   # one suite
@@ -44,6 +46,10 @@ Scripts/check.sh --source-only       # tests plus every repo check
 Run tests through `Scripts/test.sh`; shared Metal state makes parallel runs
 flaky. Clone builds keep models and settings in `scratch/`. I build with
 Xcode 27 and Swift 6.4.
+
+See [local 9.0 builds](docs/LOCAL_9.0.md) for isolated data, family engine
+packages and local-only packaging. Keep publisher private keys out of packages
+and Git.
 
 ## Rules that matter
 

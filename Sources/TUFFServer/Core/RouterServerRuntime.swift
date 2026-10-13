@@ -1,19 +1,22 @@
 import Darwin
 import Foundation
 import Synchronization
-import TUFFEngine
+import TUFFInferenceTypes
+import TUFFRuntimeDescriptions
+import TUFFModelMetadata
 import TUFFModelCatalog
 
 /// Runs the model-routing server until SIGINT or SIGTERM.
 public enum RouterServerRuntime {
     public static func applicationSupportURL() -> URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support", isDirectory: true)
+        TUFFApplicationDirectories.applicationSupportURL()
     }
 
     public static func logURL() -> URL {
-        FileManager.default.homeDirectoryForCurrentUser
+        if ProcessInfo.processInfo.environment["TUFF_APPLICATION_SUPPORT_ROOT"] != nil {
+            return applicationSupportURL().appendingPathComponent("TUFF/Logs/background-server.log")
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs/TUFF/background-server.log")
     }
 
@@ -32,21 +35,6 @@ public enum RouterServerRuntime {
         freopen(url.path, "a", stderr)
         freopen(url.path, "a", stdout)
         setvbuf(stdout, nil, _IOLBF, 0)
-    }
-
-    /// One Metal context for every model this process loads, created on the
-    /// first load so an idle listener holds no GPU state.
-    private final class SharedContext: @unchecked Sendable {
-        private let lock = NSLock()
-        private var context: MetalContext?
-        func get() throws -> MetalContext {
-            lock.lock()
-            defer { lock.unlock() }
-            if let context { return context }
-            let created = try MetalContext()
-            context = created
-            return created
-        }
     }
 
     /// Returns the exit status.
@@ -92,7 +80,6 @@ public enum RouterServerRuntime {
             return 1
         }
 
-        let sharedContext = SharedContext()
         let port = settings.port
         let provider = RoutedServerModelProvider(
             installed: installed,
@@ -100,21 +87,8 @@ public enum RouterServerRuntime {
             residency: residency,
             controlPort: { port },
             loader: { descriptor, directory in
-                let session = try await ServerModelSession.load(
-                    modelDirectory: directory,
-                    maxContext: installed.inferencePlan(for: descriptor).contextTokens,
-                    promptCacheMode: .singlePrefix,
-                    retainedConversationBytes: installed.retainedConversationBytes(for: descriptor),
-                    runtimeConfiguration: installed.runtimeConfiguration(for: descriptor),
-                    context: try sharedContext.get(),
-                    // The app verified these packs when it installed them, and
-                    // it loads them the same way.
-                    integrityPolicy: .sizeCheckTrustedReceipt)
-                guard session.defaultModelID == descriptor.apiModelID,
-                      session.modelVariant.rawValue == descriptor.architecture.id.rawValue else {
-                    throw ServerRequestError.modelUnavailable("The installed pack does not match the requested model.")
-                }
-                return session
+                try await ServerBackendLoaderRegistry.load(
+                    descriptor: descriptor, directory: directory, installed: installed)
             })
         let control = ServerControl(
             token: token,

@@ -1,6 +1,7 @@
 import Foundation
 import TUFFModelCatalog
-import TUFFEngine
+import TUFFInferenceTypes
+import TUFFRuntimeDescriptions
 
 public struct AppModelSettingsProfile: Codable, Equatable, Sendable {
     /// When enabled, TUFF resolves context/cache memory from this Mac's unified
@@ -17,6 +18,9 @@ public struct AppModelSettingsProfile: Codable, Equatable, Sendable {
     public var topPEnabled: Bool
     public var topP: Double
     public var prefillEnabled: Bool
+    /// Nil retains all projection layers; zero streams all; positive retains
+    /// that many whole layers. Auto preserves this manual override.
+    public var denseResidentLayerCount: Int?
     public var visionResidencyPolicy: VisionResidencyPolicy
     public var rdadvisePolicy: AppRDAdvicePolicy
     public var defaultReasoning: ChatReasoning
@@ -44,7 +48,7 @@ public struct AppModelSettingsProfile: Codable, Equatable, Sendable {
                 defaultReasoning: ChatReasoning = .off,
                 defaultReasoningEffort: GPTOSSReasoningEffort = .medium,
                 preserveThinking: Bool = false,
-                systemPrompt: String = "") {
+                systemPrompt: String = "", denseResidentLayerCount: Int? = nil) {
         self.automaticMemory = automaticMemory
         self.automaticMemoryProfile = automaticMemoryProfile
         self.contextTokens = contextTokens
@@ -61,6 +65,7 @@ public struct AppModelSettingsProfile: Codable, Equatable, Sendable {
         self.defaultReasoningEffort = defaultReasoningEffort
         self.preserveThinking = preserveThinking
         self.systemPrompt = systemPrompt
+        self.denseResidentLayerCount = denseResidentLayerCount
     }
 
     static func defaults(for profileKey: String) -> AppModelSettingsProfile {
@@ -84,6 +89,7 @@ public struct AppModelSettingsProfile: Codable, Equatable, Sendable {
 
     func isValid() -> Bool {
         AppContextLengthOption.allCases.contains { $0.tokens == contextTokens }
+            && (denseResidentLayerCount.map { (0...1024).contains($0) } ?? true)
             && AppRuntimeOptions.allowedSlotCounts.contains(expertCacheSlots)
             && temperature.isFinite && (0...2).contains(temperature)
             && (1...256).contains(topK)
@@ -109,6 +115,7 @@ public struct AppModelSettingsProfile: Codable, Equatable, Sendable {
         case defaultReasoningEffort
         case preserveThinking
         case systemPrompt
+        case denseResidentLayerCount
     }
 
     public init(from decoder: Decoder) throws {
@@ -143,6 +150,13 @@ public struct AppModelSettingsProfile: Codable, Equatable, Sendable {
             Bool.self, forKey: .preserveThinking) ?? false
         systemPrompt = try container.decodeIfPresent(
             String.self, forKey: .systemPrompt) ?? ""
+        denseResidentLayerCount = try container.decodeIfPresent(Int.self, forKey: .denseResidentLayerCount)
+    }
+
+    public func manualDenseResidencyPolicy(for descriptor: AppModelInstallDescriptor) -> DenseResidencyPolicy {
+        guard descriptor.projectionLayerCount > 0, let count = denseResidentLayerCount else { return .resident }
+        let retained = min(descriptor.projectionLayerCount, max(0, count))
+        return retained == descriptor.projectionLayerCount ? .resident : .bounded(residentLayers: Set(0..<retained))
     }
 }
 

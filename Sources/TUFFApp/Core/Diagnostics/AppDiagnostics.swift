@@ -1,5 +1,6 @@
 import Foundation
-import TUFFEngine
+import TUFFInferenceTypes
+import TUFFRuntimeDescriptions
 
 public enum AppStopReason: String, Equatable, Sendable {
     case maxTokens

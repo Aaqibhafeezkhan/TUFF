@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
-import TUFFEngine
+import TUFFInferenceTypes
+import TUFFRuntimeDescriptions
 import TUFFModelCatalog
 
 /// `TUFF --benchmark ...`: what `tuff bench` runs, and what the app's
@@ -167,8 +168,6 @@ public enum AppBenchmarkCommand {
             writeError("error: \(error)\n\n\(usage)")
             return 2
         }
-        // Before anything in this process creates a Metal device.
-        MetalContext.relaxInteractivityWatchdog()
         let box = Box()
         let done = DispatchSemaphore(value: 0)
         box.task = Task(priority: .userInitiated) {
@@ -214,7 +213,7 @@ public enum AppBenchmarkCommand {
                 + "(\(options.mode.rawValue)). Large models can take a long time. Ctrl-C stops.")
         }
         let runner = AppBenchmarkRunner(
-            client: RealInferenceClient(residencyCoordinator: .current()))
+            client: DecodeServiceInferenceClient())
         let result = await runner.run(models: models, mode: options.mode) { event in
             if emitJSON {
                 emit(event)

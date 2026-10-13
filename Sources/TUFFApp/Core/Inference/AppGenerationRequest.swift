@@ -1,5 +1,7 @@
+import TUFFModelMetadata
 import Foundation
-import TUFFEngine
+import TUFFInferenceTypes
+import TUFFRuntimeDescriptions
 
 public struct AppGenerationRequest: Equatable, Sendable {
     public var modelDirectory: URL
@@ -27,13 +29,15 @@ public struct AppGenerationRequest: Equatable, Sendable {
     public var seed: UInt64?
     public var runtimeOptions: AppRuntimeOptions
     /// Tools declared to the model, in the model's native tool format.
-    public var tools: [GFTokenizer.FunctionDefinition]
+    public var tools: [InferenceFunctionDefinition]
     /// Rounds already run for the message being answered: the model's calls
     /// and the results that answered them, rendered after `prompt`.
     public var currentRounds: [AppToolRound]
     /// The chat this request belongs to. Orders the search among retained
     /// conversation states; never establishes a match by itself.
     public var conversationKey: String?
+    /// Auto refuses to silently remove history when its token estimate was low.
+    public var preservesFullHistory: Bool
 
     public init(modelDirectory: URL,
                 prompt: String,
@@ -52,9 +56,9 @@ public struct AppGenerationRequest: Equatable, Sendable {
                 repetitionPenalty: Float = 1.0,
                 seed: UInt64? = nil,
                 runtimeOptions: AppRuntimeOptions = AppRuntimeOptions(),
-                tools: [GFTokenizer.FunctionDefinition] = [],
+                tools: [InferenceFunctionDefinition] = [],
                 currentRounds: [AppToolRound] = [],
-                conversationKey: String? = nil) {
+                conversationKey: String? = nil, preservesFullHistory: Bool = false) {
         self.modelDirectory = modelDirectory
         self.prompt = prompt
         self.systemPrompt = systemPrompt
@@ -75,6 +79,7 @@ public struct AppGenerationRequest: Equatable, Sendable {
         self.tools = tools
         self.currentRounds = currentRounds
         self.conversationKey = conversationKey
+        self.preservesFullHistory = preservesFullHistory
     }
 
     /// Whether the prompt is rendered through the model's tool template:
