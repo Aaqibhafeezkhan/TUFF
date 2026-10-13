@@ -5,6 +5,8 @@ public protocol AppModelInstallerClient: Sendable {
     func checkInstallRequirement(outputDirectory: URL) throws -> AppModelInstallRequirement
     func installDefaultModel(outputDirectory: URL) -> AsyncThrowingStream<AppModelInstallEvent, Error>
     func discardPartialInstall(outputDirectory: URL) async throws
+    /// Delete a finished install from disk. Only called for a complete model.
+    func removeInstalledModel(outputDirectory: URL) async throws
     /// Paths that make the destination unusable, such as a symlink left where the
     /// model directory belongs. Empty when the destination is fine.
     func blockedInstallEntries(outputDirectory: URL) -> [String]

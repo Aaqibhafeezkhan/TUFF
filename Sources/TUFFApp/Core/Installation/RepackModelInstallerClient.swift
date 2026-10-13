@@ -170,6 +170,13 @@ public final class RepackModelInstallerClient: AppModelInstallerClient, Sendable
         }.value
     }
 
+    public func removeInstalledModel(outputDirectory: URL) async throws {
+        let directory = outputDirectory.standardizedFileURL
+        try await Task.detached(priority: .utility) {
+            try FileManager.default.removeItem(at: directory)
+        }.value
+    }
+
     static func event(for progress: ModelInstallProgress) -> AppModelInstallEvent {
         switch progress {
         case .downloadingMetadata:

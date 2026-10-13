@@ -2188,6 +2188,33 @@ public final class AppModel {
         isConfirmingVisionPackRemoval = true
     }
 
+    /// A loaded or selected model cannot be deleted, and nothing may be
+    /// generating or mutating companion state. Another model's download is
+    /// unaffected, so it does not block.
+    public func canDeleteInstalledModel(_ coordinator: ModelInstallCoordinator) -> Bool {
+        coordinator.canDeleteInstalled
+            && coordinator.id != selectedModelID
+            && canPrepareVisionCompanionOperation
+    }
+
+    /// Removes the model's image add-on first, then its folder. Callers
+    /// confirm first; this does not ask.
+    public func deleteInstalledModel(_ coordinator: ModelInstallCoordinator) {
+        guard canDeleteInstalledModel(coordinator) else { return }
+        Task { [weak self, visionInstaller] in
+            do {
+                if self?.hasVisionPackDirectory(for: coordinator) == true {
+                    try await visionInstaller.removeInstalled(
+                        textModelDirectory: coordinator.directoryURL)
+                }
+                try await coordinator.deleteInstalled()
+            } catch {
+                self?.error = .invalidRequest(
+                    "Could not delete \(coordinator.descriptor.displayName): \(error)")
+            }
+        }
+    }
+
     public func removeVisionPack() {
         isConfirmingVisionPackRemoval = false
         removeVisionPack(for: selectedInstall)

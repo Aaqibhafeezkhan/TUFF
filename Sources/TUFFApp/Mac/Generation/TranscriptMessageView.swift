@@ -40,8 +40,6 @@ struct TranscriptMessageView: View {
 
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var thinkingExpanded = false
-    @State private var promptHeight: CGFloat = 0
-    @State private var responseHeight: CGFloat = 0
     @State private var liveHeight: CGFloat = 0
     /// Which of the two copy buttons last fired, so only that one shows the
     /// checkmark. A single flag lit both.
@@ -87,9 +85,7 @@ struct TranscriptMessageView: View {
                 // code block, or a formula in it was the one half of the
                 // conversation still shown as raw source.
                 AttributedTextView(
-                    attributed: renderer.render(prompt).attributedString,
-                    height: $promptHeight)
-                    .frame(height: max(promptHeight, 1))
+                    attributed: renderer.render(prompt).attributedString)
             }
         }
     }
@@ -217,9 +213,7 @@ struct TranscriptMessageView: View {
                             ($0.range, AppCitations.url(for: $0.number))
                         }
                     },
-                height: $responseHeight,
                 onLink: openCitation)
-                .frame(height: max(responseHeight, 1))
         } else if !thinking.isEmpty, live?.isTerminal != false {
             // Stopped while still thinking: say so rather than leave an
             // empty answer under a collapsed row.

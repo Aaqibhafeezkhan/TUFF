@@ -193,6 +193,23 @@ public final class ModelInstallCoordinator: Identifiable {
         }
     }
 
+    /// Only a finished catalog install can be deleted. Custom checkpoints are
+    /// the user's own folders and are removed through their own path.
+    public var canDeleteInstalled: Bool {
+        isInstalled && !isInstalling && descriptor.customIdentity == nil
+    }
+
+    /// Delete the downloaded model folder and re-probe, so the row returns to
+    /// "Download". Throws if the folder cannot be removed.
+    public func deleteInstalled() async throws {
+        guard canDeleteInstalled else { return }
+        cancelInFlight()
+        generation &+= 1
+        let outputDirectory = directoryURL
+        try await client.removeInstalledModel(outputDirectory: outputDirectory)
+        refresh()
+    }
+
     public func discard() {
         guard canDiscard else { return }
         cancelInFlight()

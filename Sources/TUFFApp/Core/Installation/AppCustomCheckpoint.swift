@@ -122,6 +122,9 @@ struct AppCustomCheckpointInstaller: AppModelInstallerClient {
         AsyncThrowingStream { $0.finish(throwing: AppCustomCheckpoint.ImportError("Import a complete local checkpoint in Advanced settings.")) }
     }
     func discardPartialInstall(outputDirectory: URL) async throws {}
+    // Custom checkpoints are removed by `removeCustomCheckpoint`, which unlinks
+    // the alias and leaves the user's own folder alone.
+    func removeInstalledModel(outputDirectory: URL) async throws {}
     func blockedInstallEntries(outputDirectory: URL) -> [String] { [] }
     func clearBlockedInstallPath(outputDirectory: URL) async throws {}
     func cancel() {}

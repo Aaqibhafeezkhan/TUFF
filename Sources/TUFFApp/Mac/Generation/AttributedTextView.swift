@@ -13,6 +13,14 @@ final class MessageTextView: NSTextView {
     private var reportedHeight: CGFloat = -1
     private var measuredWidth: CGFloat = -1
 
+    func fittingHeight(width: CGFloat) -> CGFloat? {
+        guard width.isFinite, width > 0,
+              let container = textContainer, let layoutManager else { return nil }
+        container.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+        layoutManager.ensureLayout(for: container)
+        return max(1, ceil(layoutManager.usedRect(for: container).height))
+    }
+
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         // A narrower window rewraps the text, and nothing else asks the view to
@@ -46,9 +54,12 @@ final class MessageTextView: NSTextView {
         textView.textContainerInset = .zero
         textView.textContainer?.lineFragmentPadding = 0
         textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.heightTracksTextView = false
         textView.isAutomaticLinkDetectionEnabled = false
         textView.isAutomaticDataDetectionEnabled = false
-        textView.isVerticallyResizable = true
+        // SwiftUI owns the frame. AppKit resizing it during measurement can
+        // reset the container to the previous width and produce a zero height.
+        textView.isVerticallyResizable = false
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
         textView.setContentHuggingPriority(.defaultHigh, for: .vertical)
@@ -64,7 +75,6 @@ final class MessageTextView: NSTextView {
 /// transcript be a list of messages.
 struct AttributedTextView: NSViewRepresentable {
     let attributed: NSAttributedString
-    @Binding var height: CGFloat
     /// Handles a click on a link the renderer made clickable: only validated
     /// citations are. Nil leaves links inert.
     var onLink: ((URL) -> Void)?
@@ -91,18 +101,21 @@ struct AttributedTextView: NSViewRepresentable {
     func makeNSView(context: Context) -> MessageTextView {
         let textView = MessageTextView.make()
         textView.delegate = context.coordinator
-        textView.onHeightChange = { measured in height = measured }
         return textView
     }
 
     func updateNSView(_ textView: MessageTextView, context: Context) {
         context.coordinator.onLink = onLink
-        textView.onHeightChange = { measured in height = measured }
         guard context.coordinator.applied !== attributed else { return }
         if textView.textStorage?.isEqual(to: attributed) != true {
             textView.textStorage?.setAttributedString(attributed)
         }
         context.coordinator.applied = attributed
-        textView.reportHeight()
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: MessageTextView, context: Context) -> CGSize? {
+        let width = proposal.width ?? nsView.bounds.width
+        guard let height = nsView.fittingHeight(width: width) else { return nil }
+        return CGSize(width: width, height: height)
     }
 }

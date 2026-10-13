@@ -14,6 +14,7 @@ final class MockModelInstallerClient: AppModelInstallerClient, Sendable {
         var cancelCalled = false
         var cancellationAcknowledgementPending = false
         var discardCalled = false
+        var removeInstalledCalled = false
         var blockedEntries: [String] = []
         var clearBlockedCallCount = 0
     }
@@ -28,6 +29,7 @@ final class MockModelInstallerClient: AppModelInstallerClient, Sendable {
         taskState.value.withLock { $0.cancellationAcknowledgementPending }
     }
     var discardCalled: Bool { taskState.value.withLock { $0.discardCalled } }
+    var removeInstalledCalled: Bool { taskState.value.withLock { $0.removeInstalledCalled } }
     var clearBlockedCallCount: Int { taskState.value.withLock { $0.clearBlockedCallCount } }
     func setBlockedEntries(_ entries: [String]) {
         taskState.value.withLock { $0.blockedEntries = entries }
@@ -115,6 +117,10 @@ final class MockModelInstallerClient: AppModelInstallerClient, Sendable {
 
     func discardPartialInstall(outputDirectory: URL) async throws {
         taskState.value.withLock { $0.discardCalled = true }
+    }
+
+    func removeInstalledModel(outputDirectory: URL) async throws {
+        taskState.value.withLock { $0.removeInstalledCalled = true }
     }
 
     func blockedInstallEntries(outputDirectory: URL) -> [String] {

@@ -89,6 +89,7 @@ struct ModelCatalogRow: View {
     @State private var showingDiscardConfirmation = false
     @State private var showingVisionDiscardConfirmation = false
     @State private var showingVisionRemoveConfirmation = false
+    @State private var showingDeleteConfirmation = false
 
     private var isSelected: Bool { install.id == model.selectedModelID }
 
@@ -153,6 +154,18 @@ struct ModelCatalogRow: View {
             Button("Keep Image Support", role: .cancel) {}
         } message: {
             Text("Text generation will keep working. Restoring image input requires downloading this add-on again.")
+        }
+        .confirmationDialog(
+            "Delete \(install.descriptor.displayName)?",
+            isPresented: $showingDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Model", role: .destructive) {
+                model.deleteInstalledModel(install)
+            }
+            Button("Keep Model", role: .cancel) {}
+        } message: {
+            Text(deleteMessage)
         }
         // Grey means "this Mac cannot run it". With restrictions bypassed the
         // card stays in colour, because the buttons work, and the requirement
@@ -289,6 +302,26 @@ struct ModelCatalogRow: View {
         }
     }
 
+    /// Says what the confirmation removes, including the image add-on when
+    /// one is installed, since it is deleted with the model.
+    private var deleteMessage: String {
+        let addOn = model.hasVisionPackDirectory(for: install)
+            ? " and its \(visionDisplayName) add-on"
+            : ""
+        return "The downloaded files\(addOn) are removed from this Mac. "
+            + "Download it again to use it later. Other models are untouched."
+    }
+
+    private var deleteHelp: String {
+        if isSelected {
+            return "Select a different model to delete this one."
+        }
+        if model.isRunning || model.loadState.isLoading {
+            return "Available when the current reply has finished."
+        }
+        return "Delete the downloaded files for this model."
+    }
+
     private var blockedPathHelp: String {
         let entries = install.blockedInstallEntries
         let names = entries.map { ($0 as NSString).lastPathComponent }.joined(separator: ", ")
@@ -356,6 +389,15 @@ struct ModelCatalogRow: View {
                 }
             }
             Spacer(minLength: 8)
+            if install.isInstalled {
+                Button(role: .destructive) {
+                    showingDeleteConfirmation = true
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+                .disabled(!model.canDeleteInstalledModel(install))
+                .help(deleteHelp)
+            }
             if !isSelected {
                 VStack(alignment: .trailing, spacing: 3) {
                     Button("Use This Model") { model.selectModel(install) }

@@ -50,7 +50,13 @@ preview_flags=(-Xswiftc -D -Xswiftc TUFF_NO_PREVIEWS)
 # test invocations can still override this when they intentionally cover Qwen.
 export TUFF_MODEL="${TUFF_MODEL:-gemma4}"
 
+# Link against the current SDK so local test builds are stamped like the
+# packaged app. Without this, SwiftPM stamps the deployment target (15.0) and
+# macOS shows the legacy appearance. See Scripts/package_app.sh.
+sdk_path="$(xcrun --sdk macosx --show-sdk-path)"
+sdk_flags=(-Xswiftc -Xclang-linker -Xswiftc -isysroot -Xswiftc -Xclang-linker -Xswiftc "$sdk_path")
+
 if [[ "$build_only" == true ]]; then
-  exec swift build --build-tests "${testing_flags[@]}" "${preview_flags[@]}" "$@"
+  exec swift build --build-tests "${testing_flags[@]}" "${preview_flags[@]}" "${sdk_flags[@]}" "$@"
 fi
-exec swift test --no-parallel "${testing_flags[@]}" "${preview_flags[@]}" "$@"
+exec swift test --no-parallel "${testing_flags[@]}" "${preview_flags[@]}" "${sdk_flags[@]}" "$@"
