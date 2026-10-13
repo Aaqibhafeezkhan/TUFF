@@ -1,9 +1,25 @@
 import Foundation
+import Observation
 import Testing
 @testable import TUFFAppUpdater
 
 @Suite struct AppUpdateConfigurationTests {
     private let publicKey = Data(repeating: 0xA5, count: 32).base64EncodedString()
+
+    @Test @MainActor func updateAvailabilityInvalidatesObservationWithoutModelActivity() {
+        let controller = AppUpdateController(infoDictionary: nil)
+        let invalidations = AvailabilityInvalidations()
+        withObservationTracking {
+            #expect(!controller.canCheckForUpdates)
+        } onChange: {
+            invalidations.increment()
+        }
+        controller.setCheckAvailability(true)
+        #expect(controller.canCheckForUpdates)
+        #expect(invalidations.count == 1)
+        controller.setCheckAvailability(false)
+        #expect(!controller.canCheckForUpdates)
+    }
 
     @Test func acceptsSignedHTTPSFeed() throws {
         let result = AppUpdateConfiguration.resolve(infoDictionary: [
@@ -32,4 +48,11 @@ import Testing
             "SUPublicEDKey": "not-a-public-key",
         ]) == .failure(.invalidPublicKey))
     }
+}
+
+private final class AvailabilityInvalidations: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    var count: Int { lock.withLock { value } }
+    func increment() { lock.withLock { value += 1 } }
 }

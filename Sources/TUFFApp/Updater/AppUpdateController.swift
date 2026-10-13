@@ -90,6 +90,8 @@ public final class AppUpdateController {
     @ObservationIgnored
     private var updater: SPUUpdater?
     @ObservationIgnored private var userDriver: RecoveryUserDriver?
+    @ObservationIgnored private var availabilityObservation: NSKeyValueObservation?
+    public private(set) var canCheckForUpdates = false
 
     public init(infoDictionary: [String: Any]? = Bundle.main.infoDictionary) {
         switch AppUpdateConfiguration.resolve(infoDictionary: infoDictionary) {
@@ -115,6 +117,12 @@ public final class AppUpdateController {
             do {
                 try controller.start()
                 updater = controller
+                availabilityObservation = controller.observe(\.canCheckForUpdates, options: [.initial, .new]) { [weak self] _, change in
+                    guard let available = change.newValue else { return }
+                    Task { @MainActor [weak self] in
+                        self?.setCheckAvailability(available)
+                    }
+                }
                 checksForUpdates = controller.automaticallyChecksForUpdates
                 downloadsUpdates = controller.automaticallyDownloadsUpdates
                 allowsAutomaticUpdates = controller.allowsAutomaticUpdates
@@ -134,8 +142,10 @@ public final class AppUpdateController {
 
     public var isAvailable: Bool { updater != nil }
 
-    public var canCheckForUpdates: Bool {
-        updater?.canCheckForUpdates ?? false
+    // Bridge Sparkle's KVO state into Observation so menus refresh even when
+    // there is no model or generation causing a SwiftUI redraw.
+    func setCheckAvailability(_ available: Bool) {
+        canCheckForUpdates = available
     }
 
     public func checkForRecoveryUpdate() {
