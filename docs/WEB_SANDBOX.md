@@ -21,10 +21,6 @@ failed, with the reason shown under the switch, and is tried again at your
 next message. It stops when you turn the switch off and when TUFF quits. The
 first start can download the image.
 
-Until the maintainers publish the sandbox image, turning the switch on ends
-with "The sandbox image has not been published yet". Developers can run a
-locally built image (see below).
-
 The switch applies from the next message. An answer that is already running
 keeps using the sandbox; if you turn the switch off meanwhile, its remaining
 web requests fail with a message instead of going out directly.

@@ -380,7 +380,9 @@ func sandboxFailureText(_ state: SandboxController.State) -> String? {
     }
 
     @Test func failsWhenNoImageHasBeenPublished() async {
-        let h = SandboxHarness.make(pin: .release)
+        let h = SandboxHarness.make(pin: SandboxImagePin(
+            reference: SandboxImagePin.release.reference,
+            digest: SandboxImagePin.placeholderDigest, source: .registry))
         defer { h.cleanUp() }
         await h.controller.start()
         expectFailed(h, containing: "has not been published")

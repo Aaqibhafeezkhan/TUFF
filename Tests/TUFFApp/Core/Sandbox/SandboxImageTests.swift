@@ -77,9 +77,9 @@ private final class ProgressLog: @unchecked Sendable {
         #expect(!registryPin(digest: "sha256:" + String(repeating: "0", count: 63) + "1").isPlaceholder)
     }
 
-    @Test func theReleasePinIsStillAPlaceholder() {
-        #expect(SandboxImagePin.release.isPlaceholder)
-        #expect(SandboxImagePin.release.digest == SandboxImagePin.placeholderDigest)
+    @Test func theReleasePinIsThePublishedImage() {
+        #expect(!SandboxImagePin.release.isPlaceholder)
+        #expect(SandboxImagePin.release.digest == "sha256:a30e016db2195bff70db07405e0afc02f861fc216f694bd3184d7fe86248e837")
         #expect(SandboxImagePin.release.source == .registry)
         #expect(!SandboxImagePin.release.reference.isEmpty)
     }
@@ -262,7 +262,8 @@ private final class ProgressLog: @unchecked Sendable {
     @Test func thePlaceholderPinMeansNoImageIsPublishedAndNothingRuns() async {
         let world = FakeContainerWorld()
         let provisioner = makeProvisioner(world)
-        let error = await thrownError { try await provisioner.ensure(.release, progress: { _ in }) }
+        let pin = registryPin(digest: SandboxImagePin.placeholderDigest)
+        let error = await thrownError { try await provisioner.ensure(pin, progress: { _ in }) }
         #expect(error == SandboxError.imageNotPublished)
         #expect(world.calls.isEmpty)
     }

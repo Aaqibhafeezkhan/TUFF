@@ -33,12 +33,13 @@ struct SandboxImagePin: Equatable, Sendable {
     /// True until the first image has been published and its digest put here.
     var isPlaceholder: Bool { digest == Self.placeholderDigest }
 
-    /// The image this version of TUFF runs. The maintainer's workflow
-    /// (`.github/workflows/sandbox-image.yml`) publishes it; its digest
-    /// replaces the placeholder in a small follow-up change, and until then
-    /// the sandbox says that no image has been published.
+    /// The image this version of TUFF runs: the index the maintainer's
+    /// workflow (`.github/workflows/sandbox-image.yml`) published as
+    /// `ghcr.io/rexmhall09/tuff-sandbox:1` from the `sandbox-v1` tag. A new
+    /// image means a new digest here (docs/SANDBOX_IMAGE.md).
     static let release = SandboxImagePin(
-        reference: "ghcr.io/rexmhall09/tuff-sandbox", digest: placeholderDigest, source: .registry)
+        reference: "ghcr.io/rexmhall09/tuff-sandbox",
+        digest: "sha256:a30e016db2195bff70db07405e0afc02f861fc216f694bd3184d7fe86248e837", source: .registry)
 
     /// For developers and tests before an image is published: when both
     /// `TUFF_SANDBOX_DEV_IMAGE` (a name in the local image store, such as the

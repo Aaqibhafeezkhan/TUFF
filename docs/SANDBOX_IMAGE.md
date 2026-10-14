@@ -96,18 +96,9 @@ comparison before releasing.
 
 In `Sources/TUFFApp/Core/Sandbox/SandboxImage.swift`, `SandboxImagePin.release`
 holds the registry name (`ghcr.io/<owner>/tuff-sandbox`) and the digest. Put the
-new digest there (the name's owner must be the account that published). Until a
-real digest is there it is the placeholder (all zeros), and turning the setting
-on says "The sandbox image has not been published yet".
-
-Also update the tests that rely on the placeholder: in
-`Tests/TUFFApp/Core/Sandbox/SandboxImageTests.swift`,
-`theReleasePinIsStillAPlaceholder` and
-`thePlaceholderPinMeansNoImageIsPublishedAndNothingRuns` (change them to use an
-explicit placeholder pin, `SandboxImagePin.placeholderDigest`, so they keep
-testing the "not published" path), and in `SandboxControllerTests.swift`
-`failsWhenNoImageHasBeenPublished` (same change). The test that the release pin
-is well formed stays. Then:
+new digest there (the name's owner must be the account that published), and the
+same digest in `theReleasePinIsThePublishedImage` in
+`Tests/TUFFApp/Core/Sandbox/SandboxImageTests.swift`. Then:
 
 1. Build and run the unit tests (`Scripts/test.sh --filter Sandbox`).
 2. On a Mac with no copy of the image (`container image delete` it, or use a
