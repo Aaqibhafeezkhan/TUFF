@@ -332,6 +332,13 @@ public final class VisionRuntime {
         self.store = store
         self.useLease = useLease
         self.config = VisionConfig(family: family, modelVariant: modelVariant)
+        // The format check already holds the merger to the width the pack
+        // declares; this holds that width to the text model's residual, so a
+        // pack for one Qwen checkpoint never feeds another's.
+        if family == .qwen36,
+           (store.manifest.textHiddenSize ?? 2_048) != config.textHiddenSize {
+            throw VisionPackError.incompatibleTextArtifact
+        }
         let shape = config
         let linear = try VisionLinearBF16(context: context, environment: environment)
         self.linear = linear

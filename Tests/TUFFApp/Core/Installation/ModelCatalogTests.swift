@@ -49,6 +49,9 @@ import TUFFRepackCore
             // Measured by the installer's own planner against this pin:
             // "planned: 1009.1 MiB to download, 859.6 MiB to write".
             .qwen38FlashNext: 1_058_209_792,
+            // From the installer's resume checkpoint (`totalSourceBytes`)
+            // against this pin.
+            .qwen38_27B: 1_929_719_232,
         ]
         for model in TUFFModelCatalog.all {
             guard let addon = model.addons.first(where: { $0.kind == .imageInput })

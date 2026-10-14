@@ -238,6 +238,10 @@ enum RepackPlanner {
             // and (2560 - 2048) * 2 for its bias. Nothing else in the tower
             // differs.
             expected = (333, 897_862_112)
+        case SupportedModelSource.qwen38_27B.modelID:
+            // Qwen 3.6's tower again; only the merger widens, to the 5,120-wide
+            // residual: (5120 - 2048) * 4608 * 2 + (5120 - 2048) * 2 bytes more.
+            expected = (333, 921_460_192)
         case SupportedModelSource.gemma4E2B.modelID:
             expected = (213, 335_392_768)
         case SupportedModelSource.gemma4E4B.modelID:

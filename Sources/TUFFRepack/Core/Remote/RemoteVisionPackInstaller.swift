@@ -541,7 +541,8 @@ public final class RemoteVisionPackInstaller {
         return TextBinding(
             sourceSnapshotHash: source,
             manifestSha256: hash(data),
-            family: manifest.arch.family ?? "gemma4")
+            family: manifest.arch.family ?? "gemma4",
+            hiddenSize: manifest.arch.hiddenSize)
     }
 
     private func createWeightsFile(paths: RemoteInstallPaths, size: UInt64) throws {
@@ -581,8 +582,12 @@ public final class RemoteVisionPackInstaller {
         switch options.repoID {
         case SupportedModelSource.qwen36.repoID: visionFamily = .qwen36
         case SupportedModelSource.qwen38FlashNext.repoID: visionFamily = .qwen4Exp
+        case SupportedModelSource.qwen38_27B.repoID: visionFamily = .qwen36
         default: visionFamily = .gemma4
         }
+        // Qwen 3.6's own width stays implicit, so its packs are unchanged.
+        let textHiddenSize = visionFamily == .qwen36 && textBinding.hiddenSize != 2_048
+            ? textBinding.hiddenSize : nil
         guard textBinding.family == visionFamily.rawValue else {
             throw RepackError.configurationInvalid(
                 detail: "\(visionFamily.rawValue) vision source cannot bind to \(textBinding.family) text model")
@@ -623,6 +628,7 @@ public final class RemoteVisionPackInstaller {
             processorConfigSha256: processorSha256,
             compatibleTextSourceSnapshotHash: textBinding.sourceSnapshotHash,
             compatibleTextManifestSha256: textBinding.manifestSha256,
+            textHiddenSize: textHiddenSize,
             files: files,
             tensors: tensors)
         let manifestData = try GTurboVisionManifestCodec.encode(manifest)
@@ -665,4 +671,5 @@ private struct TextBinding: Sendable {
     let sourceSnapshotHash: String
     let manifestSha256: String
     let family: String
+    let hiddenSize: Int
 }

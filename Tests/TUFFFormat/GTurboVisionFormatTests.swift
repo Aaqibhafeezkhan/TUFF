@@ -190,8 +190,37 @@ private enum VisionFormatFixture {
         }
     }
 
+    /// Wider Qwen packs declare their text width, and the merger must match
+    /// it. A pack without the field is held to Qwen 3.6's 2,048, which is
+    /// also what an engine predating the field expects, so a wide pack can
+    /// never load into one.
+    @Test func qwenTextWidthMustMatchTheMerger() throws {
+        for width in [4_096, 5_120] {
+            let wide = qwenManifest(mergerWidth: UInt64(width), textHiddenSize: width)
+            let decoded = try GTurboVisionManifestCodec.decode(
+                try GTurboVisionManifestCodec.encode(wide))
+            #expect(decoded.textHiddenSize == width)
+        }
+        #expect(throws: GTurboFormatError.self) {
+            try GTurboVisionManifestCodec.encode(qwenManifest(mergerWidth: 5_120))
+        }
+        #expect(throws: GTurboFormatError.self) {
+            try GTurboVisionManifestCodec.encode(
+                qwenManifest(mergerWidth: 5_120, textHiddenSize: 4_096))
+        }
+        #expect(throws: GTurboFormatError.self) {
+            try GTurboVisionManifestCodec.encode(
+                qwenManifest(mergerWidth: 3_000, textHiddenSize: 3_000))
+        }
+        // Qwen 3.6's own packs stay byte-identical: no field is written.
+        let plain = try GTurboVisionManifestCodec.encode(qwenManifest())
+        #expect(!String(decoding: plain, as: UTF8.self).contains("textHiddenSize"))
+    }
+
     private func qwenManifest(
-        tensors supplied: [GTurboVisionTensorRegionV1]? = nil
+        tensors supplied: [GTurboVisionTensorRegionV1]? = nil,
+        mergerWidth: UInt64 = 2_048,
+        textHiddenSize: Int? = nil
     ) -> GTurboVisionManifestV1 {
         var shapes: [(String, [UInt64])] = [
             ("vision_tower.patch_embed.proj.weight", [1_152, 2, 16, 16, 3]),
@@ -220,8 +249,8 @@ private enum VisionFormatFixture {
             ("vision_tower.merger.norm.bias", [1_152]),
             ("vision_tower.merger.linear_fc1.weight", [4_608, 4_608]),
             ("vision_tower.merger.linear_fc1.bias", [4_608]),
-            ("vision_tower.merger.linear_fc2.weight", [2_048, 4_608]),
-            ("vision_tower.merger.linear_fc2.bias", [2_048]),
+            ("vision_tower.merger.linear_fc2.weight", [mergerWidth, 4_608]),
+            ("vision_tower.merger.linear_fc2.bias", [mergerWidth]),
         ]
         var offset: UInt64 = 0
         let tensors = supplied ?? shapes.enumerated().map { index, item in
@@ -245,6 +274,7 @@ private enum VisionFormatFixture {
             processorConfigSha256: VisionFormatFixture.zeroSHA,
             compatibleTextSourceSnapshotHash: "qwen-text-snapshot",
             compatibleTextManifestSha256: VisionFormatFixture.zeroSHA,
+            textHiddenSize: textHiddenSize,
             files: [
                 GTurboVisionFormatV1.weightsFile: .init(
                     size: size, sha256: VisionFormatFixture.zeroSHA),

@@ -45,6 +45,7 @@ public enum VisionPackWriter {
         switch source {
         case .qwen36: visionFamily = .qwen36
         case .qwen38FlashNext: visionFamily = .qwen4Exp
+        case .qwen38_27B: visionFamily = .qwen36
         default: visionFamily = .gemma4
         }
 
@@ -164,6 +165,8 @@ public enum VisionPackWriter {
                 processorConfigSha256: processorSHA,
                 compatibleTextSourceSnapshotHash: textSnapshot,
                 compatibleTextManifestSha256: textManifestSHA,
+                textHiddenSize: visionFamily == .qwen36 && textManifest.arch.hiddenSize != 2_048
+                    ? textManifest.arch.hiddenSize : nil,
                 files: files,
                 tensors: tensors)
             let manifestData = try GTurboVisionManifestCodec.encode(manifest)

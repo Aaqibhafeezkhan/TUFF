@@ -1206,7 +1206,26 @@ public enum TUFFModelCatalog {
             expertCacheBytesPerSlot: 0, kvCache: TUFFKVCacheProfile(fullAttentionBytesPerToken: 65536)),
         qualification: .qualified,
         runtimeDefaults: TUFFModelRuntimeDefaults(temperature: 0.7, topK: 20, topP: 0.8),
-        capabilities: [.textGeneration, .reasoning], reasoningControl: .toggleWithPreservation)
+        capabilities: [.textGeneration, .imageInput, .reasoning], reasoningControl: .toggleWithPreservation,
+        // The checkpoint carries Qwen 3.6's tower, tensor for tensor, with the
+        // merger widened to this model's 5,120-wide residual.
+        addons: [TUFFModelAddonDescriptor(
+            id: "qwen38-27b-image-input",
+            displayName: "Qwen 3.8 27B Image Support",
+            kind: .imageInput,
+            source: TUFFModelSource(repoID: "mlx-community/Qwen3.8-27B-4bit",
+                revision: "10c35caafbb80f7dc6a7a432cdd11af10a6d4818",
+                sourceIndexSHA256: "13b840162b4cb35c66fef7df072f7dbb4717908204364f5e5d9f9655a2758fa8",
+                manifestModelID: "mlx-community/Qwen3.8-27B-4bit",
+                // The coalesced range total: the 333 vision tensors are spread
+                // through the first shard, so fetching them costs about twice
+                // what they weigh.
+                approximateDownloadBytes: 1_929_719_232,
+                installedBytes: 925_014_699,
+                reserveBytes: oneGiB),
+            hardware: TUFFModelHardwareRequirements(
+                minimumUnifiedMemoryBytes: 16 * oneGiB,
+                minimumAppleSiliconGeneration: 2))])
 
     public static let ornith15_397B = TUFFModelDescriptor(
         id: .ornith15_397B, selector: "ornith-397b", apiModelID: "ornith-397b",

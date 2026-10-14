@@ -140,6 +140,11 @@ package struct GTurboVisionManifestV1: Codable, Equatable, Sendable {
     package let processorConfigSha256: String
     package let compatibleTextSourceSnapshotHash: String
     package let compatibleTextManifestSha256: String
+    /// Width of the text residual the Qwen merger projects into. Nil means
+    /// 2,048, Qwen 3.6's, so every pack written before this field existed is
+    /// unchanged. Engines that predate the field ignore it and still expect
+    /// 2,048, so a wider pack fails their shape check instead of loading.
+    package let textHiddenSize: Int?
     package let files: [String: GTurboManifestFileV1]
     package let tensors: [GTurboVisionTensorRegionV1]
 
@@ -152,6 +157,7 @@ package struct GTurboVisionManifestV1: Codable, Equatable, Sendable {
                  sourceIndexSha256: String, processorConfigSha256: String,
                  compatibleTextSourceSnapshotHash: String,
                  compatibleTextManifestSha256: String,
+                 textHiddenSize: Int? = nil,
                  files: [String: GTurboManifestFileV1],
                  tensors: [GTurboVisionTensorRegionV1]) {
         self.magic = magic
@@ -165,11 +171,17 @@ package struct GTurboVisionManifestV1: Codable, Equatable, Sendable {
         self.processorConfigSha256 = processorConfigSha256
         self.compatibleTextSourceSnapshotHash = compatibleTextSourceSnapshotHash
         self.compatibleTextManifestSha256 = compatibleTextManifestSha256
+        self.textHiddenSize = textHiddenSize
         self.files = files
         self.tensors = tensors
     }
 
     package var resolvedFamily: GTurboVisionFamilyV1 { family ?? .gemma4 }
+
+    /// Residual widths of the Qwen-family text models with a qualified image
+    /// pack: Qwen 3.6 and Ornith 35B (2,048), Ornith 9B and 397B (4,096) and
+    /// Qwen 3.8 27B (5,120).
+    package static let qwen36TextHiddenSizes: Set<Int> = [2_048, 4_096, 5_120]
 }
 
 package enum GTurboVisionManifestCodec {
@@ -316,10 +328,21 @@ package enum GTurboVisionStructuralValidator {
             }
             previousEnd = end
         }
+        // Only Qwen 3.6-family packs vary in width; anywhere else the field
+        // would be a claim nothing checks.
+        guard manifest.textHiddenSize == nil || manifest.resolvedFamily == .qwen36 else {
+            throw GTurboFormatError.invalid(field: "vision.textHiddenSize",
+                                             reason: "only Qwen 3.6-family packs set a text width")
+        }
         switch manifest.resolvedFamily {
         case .qwen36:
+            let width = manifest.textHiddenSize ?? 2_048
+            guard GTurboVisionManifestV1.qwen36TextHiddenSizes.contains(width) else {
+                throw GTurboFormatError.invalid(field: "vision.textHiddenSize",
+                                                 reason: "unsupported text width \(width)")
+            }
             try validateQwenTowerArchitecture(manifest.tensors,
-                                              mergerOutputWidth: 2_048)
+                                              mergerOutputWidth: UInt64(width))
         case .qwen4Exp:
             try validateQwenTowerArchitecture(manifest.tensors,
                                               mergerOutputWidth: 2_560)
