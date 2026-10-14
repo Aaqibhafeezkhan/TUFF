@@ -1,0 +1,115 @@
+name: Sandbox image
+
+# Builds the web sandbox image from Sandbox/ and publishes it to the GitHub
+# Container Registry, so TUFF can pull it with `container image pull` and check
+# its digest. It runs only when someone with write access starts it by hand, or
+# pushes a tag named sandbox-v<version>, so publishing stays with the owner. It
+# never runs for a pull request. The image is Linux/arm64, because Apple
+# `container` runs arm64 Linux VMs on Apple Silicon.
+#
+# The job summary prints the digest. That digest (not the tag) is what TUFF pins
+# in code, and the app refuses an image that does not match it.
+#
+# This workflow can publish, so its actions are pinned by commit. The comment
+# after each one names the release; to update one, look up the commit that the
+# new release's tag points to and replace both.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag, for example 1 or dev"
+        required: true
+        default: dev
+  push:
+    tags: ["sandbox-v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    name: Build and publish
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - name: Name the image
+        id: names
+        env:
+          REQUESTED: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          tag="${REQUESTED#sandbox-v}"
+          if ! [[ "$tag" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
+            echo "The tag '$tag' is not a plain image tag." >&2
+            exit 1
+          fi
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/$owner/tuff-sandbox" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: Sandbox
+          file: Sandbox/Containerfile
+          platforms: linux/arm64
+          push: true
+          # One plain manifest, without provenance or SBOM attachments; the
+          # next step wraps it in an index.
+          provenance: false
+          sbom: false
+          tags: ${{ steps.names.outputs.image }}:${{ steps.names.outputs.tag }}-manifest
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.description=Web sandbox for TUFF
+      # Apple container stores a plain manifest it pulls under a new index of
+      # its own making, with another digest (containerization's
+      # ImageStore.import), so the digest TUFF pins would never match. An
+      # index is stored as it is, so the published tag is an index that holds
+      # the one arm64 manifest, and the index's digest is the one to pin.
+      - name: Publish as an index
+        id: index
+        env:
+          IMAGE: ${{ steps.names.outputs.image }}
+          TAG: ${{ steps.names.outputs.tag }}
+          MANIFEST: ${{ steps.build.outputs.digest }}
+        run: |
+          docker buildx imagetools create --prefer-index=true -t "$IMAGE:$TAG" "$IMAGE@$MANIFEST"
+          docker buildx imagetools inspect --raw "$IMAGE:$TAG" > index.json
+          python3 - "$MANIFEST" <<'CHECK'
+          import json, sys
+          index = json.load(open("index.json"))
+          assert index["mediaType"] in ("application/vnd.oci.image.index.v1+json",
+                                        "application/vnd.docker.distribution.manifest.list.v2+json"), index["mediaType"]
+          (entry,) = index["manifests"]
+          assert entry["digest"] == sys.argv[1], entry["digest"]
+          assert (entry["platform"]["os"], entry["platform"]["architecture"]) == ("linux", "arm64"), entry["platform"]
+          CHECK
+          echo "digest=sha256:$(sha256sum index.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Report the digest
+        env:
+          IMAGE: ${{ steps.names.outputs.image }}
+          DIGEST: ${{ steps.index.outputs.digest }}
+        run: |
+          {
+            echo "## Sandbox image"
+            echo
+            echo "Published: \`$IMAGE@$DIGEST\`"
+            echo
+            echo "Pin this digest in TUFF. Check it with:"
+            echo '```'
+            echo "container image pull $IMAGE@$DIGEST"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
