@@ -72,6 +72,12 @@ prefix once, rather than writing generated-token state continuously. Set
 their scoped data root. SSD health or lifetime cannot be guaranteed by these
 software checks, and the operating system controls swapping and thermal limits.
 
+Chats use the same cache so a chat reopened after a restart doesn't read its
+whole history again. A chat of 1,024 tokens or more is saved where its newest
+message begins, then saved again only once it has grown by a quarter. Its
+state is deleted with the chat, or when you edit an earlier message. Set
+`TUFF_SAVED_CHATS=off` to keep chat state in memory only.
+
 Raising macOS's GPU wired-memory limit is not a default TUFF setup step.
 TUFF runs its own Metal helpers, rather than MLX's allocator. A larger system
 allowance does not add physical RAM or make disk-bound streaming faster.
