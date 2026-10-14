@@ -42,7 +42,10 @@ func makeAppModel(
     visionRuntimeSupported: Bool = true,
     settingsPersistenceEnabled: Bool = false,
     deviceCapabilities: TUFFDeviceCapabilities = .qualifyingTestHost,
-    toolStore: AppToolStore? = nil
+    toolStore: AppToolStore? = nil,
+    // Never the real cleanup: it would ask a running Background API to unload
+    // and remove engines from this Mac's real store.
+    deletionCleanup: AppModelDeletionCleanup = .none
 ) -> AppModel {
     AppModel(
         modelDirectory: modelDirectory,
@@ -56,5 +59,6 @@ func makeAppModel(
         visionRuntimeSupported: visionRuntimeSupported,
         settingsPersistenceEnabled: settingsPersistenceEnabled,
         deviceCapabilities: deviceCapabilities,
-        toolStore: toolStore)
+        toolStore: toolStore,
+        deletionCleanup: deletionCleanup)
 }

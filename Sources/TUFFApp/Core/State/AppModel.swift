@@ -396,6 +396,9 @@ public final class AppModel {
 
     private let client: any AppInferenceClient
     private let visionInstaller: any AppVisionPackInstallerClient
+    private let deletionCleanup: AppModelDeletionCleanup
+    /// Models being deleted, so a second click cannot start another delete.
+    public private(set) var deletingModelIDs: Set<String> = []
     private var runTask: Task<Void, Never>?
     /// Stops the answer in progress, generation and tools alike.
     private var answerCancellation: AppAnswerCancellation?
@@ -460,7 +463,8 @@ public final class AppModel {
                 settingsPersistenceEnabled: Bool = false,
                 deviceCapabilities: TUFFDeviceCapabilities = .current(),
                 toolStore: AppToolStore? = nil,
-                networkStatus: AppNetworkStatus? = nil) {
+                networkStatus: AppNetworkStatus? = nil,
+                deletionCleanup: AppModelDeletionCleanup? = nil) {
         let directory = (modelDirectory ?? AppModelLocation.defaultURL()).standardizedFileURL
         let installETAClock = SuspendingClock()
         let settingsProfileKey = installer.descriptor.settingsProfileKey
@@ -486,6 +490,7 @@ public final class AppModel {
         self.deviceCapabilities = deviceCapabilities
         self.client = client
         self.visionInstaller = visionInstaller
+        self.deletionCleanup = deletionCleanup ?? (settingsPersistenceEnabled ? .standard : .none)
         self.memorySampler = memorySampler
         self.attachmentStore = attachmentStore
         self.isVisionRuntimeSupported = visionRuntimeSupported
@@ -2194,14 +2199,27 @@ public final class AppModel {
     public func canDeleteInstalledModel(_ coordinator: ModelInstallCoordinator) -> Bool {
         coordinator.canDeleteInstalled
             && coordinator.id != selectedModelID
+            && !deletingModelIDs.contains(coordinator.id)
             && canPrepareVisionCompanionOperation
     }
 
-    /// Removes the model's image add-on first, then its folder. Callers
-    /// confirm first; this does not ask.
+    /// Asks the Background API to let go of the model, then removes its image
+    /// add-on and its folder, then its saved snapshots and an engine nothing
+    /// else needs. Callers confirm first; this does not ask.
     public func deleteInstalledModel(_ coordinator: ModelInstallCoordinator) {
         guard canDeleteInstalledModel(coordinator) else { return }
-        Task { [weak self, visionInstaller] in
+        deletingModelIDs.insert(coordinator.id)
+        Task { [weak self, visionInstaller, deletionCleanup] in
+            defer { self?.deletingModelIDs.remove(coordinator.id) }
+            let descriptor = coordinator.descriptor
+            // Deleting files out from under a request the server is answering
+            // would fail it partway, so a busy server keeps the model.
+            guard await deletionCleanup.releaseFromBackgroundAPI(descriptor.apiModelID) else {
+                self?.error = .invalidRequest(
+                    "The Background API is using \(descriptor.displayName). "
+                    + "Delete it when its requests have finished.")
+                return
+            }
             do {
                 if self?.hasVisionPackDirectory(for: coordinator) == true {
                     try await visionInstaller.removeInstalled(
@@ -2210,8 +2228,10 @@ public final class AppModel {
                 try await coordinator.deleteInstalled()
             } catch {
                 self?.error = .invalidRequest(
-                    "Could not delete \(coordinator.descriptor.displayName): \(error)")
+                    "Could not delete \(descriptor.displayName): \(error)")
+                return
             }
+            await deletionCleanup.afterDeletion(descriptor)
         }
     }
 

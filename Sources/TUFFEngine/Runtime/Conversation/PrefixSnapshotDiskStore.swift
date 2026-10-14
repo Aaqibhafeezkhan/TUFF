@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import Metal
+import TUFFModelCatalog
 
 /// Runner state at the end of a shared prompt prefix, kept on disk so a new
 /// process can skip reading an agent's system prompt and tools again.
@@ -42,22 +43,13 @@ public final class PrefixSnapshotDiskStore: @unchecked Sendable {
            let megabytes = Int(override.trimmingCharacters(in: .whitespaces)) {
             budget = min(budget, max(0, megabytes) << 20)
         }
-        guard budget > 0 else { return nil }
-        let caches: URL
-        if let scoped = environment["TUFF_APPLICATION_SUPPORT_ROOT"],
-           scoped.hasPrefix("/"), !scoped.contains("\0") {
-            caches = URL(fileURLWithPath: scoped, isDirectory: true).standardizedFileURL
-                .appendingPathComponent("TUFF/Caches", isDirectory: true)
-        } else if let normal = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
-            caches = normal
-        } else { return nil }
-        func safe(_ text: String) -> String {
-            String(text.map { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "." ? $0 : "_" })
-        }
+        guard budget > 0,
+              let modelDirectory = TUFFPrefixSnapshotLocation.modelDirectory(
+                modelID: modelID, environment: environment) else { return nil }
         // One folder per build, so an update can clear what it can never use.
         return PrefixSnapshotDiskStore(
-            directory: caches.appendingPathComponent(
-                "TUFF/PrefixSnapshots/\(safe(modelID))/\(safe(buildIdentity))"),
+            directory: modelDirectory.appendingPathComponent(
+                TUFFPrefixSnapshotLocation.safeComponent(buildIdentity)),
             budgetBytes: budget, buildIdentity: buildIdentity, clearsSiblingBuilds: true)
     }
 

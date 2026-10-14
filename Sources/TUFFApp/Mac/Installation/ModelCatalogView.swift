@@ -308,11 +308,15 @@ struct ModelCatalogRow: View {
         let addOn = model.hasVisionPackDirectory(for: install)
             ? " and its \(visionDisplayName) add-on"
             : ""
-        return "The downloaded files\(addOn) are removed from this Mac. "
+        return "The downloaded files\(addOn) are removed from this Mac, with its "
+            + "saved prompt cache and its engine if no other model uses it. "
             + "Download it again to use it later. Other models are untouched."
     }
 
     private var deleteHelp: String {
+        if model.deletingModelIDs.contains(install.id) {
+            return "Deleting…"
+        }
         if isSelected {
             return "Select a different model to delete this one."
         }
@@ -389,7 +393,9 @@ struct ModelCatalogRow: View {
                 }
             }
             Spacer(minLength: 8)
-            if install.isInstalled {
+            // A custom checkpoint is the person's own folder; its entry is
+            // removed in Settings, which leaves the folder alone.
+            if install.isInstalled, !install.descriptor.isCustomCheckpoint {
                 Button(role: .destructive) {
                     showingDeleteConfirmation = true
                 } label: {

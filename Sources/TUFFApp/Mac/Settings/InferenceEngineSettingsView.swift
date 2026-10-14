@@ -70,7 +70,7 @@ struct InferenceEngineSettingsView: View {
             let controller = try InferenceEngineEnvironment.controller()
             let count = try await controller.removeUnusedPackages()
             packages = try await controller.statuses()
-            message = "Removed \(count) unused engines."
+            message = count == 1 ? "Removed 1 unused engine." : "Removed \(count) unused engines."
         } catch { message = String(describing: error) }
     }
     @MainActor private func repair(_ package: InferenceEnginePackageStatus) async {

@@ -173,8 +173,28 @@ public final class RepackModelInstallerClient: AppModelInstallerClient, Sendable
     public func removeInstalledModel(outputDirectory: URL) async throws {
         let directory = outputDirectory.standardizedFileURL
         try await Task.detached(priority: .utility) {
-            try FileManager.default.removeItem(at: directory)
+            try Self.removeInstalled(at: directory)
         }.value
+    }
+
+    /// Moves the folder aside under the install lock, then deletes it. The
+    /// model stops looking installed the moment it moves, and no download can
+    /// start into it meanwhile. An interrupted delete leaves a hidden
+    /// `.<name>.deleting-…` folder that the next delete clears, never a
+    /// half-removed model that still looks installed.
+    static func removeInstalled(at directory: URL) throws {
+        let lock = try InstallLock.acquire(outputDirectory: directory.path)
+        let parent = lock.paths.parentDirectory
+        let prefix = "." + URL(fileURLWithPath: lock.paths.finalDirectory).lastPathComponent + ".deleting-"
+        let trash = (parent as NSString).appendingPathComponent(prefix + UUID().uuidString)
+        try withExtendedLifetime(lock) {
+            try Posix.rename(from: lock.paths.finalDirectory, to: trash)
+            try? Posix.fsyncDirectory(parent)
+        }
+        let leftovers = (try? FileManager.default.contentsOfDirectory(atPath: parent)) ?? []
+        for name in leftovers where name.hasPrefix(prefix) {
+            try FileManager.default.removeItem(atPath: (parent as NSString).appendingPathComponent(name))
+        }
     }
 
     static func event(for progress: ModelInstallProgress) -> AppModelInstallEvent {
