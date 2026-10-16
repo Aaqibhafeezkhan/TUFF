@@ -53,6 +53,13 @@ public struct KVView: @unchecked Sendable {
 /// physical pages to the OS via `MADV_DONTNEED` so a
 /// finished generation does not keep its KV resident into the next turn.
 public final class KVCacheManager {
+    /// Full-attention rows the runners allocate at first. Allocating the
+    /// whole window up front pinned up to 2.7 GB for Gemma 4 26B at 128K
+    /// before a chat needed it, memory that streamed experts then missed in
+    /// the file cache (about 20% slower decode on a 16 GB Mac). Storage
+    /// doubles as a conversation grows, up to the configured window.
+    public static let initialFullAttentionCapacity = 2_048
+
     public let config: ArchConfig
     public let maxContext: Int
     public let fp16RingEnabled: Bool

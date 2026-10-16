@@ -134,7 +134,7 @@ public final class AppBenchmarkRunner: @unchecked Sendable {
         stepProgress: (AppBenchmarkStep, Int, Int, Bool) -> Void,
         loaded: () -> Void
     ) async -> AppBenchmarkResult.ModelRun {
-        let plan = Self.plan(for: model.descriptor, on: device)
+        let plan = Self.plan(for: model.descriptor, on: device, modelDirectory: model.directory)
         var run = Self.emptyRun(model, status: .completed, error: nil)
         run.settings = plan.settings
 
@@ -307,19 +307,32 @@ public final class AppBenchmarkRunner: @unchecked Sendable {
         }
     }
 
+    /// The settings a new chat would load the model with: the same Auto plan
+    /// as the app, including which dense layers stay resident. Without the
+    /// plan's residency the options default to keeping every dense layer,
+    /// which a model larger than the Mac's memory cannot do (Qwen 3.8 27B
+    /// failed with a Metal out-of-memory error on a 16 GB Mac in 9.2.0).
     static func plan(for descriptor: TUFFModelDescriptor,
-                     on device: TUFFDeviceCapabilities) -> Plan {
+                     on device: TUFFDeviceCapabilities,
+                     modelDirectory: URL? = nil, useBundledLayout: Bool = false) -> Plan {
         let install = AppModelInstallDescriptor(catalog: descriptor)
+        let defaults = AppModelSettingsProfile.defaults(for: descriptor.id.rawValue)
         let profile = AppAutomaticMemoryPlanner.applying(
-            AppModelSettingsProfile.defaults(for: descriptor.id.rawValue),
-            for: install, on: device)
-        let chunk = descriptor.recommendedPrefillChunkTokens(on: device)
+            defaults, for: install, on: device, modelDirectory: modelDirectory,
+            useBundledLayout: useBundledLayout)
+        let autoPlan = defaults.automaticMemory ? AppAutomaticMemoryPlanner.plan(
+            for: install, on: device, profile: defaults.automaticMemoryProfile,
+            modelDirectory: modelDirectory, useBundledLayout: useBundledLayout) : nil
+        let chunk = autoPlan?.prefillChunkTokens ?? descriptor.recommendedPrefillChunkTokens(on: device)
         let options = AppRuntimeOptions(
             expertCacheSlots: profile.expertCacheSlots,
             prefillEnabled: profile.prefillEnabled,
             prefillChunkTokens: chunk,
             rdadvisePolicy: profile.rdadvisePolicy,
-            visionResidencyPolicy: .onDemand)
+            visionResidencyPolicy: .onDemand,
+            denseResidencyPolicy: autoPlan?.denseResidencyPolicy
+                ?? profile.manualDenseResidencyPolicy(for: install),
+            retainedConversationBytes: autoPlan?.retainedConversationBytes)
         // Thinking off wherever the model allows it, so every model spends
         // its tokens on the answer. GPT-OSS uses its lowest effort.
         let reasoning: ChatReasoning = descriptor.reasoningControl == .alwaysOn ? .on : .off

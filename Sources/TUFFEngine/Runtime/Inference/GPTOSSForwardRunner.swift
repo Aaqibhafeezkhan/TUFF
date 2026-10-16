@@ -139,7 +139,8 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
             maxContext: maxContext,
             fp16RingEnabled: runtimeConfiguration.fp16RingEnabled,
             slidingWindow: config.slidingWindow,
-            maxPrefillChunkTokens: prefillQueryCapacity)
+            maxPrefillChunkTokens: prefillQueryCapacity,
+            initialFullAttentionCapacityTokens: KVCacheManager.initialFullAttentionCapacity)
 
         bf16 = try BF16GEMV(context: context,
                             maxBatchRows: prefillQueryCapacity)
@@ -498,6 +499,7 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
             return PrefillResult(newPosition: startPosition,
                                  seed: .logitsWritten)
         }
+        try kv.ensureCapacity(through: startPosition + tokens.count, on: context.queue)
 
         let spans = PrefillChunkPlanner.spans(
             tokenCount: tokens.count,
@@ -888,6 +890,7 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
             throw GeneratorError.invalidGenerationConfig(
                 "GPT-OSS token ID \(token) is outside vocab \(config.vocabSize)")
         }
+        try kv.ensureCapacity(through: position + 1, on: context.queue)
         if emitHead && logits.length < config.vocabSize * MemoryLayout<Float16>.stride {
             throw PrefillError.chunkedUnsupported(
                 "GPT-OSS logits buffer is smaller than the model vocabulary")

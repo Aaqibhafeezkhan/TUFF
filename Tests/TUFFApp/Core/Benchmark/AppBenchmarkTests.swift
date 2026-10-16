@@ -172,6 +172,21 @@ private func runner(_ client: ScriptedBenchmarkClient) -> AppBenchmarkRunner {
         #expect(plan.settings.reasoning == "effort-low")
     }
 
+    /// A model larger than memory is loaded the way a chat loads it: with
+    /// Auto's streamed dense layers, not every layer resident.
+    @Test func aDenseModelLargerThanMemoryStreamsLikeAChat() throws {
+        let install = AppModelInstallDescriptor(catalog: TUFFModelCatalog.qwen38_27B)
+        let plan = AppBenchmarkRunner.plan(for: TUFFModelCatalog.qwen38_27B, on: device,
+                                           useBundledLayout: true)
+        let chat = try #require(AppAutomaticMemoryPlanner.plan(
+            for: install, on: device, profile: AppModelSettingsProfile.defaults(
+                for: TUFFModelCatalog.qwen38_27B.id.rawValue).automaticMemoryProfile,
+            useBundledLayout: true))
+        #expect(plan.options.denseResidencyPolicy != .resident)
+        #expect(plan.options.denseResidencyPolicy == chat.denseResidencyPolicy)
+        #expect(plan.settings.contextTokens == chat.contextTokens)
+    }
+
     @Test func cancellingStopsTheRunAndMarksWhatIsLeft() async {
         let client = ScriptedBenchmarkClient()
         let task = Task {

@@ -5,19 +5,17 @@ import TUFFRuntimeDescriptions
 @testable import TUFFEngine
 
 @Suite struct InferenceMemoryPlanTests {
-    @Test func onlyProgressiveFullAttentionReservesGrowthOverlap() {
-        for config in [ArchConfig.gemma4_12B_QAT, ArchConfig.qwen38_27B] {
-            let fixed = KVCacheMemoryPlan(config: config, maxContext: 8_192,
+    @Test func growingFullAttentionReservesOneLayerAboveTheFirstAllocation() {
+        for config in [ArchConfig.gemma4_12B_QAT, ArchConfig.qwen38_27B, .qwen38FlashNext,
+                       .gemma4_26B_A4B, .gptOss_20B] {
+            let initial = KVCacheMemoryPlan(config: config, maxContext: 2_048,
                 fp16RingEnabled: true, maxPrefillChunkTokens: 256)
-            #expect(fixed.growthOverlapBytes == 0)
+            let growing = KVCacheMemoryPlan(config: config, maxContext: 8_192,
+                fp16RingEnabled: true, maxPrefillChunkTokens: 256)
+            #expect(initial.growthOverlapBytes == 0)
+            #expect(growing.growthOverlapBytes > 0)
+            #expect(growing.growthOverlapBytes <= growing.totalBytes)
         }
-        let initial = KVCacheMemoryPlan(config: .qwen38FlashNext, maxContext: 2_048,
-            fp16RingEnabled: true, maxPrefillChunkTokens: 256)
-        let growing = KVCacheMemoryPlan(config: .qwen38FlashNext, maxContext: 8_192,
-            fp16RingEnabled: true, maxPrefillChunkTokens: 256)
-        #expect(initial.growthOverlapBytes == 0)
-        #expect(growing.growthOverlapBytes > 0)
-        #expect(growing.growthOverlapBytes <= growing.totalBytes)
     }
     @Test func newCacheTrackingArraysHaveAConservativeAllLayerReserve() throws {
         let page = UInt64(sysconf(_SC_PAGESIZE))

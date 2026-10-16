@@ -2,8 +2,11 @@ package struct KVCacheMemoryPlan: Sendable, Equatable {
     package let capacities: [Int]
     package let strides: [Int]
     package let totalBytes: UInt64
-    /// Only Flash Next allocates progressive full-attention buffers. Static
-    /// rings and fixed-capacity caches do not coexist with replacement copies.
+    /// Full-attention buffers start at 2,048 rows and double as a chat grows
+    /// (`KVCacheManager.initialFullAttentionCapacity`). While one doubles, the
+    /// old buffer and its replacement coexist; the replacement can be as large
+    /// as the full window, so a whole layer is reserved. Static rings never
+    /// grow.
     package let growthOverlapBytes: UInt64
 
     package init(config: ArchConfig,
@@ -40,7 +43,7 @@ package struct KVCacheMemoryPlan: Sendable, Equatable {
                 let sum = bytes.addingReportingOverflow(layerBytes.partialValue)
                 bytes = sum.overflow ? .max : sum.partialValue
             }
-            if full, config.family == .qwen4Exp, maxContext > 2_048 {
+            if full, maxContext > 2_048 {
                 let sum = growingBytes.addingReportingOverflow(layerBytes.partialValue)
                 growingBytes = layerBytes.overflow || sum.overflow ? .max : sum.partialValue
             }

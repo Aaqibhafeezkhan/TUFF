@@ -320,7 +320,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                                         textChunkCapacity,
                                         min(maxContext, maximumVisionTokens)),
                                      initialFullAttentionCapacityTokens:
-                                        cfg.family == .qwen4Exp ? 2_048 : nil)
+                                        KVCacheManager.initialFullAttentionCapacity)
 
         let silu = cfg.hiddenActivation == "silu"
         // The INT4 group size and the routed-expert count are architecture
