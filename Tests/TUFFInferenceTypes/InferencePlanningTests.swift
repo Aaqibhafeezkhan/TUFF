@@ -150,14 +150,39 @@ import Testing
         }
         let swapping = InferencePlanObservation(candidateID: "fast", workloadKey: "warm-short",
             decodeTokens: 100, decodeSeconds: 1, timeToFirstTokenSeconds: 0.1,
-            swapGrowthBytes: 1)
+            swapGrowthBytes: InferencePlanSelector.significantSwapGrowthBytes)
         #expect(try select(candidates, observations("safe", perToken: 0.1)
             + [swapping]).candidate.id == "safe")
     }
 
+    /// The swap counters are system-wide. A few pages written by another app
+    /// during an answer used to quarantine the loaded plan (#54).
+    @Test func incidentalPagingDoesNotQuarantineACandidate() throws {
+        let candidates = [candidate("safe", bytes: 300), candidate("fast", bytes: 900)]
+        let noise = InferencePlanObservation(candidateID: "fast", workloadKey: "warm-short",
+            decodeTokens: 100, decodeSeconds: 1, timeToFirstTokenSeconds: 0.1,
+            swapGrowthBytes: InferencePlanSelector.significantSwapGrowthBytes - 1)
+        #expect(try select(candidates, observations("safe", perToken: 0.1)
+            + observations("fast", perToken: 0.01) + [noise]).candidate.id == "fast")
+    }
+
+    /// Pressure on every choice says more about the Mac than about any one
+    /// choice. Throwing here left the model with no plan and a failed load.
+    @Test func pressureOnEveryCandidatePlansAsIfNothingWasObserved() throws {
+        let candidates = [candidate("small", bytes: 300, perToken: 0.2, ttft: 1),
+                          candidate("large", bytes: 900, perToken: 0.1, ttft: 1)]
+        let pressured = candidates.map {
+            InferencePlanObservation(candidateID: $0.id, workloadKey: "warm-short",
+                decodeTokens: 100, decodeSeconds: 1, timeToFirstTokenSeconds: 0.1, pressure: .warning)
+        }
+        let result = try select(candidates, pressured)
+        #expect(result.candidate.id == "large")
+        #expect(result.evidence == .calculated)
+    }
+
     @Test func cancelledColdPrefillQuarantinesAllocationForAWarmRequest() throws {
         let candidates = [candidate("safe", bytes: 300), candidate("fast", bytes: 900)]
-        for paging in [UInt64(0), UInt64(4096)] {
+        for paging in [UInt64(0), InferencePlanSelector.significantSwapGrowthBytes] {
             let cancelled = InferencePlanObservation(candidateID: "fast", workloadKey: "cold-short",
                 decodeTokens: 0, decodeSeconds: 0, timeToFirstTokenSeconds: 0,
                 pressure: paging == 0 ? .warning : .normal, swapGrowthBytes: paging)

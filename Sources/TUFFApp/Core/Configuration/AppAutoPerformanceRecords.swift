@@ -61,7 +61,8 @@ public enum AppAutoPerformanceRecords {
                 entry.identity == identity && entry.date > cutoff
                     // Pressure quarantines a choice while the environment is
                     // recovering; it does not permanently ban it.
-                    && (entry.observation.pressure == .normal && entry.observation.swapGrowthBytes == 0
+                    && (entry.observation.pressure == .normal
+                        && entry.observation.swapGrowthBytes < InferencePlanSelector.significantSwapGrowthBytes
                         || entry.date > Date().addingTimeInterval(-900))
             }.map(\.observation)
         }

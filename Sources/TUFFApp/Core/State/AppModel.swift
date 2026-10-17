@@ -1501,6 +1501,10 @@ public final class AppModel {
 
     public func loadModel() {
         guard canLoadModel else { return }
+        // What Auto learned from the answers since the last load.
+        if automaticMemory, settingsPersistenceEnabled {
+            applySettingsProfile(storedSettingsProfile(for: selectedInstall))
+        }
         beginLoad()
     }
 
@@ -3509,7 +3513,12 @@ public final class AppModel {
         runTask = nil
         answerCancellation = nil
         toolStore.inferenceActivity.set(false)
-        if automaticMemory, settingsPersistenceEnabled {
+        // Auto learns from every answer, but its next plan waits for the next
+        // load. Applying it here changed the settings of the model already in
+        // memory, so after an ordinary answer the composer asked for a reload
+        // nobody had caused (#54). `run` still reloads with a larger window
+        // when the conversation outgrows the loaded one.
+        if automaticMemory, settingsPersistenceEnabled, !loadState.isReady {
             applySettingsProfile(storedSettingsProfile(for: selectedInstall))
         }
     }

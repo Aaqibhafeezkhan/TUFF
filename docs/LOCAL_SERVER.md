@@ -28,6 +28,12 @@ checkpoints you imported in Settings are listed under a name made from their
 own, so "My Tune" is `my-tune`. Requests run one at a time, and a full queue
 answers 429 with `Retry-After`.
 
+Each model is served with the memory settings it has in Settings > Models.
+With Auto on, the server uses the Auto profile you picked. With Auto off, it
+uses the Context you chose, as long as that fits this Mac's memory budget;
+otherwise it falls back to Balanced. A model you haven't set up gets
+Balanced. Changes apply the next time the server loads the model.
+
 Chat and the API share one memory budget. If Chat has a model with image
 support loaded, the API answers 503 instead of loading a second model.
 

@@ -37,6 +37,33 @@ import TUFFModelCatalog
         #expect(relaunched.pauseWebSearchWhenOffline)
     }
 
+    /// `tuff serve` reads the app's memory settings without ever writing the
+    /// file, so the Background API uses the Context chosen in Settings (#55).
+    @Test func serverReadsSavedProfileWithoutTouchingTheFile() throws {
+        let root = try makeTemporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let key = TUFFModelID.ornith15_35B_A3B.rawValue
+        #expect(AppModelSettingsProfile.saved(forKey: key, modelsRoot: root) == nil)
+        var manual = AppModelSettingsProfile.defaults(for: key)
+        manual.automaticMemory = false
+        manual.contextTokens = AppContextLengthOption.sixtyFourK.tokens
+        let directory = root.appendingPathComponent("ornith-35b.gturbo", isDirectory: true)
+        try MacAppSettingsFileStore.save(MacAppSettings(modelProfiles: [key: manual]),
+                                         forModelDirectory: directory)
+        let file = MacAppSettingsFileStore.fileURL(forModelDirectory: directory)
+        let written = try Data(contentsOf: file)
+        #expect(AppModelSettingsProfile.saved(forKey: key, modelsRoot: root) == manual)
+        #expect(AppModelSettingsProfile.saved(forKey: "gemma4-26b-a4b", modelsRoot: root) == nil)
+        #expect(try Data(contentsOf: file) == written)
+
+        var newer = try #require(JSONSerialization.jsonObject(with: written) as? [String: Any])
+        newer["version"] = MacAppSettings.currentVersion + 1
+        let newerData = try JSONSerialization.data(withJSONObject: newer)
+        try newerData.write(to: file)
+        #expect(AppModelSettingsProfile.saved(forKey: key, modelsRoot: root) == nil)
+        #expect(try Data(contentsOf: file) == newerData)
+    }
+
     @Test func settingsFileLivesBesideModelDirectory() {
         let model = URL(fileURLWithPath: "/tmp/TUFF/gemma4.gturbo",
                         isDirectory: true)

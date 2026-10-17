@@ -163,10 +163,11 @@ public struct ServerInstalledModels: Sendable {
             imagePackInstalled: visionCapability(for: descriptor) == "ready")
     }
 
-    /// Tool inventories need more than the short qualification prompts. Grow
-    /// to 16K (or 8K), and enable batched prefill where affordable, using the same
-    /// allocation estimate and 75% budget as the app's automatic planner.
-    /// Machines that cannot afford the growth retain the qualified settings.
+    /// Auto's plan when there is one. Without a layout, tool inventories still
+    /// need more than the short qualification prompts: grow to 16K (or 8K),
+    /// and enable batched prefill where affordable, using the same allocation
+    /// estimate and 75% budget as the app's automatic planner. Machines that
+    /// cannot afford the growth retain the qualified settings.
     public func inferencePlan(for descriptor: TUFFModelDescriptor)
         -> (contextTokens: Int, expertCacheSlots: Int) {
         if let plan = automaticPlan(for: descriptor) { return (plan.contextTokens, plan.expertCacheSlots) }
@@ -190,11 +191,23 @@ public struct ServerInstalledModels: Sendable {
     /// The model directory puts the plan on the same records the app keeps
     /// for this model, volume and engine, so the server uses what the app has
     /// learned, and its own runs add to it.
+    ///
+    /// The plan follows the model's memory settings in the app: Auto's
+    /// profile when Auto is on, and the chosen context when it is off. A
+    /// manual context that does not fit this Mac's budget falls back to
+    /// Balanced, which is also what a model with no saved settings gets.
     public func automaticPlan(for descriptor: TUFFModelDescriptor) -> AppAutomaticMemoryPlan? {
-        guard let summary = AppAutomaticMemoryPlanner.layoutSummary(at: directory(for: descriptor)) else { return nil }
-        return AppAutomaticMemoryPlanner.plan(for: planningDescriptor(for: descriptor),
-            on: device, profile: .balanced, layoutSummary: summary,
-            modelDirectory: directory(for: descriptor))
+        let directory = directory(for: descriptor)
+        guard let summary = AppAutomaticMemoryPlanner.layoutSummary(at: directory) else { return nil }
+        let planning = planningDescriptor(for: descriptor)
+        func plan(_ profile: AppAutomaticMemoryProfile, contextTokens: Int? = nil) -> AppAutomaticMemoryPlan? {
+            AppAutomaticMemoryPlanner.plan(for: planning, on: device, profile: profile,
+                layoutSummary: summary, modelDirectory: directory, contextTokens: contextTokens)
+        }
+        guard let saved = AppModelSettingsProfile.saved(forKey: planning.settingsProfileKey,
+                                                        modelsRoot: modelsRoot) else { return plan(.balanced) }
+        if saved.automaticMemory { return plan(saved.automaticMemoryProfile) ?? plan(.balanced) }
+        return plan(.balanced, contextTokens: saved.contextTokens) ?? plan(.balanced)
     }
 
     /// Adds a finished request to Auto's history under the settings the

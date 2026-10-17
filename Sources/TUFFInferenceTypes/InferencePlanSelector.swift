@@ -54,6 +54,10 @@ public struct InferencePlanSelection: Codable, Sendable, Equatable {
 public enum InferencePlanSelector {
     public static let minimumComparableObservations = 3
     public static let equivalentPerformanceFraction = 0.05
+    /// Paging below this is noise. The swap counters are system-wide, so a
+    /// little paging by another app during an answer must not quarantine a
+    /// choice; thrashing pages far more than this.
+    public static let significantSwapGrowthBytes: UInt64 = 64 << 20
 
     public static func select(candidates: [InferencePlanCandidate],
                               observations: [InferencePlanObservation] = [],
@@ -76,7 +80,7 @@ public enum InferencePlanSelector {
             // Allocation health also matters when prefill was cancelled before
             // any decode token. It is independent of cold/warm speed classes.
             if observations.contains(where: { $0.candidateID == candidate.id
-                && ($0.pressure != .normal || $0.swapGrowthBytes > 0) }) {
+                && ($0.pressure != .normal || $0.swapGrowthBytes >= significantSwapGrowthBytes) }) {
                 pressured.insert(candidate.id)
                 continue
             }
@@ -109,7 +113,14 @@ public enum InferencePlanSelector {
             scored.append((candidate, score, evidence))
         }
         let unpressured = legal.filter { !pressured.contains($0.id) }
-        guard !unpressured.isEmpty else { throw InferencePlanningError.insufficientBudget }
+        // When every choice was seen under pressure, the pressure came from
+        // the Mac rather than from a choice. Plan as if nothing had been
+        // observed instead of leaving the model with no plan at all.
+        guard !unpressured.isEmpty else {
+            return try select(candidates: candidates, workloadKey: workloadKey, objective: objective,
+                budgetBytes: budgetBytes, requiredContextTokens: requiredContextTokens,
+                expectedOutputTokens: expectedOutputTokens, fallbackID: fallbackID)
+        }
         let maxContext = unpressured.map(\.contextTokens).max()!
         if objective == .context { scored.removeAll { $0.0.contextTokens < maxContext } }
         // Do not claim an unobserved prediction beat measured evidence when

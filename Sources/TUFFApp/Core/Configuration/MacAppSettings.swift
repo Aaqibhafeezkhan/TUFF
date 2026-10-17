@@ -419,6 +419,22 @@ private struct VersionStamp: Decodable {
     let version: Int
 }
 
+extension AppModelSettingsProfile {
+    /// The profile the app saved for a model, read without creating, migrating
+    /// or repairing the file. `tuff serve` plans with it so the Background API
+    /// uses the memory settings chosen in Settings > Models. Nil when the app
+    /// has saved nothing for this model or the file is from another version.
+    public static func saved(forKey key: String, modelsRoot: URL) -> AppModelSettingsProfile? {
+        let url = modelsRoot.standardizedFileURL.appendingPathComponent(MacAppSettings.fileName)
+        guard let data = try? Data(contentsOf: url),
+              let stamp = try? JSONDecoder().decode(VersionStamp.self, from: data),
+              stamp.version == MacAppSettings.currentVersion,
+              let settings = try? JSONDecoder().decode(MacAppSettings.self, from: data),
+              let profile = settings.modelProfiles[key], profile.isValid() else { return nil }
+        return profile
+    }
+}
+
 enum MacAppSettingsFileStore {
     static func fileURL(forModelDirectory modelDirectory: URL) -> URL {
         modelDirectory.standardizedFileURL
