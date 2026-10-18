@@ -102,6 +102,7 @@ struct TUFFMacApp: App {
                     } else {
                         model.loadModelAtLaunchIfEnabled()
                     }
+                    model.prepareEnginesAtLaunch()
                 }
                 // On the window, not in the Inspector: the menu item works
                 // whether or not the Inspector is open.

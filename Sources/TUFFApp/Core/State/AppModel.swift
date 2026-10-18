@@ -1663,6 +1663,28 @@ public final class AppModel {
         loadModel()
     }
 
+    /// Downloads the engine each installed model needs, in the background.
+    /// An update that ships new engines otherwise made the first load of each
+    /// model family wait for its download under "Preparing inference
+    /// engine". A load started meanwhile joins the same download, and an
+    /// engine already in place is only checked.
+    public func prepareEnginesAtLaunch() {
+        guard settingsPersistenceEnabled else { return }
+        let directories = installs.filter(\.isInstalled).map(\.directoryURL)
+        Task.detached(priority: .utility) {
+            var prepared: Set<String> = []
+            for directory in directories {
+                guard let architecture = try? ManifestReader.resolveArchitecture(directoryURL: directory),
+                      prepared.insert(architecture.variant.rawValue).inserted,
+                      let engine = try? await InferenceEngineEnvironment.acquire(
+                        architectureID: architecture.variant.rawValue,
+                        quantizationLayout: architecture.family == .gptOss ? "mxfp4" : "affine")
+                else { continue }
+                await engine.release()
+            }
+        }
+    }
+
     /// Whether an image can be attached at all.
     ///
     /// The runtime flag only says this build *can* use images; the companion
