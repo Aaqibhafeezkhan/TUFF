@@ -5,7 +5,7 @@ import TUFFValidationSupport
 
 @Suite struct FP16ArgmaxTests {
     @Test(arguments: [false, true])
-    func ignoresNonfiniteValuesAndUsesZeroWhenNoneAreFinite(allInvalid: Bool) throws {
+    func ignoresNonfiniteValuesAndReportsFailureWhenNoneAreFinite(allInvalid: Bool) throws {
         let context = try MetalContext()
         let kernel = try FP16Argmax(context: context)
         var values = (0..<513).map { index -> Float16 in
@@ -29,6 +29,6 @@ import TUFFValidationSupport
         command.waitUntilCompleted()
         try checkCommandBufferError(command)
 
-        #expect(output.contents().load(as: UInt32.self) == (allInvalid ? 0 : 37))
+        #expect(output.contents().load(as: UInt32.self) == (allInvalid ? UInt32.max : 37))
     }
 }

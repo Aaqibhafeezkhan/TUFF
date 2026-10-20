@@ -164,11 +164,16 @@ public enum ConversationCacheMatch: Sendable, Equatable {
     public var isHit: Bool { missReason == nil }
 }
 
-/// Names the condition behind a miss when `TFF_LOG_CACHE` is set. A miss
+/// Either spelling enables logging, preserving the legacy presence-based switch.
+func conversationCacheLoggingEnabled(environment: [String: String]) -> Bool {
+    environment["TUFF_LOG_CACHE"] != nil || environment["TFF_LOG_CACHE"] != nil
+}
+
+/// Names the condition behind a miss when `TUFF_LOG_CACHE` is set. A miss
 /// never breaks a response; it silently pays full prefill, which is why it
 /// goes unnoticed without this.
 func logConversationCacheMiss(_ reason: @autoclosure () -> String) {
-    guard ProcessInfo.processInfo.environment["TFF_LOG_CACHE"] != nil else { return }
+    guard conversationCacheLoggingEnabled(environment: ProcessInfo.processInfo.environment) else { return }
     FileHandle.standardError.write(Data("[cache-miss] \(reason())\n".utf8))
 }
 

@@ -38,6 +38,7 @@ end
 
 known_labels = ROUTING.fetch("labels").keys
 offered_areas = []
+model_choices = {}
 
 FORMS.each do |path|
   name = relative(path)
@@ -64,6 +65,9 @@ FORMS.each do |path|
       options = Array(field.dig("attributes", "options"))
       fail!("#{name}: dropdown '#{id}' has no options") if options.empty?
       fail!("#{name}: dropdown '#{id}' repeats an option") if options.uniq.length != options.length
+      if label == "Model" && %w[bug.yml benchmark.yml].include?(File.basename(path))
+        model_choices[name] = options - ["Not model-specific", "Several models", "Not sure"]
+      end
       if label == "Area"
         offered_areas.concat(options)
         options.each do |option|
@@ -72,6 +76,17 @@ FORMS.each do |path|
       end
     end
   end
+end
+
+bug_form = ".github/ISSUE_TEMPLATE/bug.yml"
+benchmark_form = ".github/ISSUE_TEMPLATE/benchmark.yml"
+if model_choices.key?(bug_form) && model_choices.key?(benchmark_form)
+  [bug_form, benchmark_form].permutation.each do |left, right|
+    missing = model_choices[left] - model_choices[right]
+    fail!("#{right}: Model choices offered by #{left} but missing here: #{missing.join(', ')}") unless missing.empty?
+  end
+else
+  fail!("#{bug_form} and #{benchmark_form}: both need a Model dropdown")
 end
 
 (ROUTING["areas"].keys - offered_areas).each do |option|

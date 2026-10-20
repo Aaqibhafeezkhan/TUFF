@@ -103,5 +103,5 @@ These aren't app settings; they exist so changes can be compared.
 | `TUFF_LOG_KERNELS=1` | Log which shader groups were compiled. |
 | `TUFF_TOKENIZATION_CACHE=off` | Turn off the tokenization cache. |
 | `TUFF_CONVERSATION_CACHE_MB=N` | Lower the saved-conversation budget. |
-| `TFF_LOG_CACHE=1` | Log conversation reuse decisions (yes, missing a U). |
+| `TUFF_LOG_CACHE=1` | Log conversation reuse decisions; `TFF_LOG_CACHE` is also accepted. |
 | `TUFF_SAVED_CHATS=off` | Keep chat state in memory only, never on disk. |

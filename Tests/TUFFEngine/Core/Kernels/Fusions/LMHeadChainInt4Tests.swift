@@ -133,7 +133,7 @@ import TUFFValidationSupport
         #expect(result == reference)
     }
 
-    @Test func allInvalidCandidatesFallBackToZero() throws {
+    @Test func allInvalidCandidatesReportFailure() throws {
         let d = 64
         let v = 1024
         let hidden = [Float16](repeating: .nan, count: d)
@@ -147,7 +147,7 @@ import TUFFValidationSupport
                                         rows: rows,
                                         d: d,
                                         v: v)
-        #expect(result == 0)
+        #expect(result == UInt32.max)
     }
 
     @Test(arguments: [1024, 2048, 4096])

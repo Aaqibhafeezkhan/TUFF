@@ -397,9 +397,9 @@ extension ConversationStateStore {
         return Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
     }
 
-    /// One line per plan when `TFF_LOG_CACHE` is set.
+    /// One line per plan when `TUFF_LOG_CACHE` is set.
     private func log(_ source: Source, _ match: ConversationCacheMatch) {
-        guard ProcessInfo.processInfo.environment["TFF_LOG_CACHE"] != nil else { return }
+        guard conversationCacheLoggingEnabled(environment: ProcessInfo.processInfo.environment) else { return }
         let cached: Int
         switch match {
         case .hit(_, let count), .renderThenResume(let count): cached = count

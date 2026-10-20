@@ -18,6 +18,35 @@ class GitHubConfigTests < Minitest::Test
   def test_current_configuration
     fixture { |dir| out, err, status = check(dir); assert status.success?, out + err }
   end
+  def test_missing_model_choice_names_both_forms_and_model
+    fixture do |dir|
+      path = File.join(dir, '.github/ISSUE_TEMPLATE/benchmark.yml')
+      File.write(path, File.read(path).sub("        - Gemma 4 E2B\n", ''))
+      _, err, status = check(dir)
+      refute status.success?
+      %w[bug.yml benchmark.yml].each { |name| assert_includes err, name }
+      assert_includes err, 'Gemma 4 E2B'
+    end
+  end
+  def test_stale_model_choice_is_rejected
+    fixture do |dir|
+      path = File.join(dir, '.github/ISSUE_TEMPLATE/bug.yml')
+      File.write(path, File.read(path).sub('        - Gemma 4 E2B', "        - Retired model\n        - Gemma 4 E2B"))
+      _, err, status = check(dir)
+      refute status.success?
+      %w[bug.yml benchmark.yml].each { |name| assert_includes err, name }
+      assert_includes err, 'Retired model'
+    end
+  end
+  def test_duplicate_model_choice_still_fails
+    fixture do |dir|
+      path = File.join(dir, '.github/ISSUE_TEMPLATE/bug.yml')
+      File.write(path, File.read(path).sub('        - Gemma 4 E2B', "        - Gemma 4 E2B\n        - Gemma 4 E2B"))
+      _, err, status = check(dir)
+      refute status.success?
+      assert_includes err, 'repeats an option'
+    end
+  end
   def test_unknown_area_is_rejected
     fixture do |dir|
       path = File.join(dir, '.github/ISSUE_TEMPLATE/bug.yml')

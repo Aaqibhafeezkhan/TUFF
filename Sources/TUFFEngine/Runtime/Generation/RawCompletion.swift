@@ -429,7 +429,12 @@ public func runRawCompletion(producer: any LogitProducer,
     /// Apply exactly the existing visible-token semantics without advancing
     /// target state. A false result means the token is the uncommitted boundary
     /// for EOS/EOT/tool, stop string, cancellation, or max-token termination.
-    func emitToken(_ tokenID: Int32) -> Bool {
+    func emitToken(_ tokenID: Int32) throws -> Bool {
+        // A failed head or sampler must never feed an invalid ID into the
+        // embedding lookup or publish it as reusable conversation state.
+        guard tokenID >= 0, Int(tokenID) < scratch.sampler.vocab else {
+            throw GeneratorError.invalidModelOutput
+        }
         generated += 1
         uncommittedBoundaryTokenIDs = [tokenID]
         undeliveredBoundaryTokenIDs.removeAll(keepingCapacity: true)
@@ -581,7 +586,7 @@ public func runRawCompletion(producer: any LogitProducer,
                     speculativeRejectedTokens += proposal.count
                     speculativeCorrectionTokens += 1
 
-                    if !emitToken(boundaryToken) {
+                    if try !emitToken(boundaryToken) {
                         speculativeController.record(
                             proposedTokens: proposal.count,
                             acceptedTokens: 0,
@@ -640,7 +645,7 @@ public func runRawCompletion(producer: any LogitProducer,
                 do {
                     for index in 0..<plan.decision.acceptedDraftCount {
                         try Task.checkCancellation()
-                        if emitToken(proposal.tokenIDs[index]) {
+                        if try emitToken(proposal.tokenIDs[index]) {
                             committedCandidateCount += 1
                         } else {
                             // The boundary token was visible but not target-KV
@@ -659,7 +664,7 @@ public func runRawCompletion(producer: any LogitProducer,
                     // On mismatch this is the target correction. When every draft
                     // token matched it is the one-token bonus prediction.
                     let nextToken = plan.decision.nextTargetToken
-                    if !emitToken(nextToken) {
+                    if try !emitToken(nextToken) {
                         // The correction/bonus token is visible but is the
                         // uncommitted boundary for EOS, stop, cancellation,
                         // or max-token termination. The speculative tail was
@@ -692,7 +697,7 @@ public func runRawCompletion(producer: any LogitProducer,
         }
 
         let tokenID = try nextScalarToken()
-        guard emitToken(tokenID) else { break }
+        guard try emitToken(tokenID) else { break }
         _ = try await advanceAfterCommittedToken(tokenID)
     }
 

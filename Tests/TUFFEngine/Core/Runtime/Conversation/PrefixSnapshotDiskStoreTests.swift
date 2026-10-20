@@ -169,6 +169,55 @@ import TUFFModelCatalog
         #expect(store.load(tokens: tokens, domain: Self.domain, runner: owner, device: device) != nil)
     }
 
+    @Test func damagedHeaderIsRejectedEvenWhenThePayloadIsIntact() throws {
+        let (store, directory) = store()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let owner = Owner()
+        let tokens: [Int32] = Array(1...300)
+        store.saveChat(snapshot(tokens: tokens, owner: owner), tokens: tokens,
+                       domain: Self.domain, conversationKey: "chat")
+        store.flush()
+        let file = try #require(try FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: nil).first)
+        let original = try Data(contentsOf: file)
+        let start = PrefixSnapshotDiskStore.magic.count
+        let headerLength = original[start..<(start + 4)].withUnsafeBytes {
+            Int(UInt32(littleEndian: $0.loadUnaligned(as: UInt32.self)))
+        }
+        let headerStart = start + 4
+        var header = try #require(try JSONSerialization.jsonObject(
+            with: original[headerStart..<(headerStart + headerLength)]) as? [String: Any])
+        // A valid JSON header with changed host state. The KV payload and its
+        // checksum are untouched; the old format accepted this as sound.
+        header["ropeDelta"] = 16
+        let encoded = try JSONSerialization.data(withJSONObject: header)
+        var damaged = PrefixSnapshotDiskStore.magic
+        var length = UInt32(encoded.count).littleEndian
+        damaged.append(Data(bytes: &length, count: 4))
+        damaged.append(encoded)
+        damaged.append(original[(headerStart + headerLength)...])
+        try damaged.write(to: file)
+        #expect(store.loadChat(conversationKey: "chat", prompt: tokens + [301],
+            domain: Self.domain, runner: owner, device: device) == nil)
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+    }
+
+    @Test func oldCacheFormatIsDiscardedForColdPrefill() throws {
+        let (store, directory) = store()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let owner = Owner()
+        let tokens: [Int32] = Array(1...300)
+        store.save(snapshot(tokens: tokens, owner: owner), tokens: tokens, domain: Self.domain)
+        store.flush()
+        let file = try #require(try FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: nil).first)
+        var data = try Data(contentsOf: file)
+        data.replaceSubrange(0..<8, with: Data("TUFFPFX1".utf8))
+        try data.write(to: file)
+        #expect(store.load(tokens: tokens, domain: Self.domain, runner: owner, device: device) == nil)
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+    }
+
     @Test func aDamagedFileIsRemovedNotUsed() throws {
         let (store, directory) = store()
         defer { try? FileManager.default.removeItem(at: directory) }

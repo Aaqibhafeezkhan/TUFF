@@ -259,7 +259,7 @@ import TUFFValidationSupport
         let newPointer = newTokens.contents().assumingMemoryBound(to: UInt32.self)
         for row in 0..<batch {
             #expect(newPointer[row + 1] == oldPointer[row])
-            if allInvalid { #expect(newPointer[row + 1] == 0) }
+            if allInvalid { #expect(newPointer[row + 1] == UInt32.max) }
         }
     }
 

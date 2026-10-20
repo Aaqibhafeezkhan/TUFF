@@ -67,7 +67,7 @@ void argmax_fp16(
             ? index : 0xFFFFFFFFu;
         const uint allIndexMin = simd_min(allIndex);
         if (simd_lane_id == 0) {
-            out_token[0] = allIndexMin == 0xFFFFFFFFu ? 0u : allIndexMin;
+            out_token[0] = allIndexMin;
         }
     }
 }
@@ -262,11 +262,11 @@ void sample(
     // ------------------------------------------------------------------
     if (temperature <= 0.0f) {
         float best_v = -INFINITY;
-        uint  best_i = 0;
+        uint  best_i = 0xFFFFFFFFu;
 
         for (uint i = lid; i < V; i += lsize) {
             float p = float(probs[i]);
-            if (p > best_v) {
+            if (isfinite(p) && p > 0.0f && p > best_v) {
                 best_v = p;
                 best_i = i;
             }
@@ -318,7 +318,7 @@ void sample(
 
         for (uint i = lid; i < V; i += lsize) {
             float p = float(probs[i]);
-            if (!(p > 0.0f)) continue;
+            if (!(p > 0.0f) || !isfinite(p)) continue;
             float s = inv_t * log(p) + lmhead_gumbel_for(seed, position, i);
             if (s > best_v) {
                 best_v = s;
@@ -343,9 +343,8 @@ void sample(
             uint  i_all = (v == m_all) ? i : 0xFFFFFFFFu;
             i_all = simd_min(i_all);
             if (simd_lane_id == 0) {
-                // All-zero probs cannot occur post-softmax, but a fully
-                // skipped scan would leave UINT_MAX; fall back to index 0.
-                out_token[0] = (i_all == 0xFFFFFFFFu) ? 0u : i_all;
+                // Preserve the failure sentinel for the generation loop.
+                out_token[0] = i_all;
             }
         }
         return;
@@ -436,8 +435,8 @@ void sample(
         // number of rankable entries (high temperature flattens ties; the tail
         // can exhaust before k slots fill), a slot's reduction yields a -INF
         // value / UINT_MAX index. Those sort last (descending by mass), so the
-        // first invalid slot bounds the real count. Slot 0 is the global argmax
-        // and is always valid, so kept >= 1 holds whenever V > 0.
+        // first invalid slot bounds the real count. An invalid distribution
+        // can leave no candidates; the draw then reports the failure sentinel.
         uint kept = 0;
         while (kept < topk_count
                && topk_idx[kept] < V
@@ -459,10 +458,15 @@ void sample(
             kept = cut;
         }
 
+        // Scaling every surviving weight by the same positive constant
+        // leaves the categorical distribution unchanged and prevents pow(p,
+        // 1/T) from underflowing every entry at low temperatures.
+        const float probability_scale = kept > 0 && topk_val[0] > 0.0f
+            ? topk_val[0] : 1.0f;
         // MLX applies temperature in categorical_sampling after both filters.
         for (uint i = 0; i < kept; ++i) {
             if (temperature != 1.0f) {
-                topk_val[i] = pow(topk_val[i], inv_temp);
+                topk_val[i] = pow(topk_val[i] / probability_scale, inv_temp);
             }
         }
 
@@ -479,12 +483,12 @@ void sample(
 
         // Pick by walking the CDF until we cross u. With kept <= 256 this is
         // a tight loop and stays inside L1.
-        // Default to slot 0 (the global argmax — always a valid index) so a
-        // CDF that never crosses u (FP rounding leaves run slightly below the
-        // surviving mass) still returns a real token, never a tail sentinel.
+        // For a valid draw, default to the global argmax if rounding keeps
+        // the CDF from crossing u. Invalid mass reports a failure instead.
         float run = 0.0f;
-        uint  picked = topk_idx[0];
-        for (uint i = 0; i < kept; ++i) {
+        const bool valid_draw = surviving > 0.0f && isfinite(surviving);
+        uint  picked = valid_draw ? topk_idx[0] : 0xFFFFFFFFu;
+        for (uint i = 0; valid_draw && i < kept; ++i) {
             run += topk_val[i];
             if (u <= run) { picked = topk_idx[i]; break; }
         }
@@ -640,10 +644,12 @@ void sample_topk64_final(
             kept = cut;
         }
 
+        const float probability_scale = kept > 0 && values[0] > 0.0f
+            ? values[0] : 1.0f;
         float inv_temperature = 1.0f / temperature;
         for (uint i = 0; i < kept; ++i) {
             if (temperature != 1.0f) {
-                values[i] = pow(values[i], inv_temperature);
+                values[i] = pow(values[i] / probability_scale, inv_temperature);
             }
         }
 
@@ -653,8 +659,9 @@ void sample_topk64_final(
         (void)xorshift64(rng);
         float u = uniform01(rng) * surviving;
         float running = 0.0f;
-        uint picked = indices[0];
-        for (uint i = 0; i < kept; ++i) {
+        const bool valid_draw = surviving > 0.0f && isfinite(surviving);
+        uint picked = valid_draw ? indices[0] : 0xFFFFFFFFu;
+        for (uint i = 0; valid_draw && i < kept; ++i) {
             running += values[i];
             if (u <= running) {
                 picked = indices[i];
@@ -846,7 +853,7 @@ void lm_head_greedy_int4_rows_reduce(
         uint i_all = (v == v_all) ? idx : 0xFFFFFFFFu;
         i_all = simd_min(i_all);
         if (simd_lane_id == 0) {
-            out_token[0] = (i_all == 0xFFFFFFFFu) ? 0u : i_all;
+            out_token[0] = i_all;
         }
     }
 }
@@ -954,7 +961,7 @@ void lm_head_greedy_int4_block_rows_reduce(
         const uint i_all = simd_min(
             (v == v_all) ? idx : 0xFFFFFFFFu);
         if (simd_lane_id == 0) {
-            out_tokens[batch] = i_all == 0xFFFFFFFFu ? 0u : i_all;
+            out_tokens[batch] = i_all;
         }
     }
 }

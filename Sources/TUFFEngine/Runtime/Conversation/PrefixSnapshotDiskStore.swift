@@ -20,8 +20,9 @@ public final class PrefixSnapshotDiskStore: @unchecked Sendable {
     private let writes = DispatchQueue(label: "tuff.prefix-snapshots")
     private let lock = NSLock()
 
-    static let magic = Data("TUFFPFX1".utf8)
-    static let formatVersion = 1
+    static let magic = Data("TUFFPFX2".utf8)
+    static let formatVersion = 2
+    private static let digestBytes = 32
 
     /// With `clearsSiblingBuilds`, `directory` is this build's folder and
     /// writing a snapshot removes the other builds' folders beside it.
@@ -71,7 +72,6 @@ public final class PrefixSnapshotDiskStore: @unchecked Sendable {
         let ropeDelta: Int32
         let segments: [Segment]
         let payloadBytes: Int
-        let payloadSHA256: String
     }
 
     /// Everything outside the tokens a snapshot depends on.
@@ -182,13 +182,18 @@ public final class PrefixSnapshotDiskStore: @unchecked Sendable {
                     .init(label: $0.label, sourceOffset: $0.sourceOffset,
                           snapshotOffset: $0.snapshotOffset, length: $0.length)
                 },
-                payloadBytes: payload.count,
-                payloadSHA256: SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined())
+                payloadBytes: payload.count)
             guard let headerData = try? JSONEncoder().encode(header) else { return }
             var prefix = Self.magic
             var headerLength = UInt32(headerData.count).littleEndian
             prefix.append(Data(bytes: &headerLength, count: 4))
             prefix.append(headerData)
+            // Protect the host state and byte offsets as well as the KV data.
+            // A sound payload with damaged metadata is not a usable snapshot.
+            var hasher = SHA256()
+            hasher.update(data: prefix)
+            hasher.update(data: payload)
+            let digest = Data(hasher.finalize())
             lock.withLock {
                 let temporary = directory.appendingPathComponent(".\(UUID().uuidString).partial")
                 do {
@@ -199,6 +204,7 @@ public final class PrefixSnapshotDiskStore: @unchecked Sendable {
                     defer { try? handle.close() }
                     try handle.write(contentsOf: prefix)
                     try handle.write(contentsOf: payload)
+                    try handle.write(contentsOf: digest)
                     try handle.close()
                     // A reader sees either no file or a whole one.
                     _ = try? FileManager.default.removeItem(at: url)
@@ -235,21 +241,25 @@ public final class PrefixSnapshotDiskStore: @unchecked Sendable {
     private func decode(_ file: Data, tokens: [Int32], identity: String,
                         owner: ObjectIdentifier, device: MTLDevice) -> RunnerStateSnapshot? {
         let magic = Self.magic
-        guard file.count > magic.count + 4, file.prefix(magic.count) == magic else { return nil }
+        guard file.count > magic.count + 4 + Self.digestBytes,
+              file.prefix(magic.count) == magic else { return nil }
+        let bodyEnd = file.count - Self.digestBytes
+        guard Data(SHA256.hash(data: file.prefix(bodyEnd))) == file.suffix(Self.digestBytes) else {
+            return nil
+        }
         let lengthStart = file.startIndex + magic.count
         let headerLength = file[lengthStart..<(lengthStart + 4)].withUnsafeBytes {
             Int(UInt32(littleEndian: $0.loadUnaligned(as: UInt32.self)))
         }
         let headerStart = lengthStart + 4
-        guard headerLength > 0, file.count >= magic.count + 4 + headerLength,
+        guard headerLength > 0, headerLength <= 64 << 20,
+              bodyEnd >= headerStart + headerLength,
               let header = try? JSONDecoder().decode(
                 Header.self, from: file[headerStart..<(headerStart + headerLength)]),
               header.version == Self.formatVersion, header.identity == identity,
               header.tokens == tokens, header.position == tokens.count else { return nil }
-        let payload = file[(headerStart + headerLength)...]
-        guard payload.count == header.payloadBytes,
-              SHA256.hash(data: payload).map({ String(format: "%02x", $0) }).joined()
-                == header.payloadSHA256 else { return nil }
+        let payload = file[(headerStart + headerLength)..<bodyEnd]
+        guard payload.count == header.payloadBytes else { return nil }
         let storage: MTLBuffer?
         if payload.isEmpty {
             storage = nil

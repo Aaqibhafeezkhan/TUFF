@@ -167,6 +167,31 @@ import TUFFValidationSupport
         #expect(snapshot.segments.contains { $0.label.hasPrefix("kv.K.") })
     }
 
+    @Test(arguments: [[16, 0], [0, 0], [-16, 16], [0, 32], [0, Int.max]])
+    func malformedSnapshotOffsetsAreRejectedBeforeAnyCopy(offsets: [Int]) throws {
+        let context = try MetalContext()
+        let owner = NSObject()
+        let key = try #require(context.device.makeBuffer(length: 16, options: .storageModeShared))
+        let value = try #require(context.device.makeBuffer(length: 16, options: .storageModeShared))
+        memset(key.contents(), 0x11, 16)
+        memset(value.contents(), 0x22, 16)
+        var builder = RunnerStateSnapshotBuilder()
+        builder.add("kv.K.0", key, length: 16)
+        builder.add("kv.V.0", value, length: 16)
+        let saved = try builder.capture(owner: owner, queue: context.queue,
+            host: .init(position: 1, ngramContext: [], ropeDelta: 0))
+        let damaged = RunnerStateSnapshot(owner: saved.owner, storage: saved.storage,
+            segments: saved.segments.enumerated().map { index, segment in
+                .init(label: segment.label, sourceOffset: segment.sourceOffset,
+                      snapshotOffset: offsets[index], length: segment.length)
+            }, host: saved.host)
+        #expect(throws: RunnerStateSnapshotError.self) {
+            try builder.restore(damaged, queue: context.queue)
+        }
+        #expect(key.contents().load(as: UInt8.self) == 0x11)
+        #expect(value.contents().load(as: UInt8.self) == 0x22)
+    }
+
     @Test func aSnapshotIsRefusedByAnotherRunner() throws {
         let directory = try QwenToySynthetic.write()
         defer { try? FileManager.default.removeItem(at: directory) }

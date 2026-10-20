@@ -95,7 +95,7 @@ version.
 
 `TUFF_CONVERSATION_CACHE_MB` lowers the memory budget (`0` keeps only the
 current conversation), `TUFF_PREFIX_DISK_CACHE_MB` lowers the disk budget
-(`0` turns it off), and `TFF_LOG_CACHE=1` logs each reuse decision.
+(`0` turns it off), and `TUFF_LOG_CACHE=1` logs each reuse decision. The legacy `TFF_LOG_CACHE` name still works.
 
 ## Health
 

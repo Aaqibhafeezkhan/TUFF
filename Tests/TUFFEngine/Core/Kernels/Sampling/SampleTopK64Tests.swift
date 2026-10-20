@@ -137,6 +137,22 @@ import Testing
         }
     }
 
+    @Test func lowTemperatureDoesNotUnderflowTheWholeDrawToZero() throws {
+        let rig = try Rig(vocab: 1024)
+        rig.write { _ in 1.0 / 1024 }
+        var selected = Set<UInt32>()
+        for seed in UInt64(1)...UInt64(16) {
+            let result = rig.draw(seed: seed, temperature: 0.01, topP: 1)
+            #expect(result.current == result.candidate)
+            #expect(result.candidate < 64)
+            selected.insert(result.candidate)
+        }
+        // Equal logits must stay a categorical draw at every positive
+        // temperature. pow(p, 100) previously erased every probability and
+        // picked token zero on every seed.
+        #expect(selected.count > 1)
+    }
+
     @Test func topPUsesFullVocabularyMassBeforeTopK() throws {
         let rig = try Rig(vocab: 1_003)
         rig.write { _ in 1.0 / 1_003.0 }

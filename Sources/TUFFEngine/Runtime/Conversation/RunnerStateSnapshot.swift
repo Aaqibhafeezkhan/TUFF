@@ -174,19 +174,25 @@ struct RunnerStateSnapshotBuilder {
             throw RunnerStateSnapshotError.layoutMismatch(
                 "\(snapshot.segments.count) segments captured, \(ranges.count) expected")
         }
+        guard snapshot.byteCount == byteCount else {
+            throw RunnerStateSnapshotError.layoutMismatch("snapshot storage size")
+        }
         guard !ranges.isEmpty else { return }
         guard let storage = snapshot.storage else {
             throw RunnerStateSnapshotError.layoutMismatch("snapshot holds no storage")
         }
+        var expectedOffset = 0
         for (segment, range) in zip(snapshot.segments, ranges) {
             // Buffers are matched by label and range, not identity: a full
             // attention layer that grew since the capture has a new buffer
             // holding the same rows.
             guard segment.label == range.label,
                   segment.sourceOffset == range.offset,
+                  segment.snapshotOffset == expectedOffset,
                   segment.length == range.length else {
                 throw RunnerStateSnapshotError.layoutMismatch(segment.label)
             }
+            expectedOffset += Self.aligned(range.length)
         }
         guard let cb = queue.makeCommandBuffer(),
               let blit = cb.makeBlitCommandEncoder() else { throw MetalError.noQueue }

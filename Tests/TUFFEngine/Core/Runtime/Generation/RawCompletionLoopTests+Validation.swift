@@ -1,8 +1,66 @@
 import Testing
+import Metal
 
 @testable import TUFFEngine
 
 extension RawCompletionLoopTests {
+    @Test(arguments: [UInt32.max, UInt32(262_144)])
+    func invalidHeadTokenIsRejectedBeforeItIsDelivered(token: UInt32) async throws {
+        let context = try MetalContext()
+        let tokenizer = try await GFTokenizer.load()
+        let producer = InvalidTokenProducer(token: token)
+        let scratch = try RawCompletionScratch(context: context, vocab: tokenizer.vocabSize)
+        var delivered = 0
+        do {
+            _ = try await runRawCompletion(producer: producer, tokenizer: tokenizer,
+                promptIds: [tokenizer.bosID],
+                config: GenerationConfig(maxNewTokens: 1, temperature: 0),
+                context: context, scratch: scratch, prefillConfig: .off) {
+                    if case .token = $0 { delivered += 1 }
+                }
+            Issue.record("an out-of-vocabulary token was accepted")
+        } catch {
+            #expect(String(describing: error).contains("valid next token"))
+        }
+        #expect(delivered == 0)
+        #expect(producer.produceCalls == 1)
+    }
+
+    final class InvalidTokenProducer: LogitProducer, GreedyHeadReporting, @unchecked Sendable {
+        let lastGreedyToken: UInt32
+        var usesFusedGreedyHead: Bool { true }
+        private(set) var produceCalls = 0
+        init(token: UInt32) { lastGreedyToken = token }
+        func reset() {}
+        func selectHead(pureGreedy: Bool) {}
+        func produce(token: Int32, position: Int, into logits: MTLBuffer) async throws {
+            produceCalls += 1
+        }
+    }
+
+    @Test(arguments: [0, 0.2])
+    func nonfiniteLogitsStopBeforeAnotherForward(temperature: Float) async throws {
+        let context = try MetalContext()
+        let tokenizer = try await GFTokenizer.load()
+        let values = [Float](repeating: .nan, count: tokenizer.vocabSize)
+        let producer = CountingProducer(vocabSize: tokenizer.vocabSize, step: { _, _ in .vector(values) })
+        let scratch = try RawCompletionScratch(context: context, vocab: tokenizer.vocabSize)
+        var delivered = 0
+        do {
+            _ = try await runRawCompletion(producer: producer, tokenizer: tokenizer,
+                promptIds: [tokenizer.bosID],
+                config: GenerationConfig(maxNewTokens: 4, temperature: temperature, topK: 64),
+                context: context, scratch: scratch, prefillConfig: .off) {
+                    if case .token = $0 { delivered += 1 }
+                }
+            Issue.record("invalid model arithmetic was accepted")
+        } catch let error as GeneratorError {
+            #expect(error == .invalidModelOutput)
+        }
+        #expect(delivered == 0)
+        #expect(producer.produceCalls == 1)
+    }
+
     @Test func rawCompletionRejectsContextOverflowBeforeReset() async throws {
         let context = try MetalContext()
         let tokenizer = try await GFTokenizer.load()
