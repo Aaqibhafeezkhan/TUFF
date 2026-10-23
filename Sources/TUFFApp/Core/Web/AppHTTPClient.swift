@@ -226,7 +226,7 @@ public enum AppNetworkPolicy {
 /// and a byte limit enforced while reading.
 public final class URLSessionHTTPTransport: NSObject, AppHTTPTransport, @unchecked Sendable {
     public static let maximumRedirects = 5
-    public static let userAgent = "TUFF/8.0 (macOS; local assistant; +https://github.com/rexmhall09/TUFF)"
+    public static let userAgent = "TUFF/8.0 (macOS; local assistant; +https://github.com/tuff-app/TUFF)"
 
     private let session: URLSession
     private let checksHosts: Bool

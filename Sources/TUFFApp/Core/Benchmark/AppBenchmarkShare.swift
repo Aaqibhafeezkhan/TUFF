@@ -3,9 +3,9 @@ import Foundation
 /// Turns a result into a GitHub Discussions post: a readable table for
 /// people, and the raw JSON the leaderboard reads.
 public enum AppBenchmarkShare {
-    public static let repository = "rexmhall09/TUFF"
+    public static let repository = "tuff-app/TUFF"
     public static let categorySlug = "benchmarks"
-    public static let leaderboardURL = URL(string: "https://rexmhall09.github.io/TUFF/benchmarks/")!
+    public static let leaderboardURL = URL(string: "https://tuff-app.github.io/TUFF/benchmarks/")!
     /// The opening of the fenced block the validator looks for.
     public static let dataFence = "```json tuff-benchmark"
     /// GitHub turns long query strings away; past this the body goes on the

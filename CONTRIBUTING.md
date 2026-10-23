@@ -11,8 +11,8 @@ Swift or Metal, and most useful work needs no model download.
 - **Report a bug.** In the app, **Help > Report a Bug** fills in your version,
   Mac and model.
 - **Fix something that bugged you,** or pick up a
-  [good first issue](https://github.com/rexmhall09/TUFF/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22).
-- **Ask or suggest** in [Discussions](https://github.com/rexmhall09/TUFF/discussions).
+  [good first issue](https://github.com/tuff-app/TUFF/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22).
+- **Ask or suggest** in [Discussions](https://github.com/tuff-app/TUFF/discussions).
 
 The [roadmap](docs/ROADMAP.md) has the bigger open problems, and
 [How TUFF works](docs/HOW_TUFF_WORKS.md) maps the code.

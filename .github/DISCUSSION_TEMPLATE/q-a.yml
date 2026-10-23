@@ -3,7 +3,7 @@ body:
     attributes:
       value: |
         No question is too basic. If something is broken rather than unclear,
-        a [bug report](https://github.com/rexmhall09/TUFF/issues/new?template=bug.yml)
+        a [bug report](https://github.com/tuff-app/TUFF/issues/new?template=bug.yml)
         gets it fixed faster.
   - type: textarea
     id: question

@@ -4,7 +4,7 @@ body:
       value: |
         Show off something you built with TUFF, a setup you like, or how you use it.
         For speed results, run the benchmark in TUFF and press Share on GitHub
-        instead; those go in [Benchmarks](https://github.com/rexmhall09/TUFF/discussions/categories/benchmarks)
+        instead; those go in [Benchmarks](https://github.com/tuff-app/TUFF/discussions/categories/benchmarks)
         and on the leaderboard.
   - type: textarea
     id: post

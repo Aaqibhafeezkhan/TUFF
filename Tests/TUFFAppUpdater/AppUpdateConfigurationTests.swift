@@ -23,7 +23,7 @@ import Testing
 
     @Test func acceptsSignedHTTPSFeed() throws {
         let result = AppUpdateConfiguration.resolve(infoDictionary: [
-            "SUFeedURL": "https://github.com/rexmhall09/TUFF/releases/latest/download/appcast.xml",
+            "SUFeedURL": "https://github.com/tuff-app/TUFF/releases/latest/download/appcast.xml",
             "SUPublicEDKey": publicKey,
         ])
         let configuration = try result.get()

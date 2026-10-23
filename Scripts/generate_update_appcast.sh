@@ -58,8 +58,8 @@ cp "$notes" "$staging/${archive%.zip}.md"
 "$generator" \
   "${signing_options[@]}" \
   --download-url-prefix \
-    "https://github.com/rexmhall09/TUFF/releases/download/v${version}/" \
-  --link "https://github.com/rexmhall09/TUFF" \
+    "https://github.com/tuff-app/TUFF/releases/download/v${version}/" \
+  --link "https://github.com/tuff-app/TUFF" \
   --embed-release-notes \
   "$staging"
 

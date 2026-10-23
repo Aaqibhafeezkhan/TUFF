@@ -1,11 +1,11 @@
 cask "tuff" do
-  version "9.4.3"
-  sha256 "676c5da273b610ca055a6a5a0627b8b43313bc07fc63c0d0b8af585e70b83e31"
+  version "9.4.4"
+  sha256 "6b46ddf127f9b47a7f27d148598b5781c6e3ebba4e8dad90b66954fa97b99076"
 
-  url "https://github.com/rexmhall09/TUFF/releases/download/v#{version}/TUFF-v#{version}-macos-arm64.zip"
+  url "https://github.com/tuff-app/TUFF/releases/download/v#{version}/TUFF-v#{version}-macos-arm64.zip"
   name "TUFF"
   desc "Run local language models, including ones bigger than your memory"
-  homepage "https://rexmhall09.github.io/TUFF/"
+  homepage "https://tuff-app.github.io/TUFF/"
 
   auto_updates true
   depends_on arch: :arm64

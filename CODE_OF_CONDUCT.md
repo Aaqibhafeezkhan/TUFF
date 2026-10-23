@@ -15,7 +15,7 @@ This applies to issues, pull requests, Discussions and anywhere else that
 represents TUFF.
 
 If something bothers you, tell me (Rex Hall, [@rexmhall09](https://github.com/rexmhall09)).
-To report privately, use [private vulnerability reporting](https://github.com/rexmhall09/TUFF/security/advisories/new)
+To report privately, use [private vulnerability reporting](https://github.com/tuff-app/TUFF/security/advisories/new)
 and start the title with "Conduct"; only I can see those. Depending on what
 happened, I might talk to the person, remove content, or ban them from the
 project.

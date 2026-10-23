@@ -9,11 +9,11 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/rexmhall09/TUFF/releases/latest">Download</a> ·
-  <a href="https://rexmhall09.github.io/TUFF/">Website</a> ·
-  <a href="https://rexmhall09.github.io/TUFF/benchmarks/">Benchmarks</a> ·
+  <a href="https://github.com/tuff-app/TUFF/releases/latest">Download</a> ·
+  <a href="https://tuff-app.github.io/TUFF/">Website</a> ·
+  <a href="https://tuff-app.github.io/TUFF/benchmarks/">Benchmarks</a> ·
   <a href="CONTRIBUTING.md">Contribute</a> ·
-  <a href="https://github.com/rexmhall09/TUFF/discussions">Discussions</a>
+  <a href="https://github.com/tuff-app/TUFF/discussions">Discussions</a>
 </p>
 
 ![TUFF chatting with Qwen3.8 Flash Next on a 16 GB MacBook Air](docs/assets/tuff-chat.png)
@@ -26,14 +26,14 @@ type leaves your Mac unless you turn on web search.
 Air.** TUFF keeps a mixture-of-experts model's experts on the SSD and reads
 only the few each token needs. GPT-OSS 120B and MiniMax M2.7 run the same
 way. On that Air, Flash Next writes about 1.7 tokens a second; smaller models
-are much faster. The [benchmarks](https://rexmhall09.github.io/TUFF/benchmarks/)
+are much faster. The [benchmarks](https://tuff-app.github.io/TUFF/benchmarks/)
 show how each model runs on real Macs.
 
 ## Install
 
 You need an Apple Silicon Mac on macOS 15 or newer.
 
-1. Download the ZIP from the [latest release](https://github.com/rexmhall09/TUFF/releases/latest),
+1. Download the ZIP from the [latest release](https://github.com/tuff-app/TUFF/releases/latest),
    unzip it and move `TUFF.app` to Applications.
 2. Open TUFF, go to **Models** and install one. Gemma 4 E2B is a quick first
    download.
@@ -42,8 +42,8 @@ TUFF isn't notarized, so the first time, Control-click the app and choose
 Open. Or use Homebrew, which also adds the `tuff` command:
 
 ```sh
-brew tap rexmhall09/tuff https://github.com/rexmhall09/TUFF.git
-brew install --cask rexmhall09/tuff/tuff
+brew tap tuff-app/tuff https://github.com/tuff-app/TUFF.git
+brew install --cask tuff-app/tuff/tuff
 ```
 
 TUFF updates itself. If an update stops it from opening, see
@@ -58,7 +58,7 @@ TUFF updates itself. If an update stops it from opening, see
   the web or folders you pick, and cites what it used.
   [How search works](docs/SEARCH.md).
 - **Benchmarks.** Measure any installed model on your Mac and share the result
-  on the [leaderboard](https://rexmhall09.github.io/TUFF/benchmarks/).
+  on the [leaderboard](https://tuff-app.github.io/TUFF/benchmarks/).
   [How benchmarks work](docs/BENCHMARKS.md).
 - **Background API.** A local OpenAI-compatible server for agents and other
   apps. It loads whichever installed model a request names.
@@ -153,7 +153,7 @@ coding-agent config.
 You need Xcode with Swift 6.2 or newer (I build with Xcode 27).
 
 ```sh
-git clone https://github.com/rexmhall09/TUFF.git
+git clone https://github.com/tuff-app/TUFF.git
 cd TUFF
 bash Scripts/package_engines.sh dist/local-engines dist/local-private/signing-key 1.0.0
 export TUFF_ENGINE_CATALOG_PATH="$PWD/dist/local-engines/engine-catalog.json"
@@ -172,8 +172,8 @@ code.
 
 The easiest way to help is to run a benchmark on your Mac and share it.
 There are also
-[good first issues](https://github.com/rexmhall09/TUFF/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22),
-a [roadmap](docs/ROADMAP.md), and [Discussions](https://github.com/rexmhall09/TUFF/discussions)
+[good first issues](https://github.com/tuff-app/TUFF/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22),
+a [roadmap](docs/ROADMAP.md), and [Discussions](https://github.com/tuff-app/TUFF/discussions)
 for questions and ideas. [CONTRIBUTING.md](CONTRIBUTING.md) explains the rest.
 
 ## Credits

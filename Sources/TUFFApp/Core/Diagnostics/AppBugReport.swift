@@ -100,7 +100,7 @@ public struct AppBugReport: Sendable {
     }
 
     public func issueURL(includeDiagnostics: Bool) -> URL {
-        var components = URLComponents(string: "https://github.com/rexmhall09/TUFF/issues/new")!
+        var components = URLComponents(string: "https://github.com/tuff-app/TUFF/issues/new")!
         components.queryItems = [URLQueryItem(name: "template", value: "bug.yml"),
             URLQueryItem(name: "version", value: TUFFVersion.current),
             URLQueryItem(name: "model", value: model.map { Self.formName($0) } ?? "Not sure"),

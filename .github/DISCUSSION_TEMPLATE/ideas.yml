@@ -4,7 +4,7 @@ body:
       value: |
         Ideas at any stage are welcome here. Once an idea is concrete enough
         to build, it can move to a
-        [feature request](https://github.com/rexmhall09/TUFF/issues/new?template=feature.yml).
+        [feature request](https://github.com/tuff-app/TUFF/issues/new?template=feature.yml).
   - type: textarea
     id: idea
     attributes:

@@ -10,12 +10,12 @@ installing an older version. Your chats, settings and models stay put.
 2. Leave `~/Library/Application Support/TUFF` alone. It holds your chats,
    settings and models. Back it up if you like, but don't delete it or copy
    an older version over it.
-3. Check the [releases page](https://github.com/rexmhall09/TUFF/releases) for
+3. Check the [releases page](https://github.com/tuff-app/TUFF/releases) for
    the recovery release, download it, and check it with
    `shasum -a 256 -c TUFF-vVERSION-macos-arm64.zip.sha256`.
 4. Replace the broken app with the recovery one.
 5. If the recovery can't read your data, leave the data as it is and
-   [open a bug](https://github.com/rexmhall09/TUFF/issues/new?template=bug.yml).
+   [open a bug](https://github.com/tuff-app/TUFF/issues/new?template=bug.yml).
    Don't install an older app to get around it.
 
 If TUFF still opens, **TUFF > Check for Recovery Update** does this for you.

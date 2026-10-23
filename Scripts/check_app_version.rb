@@ -20,7 +20,7 @@ require "uri"
 
 ROOT = File.expand_path("..", __dir__)
 SOURCE = File.join(ROOT, "Sources/TUFFModelCatalog/TUFFVersion.swift")
-RELEASES_URL = "https://api.github.com/repos/rexmhall09/TUFF/releases?per_page=100"
+RELEASES_URL = "https://api.github.com/repos/tuff-app/TUFF/releases?per_page=100"
 
 def compiled_version
   source = File.read(SOURCE)

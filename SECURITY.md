@@ -1,7 +1,7 @@
 # Security
 
 Please don't open a public issue for a security problem. Report it privately
-through [GitHub's vulnerability reporting](https://github.com/rexmhall09/TUFF/security/advisories/new).
+through [GitHub's vulnerability reporting](https://github.com/tuff-app/TUFF/security/advisories/new).
 
 Tell me what's affected (version or commit), how to reproduce it, and what
 an attacker could do. Leave out personal data, keys and model weights.

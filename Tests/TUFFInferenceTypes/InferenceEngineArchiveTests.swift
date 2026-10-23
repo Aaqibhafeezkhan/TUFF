@@ -190,8 +190,8 @@ import TUFFRuntimeManagement
                          version: InferenceEngineVersion = .init(major: 9, minor: 0, patch: 0))
         -> InferenceEngineInstallRequest {
         .init(packageID: "gemma", version: version,
-            manifestURL: URL(string: "https://github.com/rexmhall09/TUFF/releases/download/v9.0.0/gemma.json")!,
-            archiveURL: URL(string: "https://github.com/rexmhall09/TUFF/releases/download/v9.0.0/gemma.tar")!,
+            manifestURL: URL(string: "https://github.com/tuff-app/TUFF/releases/download/v9.0.0/gemma.json")!,
+            archiveURL: URL(string: "https://github.com/tuff-app/TUFF/releases/download/v9.0.0/gemma.tar")!,
             architectureID: architecture, modelFormatVersion: 1, quantizationLayout: "affine",
             protocolVersion: 3, macOSMajorVersion: 15)
     }
@@ -256,7 +256,7 @@ import TUFFRuntimeManagement
                      "file:///tmp/engine.tar", "https://github.com.evil.example/engine.tar"] {
             #expect(!InferenceEngineHTTPTransport.permits(URL(string: text)!))
         }
-        #expect(InferenceEngineHTTPTransport.permits(URL(string: "https://github.com/rexmhall09/TUFF/releases")!))
+        #expect(InferenceEngineHTTPTransport.permits(URL(string: "https://github.com/tuff-app/TUFF/releases")!))
         #expect(InferenceEngineHTTPTransport.permits(URL(string: "https://release-assets.githubusercontent.com/asset")!))
     }
 }

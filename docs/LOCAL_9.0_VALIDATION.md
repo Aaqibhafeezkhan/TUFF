@@ -179,8 +179,8 @@ complete file-tool round. CLI cancellation exited 130 and removed its helper in
 
 ## Public release verification
 
-Version 9.0.0 is published at [GitHub Releases](https://github.com/rexmhall09/TUFF/releases/tag/v9.0.0).
-[Final CI](https://github.com/rexmhall09/TUFF/actions/runs/38442528957) passed all
+Version 9.0.0 is published at [GitHub Releases](https://github.com/tuff-app/TUFF/releases/tag/v9.0.0).
+[Final CI](https://github.com/tuff-app/TUFF/actions/runs/38442528957) passed all
 four jobs on the release commit. All twelve public downloads matched the local
 SHA-256 digests. The extracted app and signed archive/feed checks passed, as did
 the latest updater feed comparison. Native fresh installation and cache reuse

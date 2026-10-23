@@ -9,7 +9,7 @@ import tempfile
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-REPO = 'rexmhall09/TUFF'
+REPO = 'tuff-app/TUFF'
 VERSION = re.compile(r'^v?(\d+)\.(\d+)\.(\d+)$')
 
 

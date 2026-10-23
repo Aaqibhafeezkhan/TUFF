@@ -384,7 +384,7 @@ def comment_body(review_: Review) -> str:
     lines = [BOT_MARKER]
     if review_.verdict == "community":
         lines.append("Thanks! This result passed the automatic checks and is on the "
-                     "[leaderboard](https://rexmhall09.github.io/TUFF/benchmarks/) "
+                     "[leaderboard](https://tuff-app.github.io/TUFF/benchmarks/) "
                      "(it can take a few minutes to appear).")
     elif review_.verdict == "needs review":
         lines.append("Thanks! This result is held for a maintainer to look at before it "
@@ -518,7 +518,7 @@ def graphql(query: str, **variables) -> dict:
 
 
 def owner_and_name() -> tuple[str, str]:
-    repository = os.environ.get("GITHUB_REPOSITORY", "rexmhall09/TUFF")
+    repository = os.environ.get("GITHUB_REPOSITORY", "tuff-app/TUFF")
     owner, name = repository.split("/", 1)
     return owner, name
 

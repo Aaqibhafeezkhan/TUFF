@@ -2,7 +2,7 @@
 
 I only have one Mac, so TUFF's speed on everything else comes from you. The
 benchmark is built in, takes a few clicks, and the results go on the
-[leaderboard](https://rexmhall09.github.io/TUFF/benchmarks/).
+[leaderboard](https://tuff-app.github.io/TUFF/benchmarks/).
 
 ## Run one
 
@@ -59,7 +59,7 @@ delete it later.
 ## How results are checked
 
 A bot reads each post in the
-[Benchmarks discussions](https://github.com/rexmhall09/TUFF/discussions/categories/benchmarks)
+[Benchmarks discussions](https://github.com/tuff-app/TUFF/discussions/categories/benchmarks)
 and labels it:
 
 - **community:** the data is well formed, matches the published prompts, and

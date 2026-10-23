@@ -139,8 +139,8 @@ is reported complete.
 
 ## Published release
 
-[TUFF 9.0.0](https://github.com/rexmhall09/TUFF/releases/tag/v9.0.0) is published.
-[Final GitHub CI](https://github.com/rexmhall09/TUFF/actions/runs/38442528957) passed
+[TUFF 9.0.0](https://github.com/tuff-app/TUFF/releases/tag/v9.0.0) is published.
+[Final GitHub CI](https://github.com/tuff-app/TUFF/actions/runs/38442528957) passed
 on release commit `a3cf64e41d7b70f00a2acde57981dfe321af58bb`. All twelve public
 assets matched their validated local digests. The downloaded app, archive and
 feed signatures passed; the latest feed matched. Fresh public acquisition and

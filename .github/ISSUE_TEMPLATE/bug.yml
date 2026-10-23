@@ -16,7 +16,7 @@ body:
         file path. If the problem only happens with a private prompt, describe
         its shape instead (for example "a 3,000-token pasted log, thinking on").
         Suspected security problems go to
-        [private vulnerability reporting](https://github.com/rexmhall09/TUFF/security/advisories/new).
+        [private vulnerability reporting](https://github.com/tuff-app/TUFF/security/advisories/new).
   - type: input
     id: version
     attributes:

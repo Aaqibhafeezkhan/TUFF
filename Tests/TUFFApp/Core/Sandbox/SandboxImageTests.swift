@@ -81,7 +81,7 @@ private final class ProgressLog: @unchecked Sendable {
         #expect(!SandboxImagePin.release.isPlaceholder)
         #expect(SandboxImagePin.release.digest == "sha256:a30e016db2195bff70db07405e0afc02f861fc216f694bd3184d7fe86248e837")
         #expect(SandboxImagePin.release.source == .registry)
-        #expect(!SandboxImagePin.release.reference.isEmpty)
+        #expect(SandboxImagePin.release.reference == "ghcr.io/tuff-app/tuff-sandbox")
     }
 
     @Test func theReleasePinIsWellFormedSoPublishingIsOnlyADigestChange() {

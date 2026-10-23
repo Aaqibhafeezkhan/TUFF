@@ -20,11 +20,11 @@ public enum AboutPanelPresentation {
     public static let fallbackShortVersion = TUFFVersion.current
 
     private static let licenseURL = URL(
-        string: "https://github.com/rexmhall09/TUFF/blob/main/LICENSE")!
+        string: "https://github.com/tuff-app/TUFF/blob/main/LICENSE")!
 
-    public static let repositoryURL = URL(string: "https://github.com/rexmhall09/TUFF")!
+    public static let repositoryURL = URL(string: "https://github.com/tuff-app/TUFF")!
 
-    public static let repositoryLinkText = "github.com/rexmhall09/TUFF"
+    public static let repositoryLinkText = "github.com/tuff-app/TUFF"
 
     private static let licenseName = "Apache License 2.0"
 

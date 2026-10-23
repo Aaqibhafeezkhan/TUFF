@@ -7,8 +7,8 @@
 <meta name="description" content="TUFF runs language models locally on Apple Silicon, including mixture-of-experts models larger than your Mac's memory, with a native chat app and a local API.">
 <meta property="og:title" content="TUFF: the local AI app built for the Mac">
 <meta property="og:description" content="An open-source Mac app and Swift/Metal engine that streams model experts from the SSD, so the 111 GB Qwen3.8 Flash Next runs on a 16 GB MacBook Air.">
-<meta property="og:image" content="https://rexmhall09.github.io/TUFF/assets/tuff-chat.png">
-<meta property="og:url" content="https://rexmhall09.github.io/TUFF/">
+<meta property="og:image" content="https://tuff-app.github.io/TUFF/assets/tuff-chat.png">
+<meta property="og:url" content="https://tuff-app.github.io/TUFF/">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" type="image/png" href="assets/tuff-icon.png">
 <style>
@@ -106,11 +106,11 @@
       your Mac's memory.
     </p>
     <div class="cta">
-      <a class="button primary" id="download" href="https://github.com/rexmhall09/TUFF/releases/latest">
+      <a class="button primary" id="download" href="https://github.com/tuff-app/TUFF/releases/latest">
         Download for macOS
       </a>
       <a class="button secondary" href="benchmarks/">Benchmarks</a>
-      <a class="button secondary" href="https://github.com/rexmhall09/TUFF">GitHub</a>
+      <a class="button secondary" href="https://github.com/tuff-app/TUFF">GitHub</a>
     </div>
     <p class="meta" id="release-meta">Apple Silicon, macOS 15 or newer</p>
   </header>
@@ -156,8 +156,8 @@
 
   <section aria-labelledby="install">
     <h2 id="install">Install with Homebrew</h2>
-    <pre><code>brew tap rexmhall09/tuff https://github.com/rexmhall09/TUFF.git
-brew install --cask rexmhall09/tuff/tuff</code></pre>
+    <pre><code>brew tap tuff-app/tuff https://github.com/tuff-app/TUFF.git
+brew install --cask tuff-app/tuff/tuff</code></pre>
     <p>That installs the app and the <code>tuff</code> command. TUFF isn't
        notarized, so the first time, Control-click it and choose Open.</p>
   </section>
@@ -165,8 +165,8 @@ brew install --cask rexmhall09/tuff/tuff</code></pre>
   <section aria-labelledby="contribute">
     <h2 id="contribute">Help out</h2>
     <p>Running the benchmark on your Mac and sharing it helps the most.
-       <a href="https://github.com/rexmhall09/TUFF/blob/main/CONTRIBUTING.md">Contributing</a>
-       · <a href="https://github.com/rexmhall09/TUFF/discussions">Discussions</a></p>
+       <a href="https://github.com/tuff-app/TUFF/blob/main/CONTRIBUTING.md">Contributing</a>
+       · <a href="https://github.com/tuff-app/TUFF/discussions">Discussions</a></p>
   </section>
 
   <footer>
@@ -187,7 +187,7 @@ brew install --cask rexmhall09/tuff/tuff</code></pre>
     const meta = document.getElementById("release-meta");
     try {
       const response = await fetch(
-        "https://api.github.com/repos/rexmhall09/TUFF/releases/latest",
+        "https://api.github.com/repos/tuff-app/TUFF/releases/latest",
         { headers: { Accept: "application/vnd.github+json" } });
       if (!response.ok) return;
       const release = await response.json();
