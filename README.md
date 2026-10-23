@@ -45,6 +45,10 @@ Open. Or use Homebrew, which also adds the `tuff` command:
 brew install --cask tuff-app/tap/tuff
 ```
 
+If you installed with Homebrew before TUFF moved to
+[tuff-app/homebrew-tap](https://github.com/tuff-app/homebrew-tap), its README
+has the three commands that move your install over.
+
 TUFF updates itself. If an update stops it from opening, see
 [recovery](docs/RELEASE_RECOVERY.md).
 
