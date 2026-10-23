@@ -2,7 +2,7 @@
 import Foundation
 
 /// Checks, from outside the VM, that the sandbox that answered is protected
-/// the way `Sandbox/` builds it: for the web sandbox the firewall is loaded
+/// the way tuff-app/sandbox builds it: for the web sandbox the firewall is loaded
 /// with the Mac's addresses blocked; for the files sandbox it allows nothing
 /// outbound at all and the folders are mounted read-only; and the server
 /// runs as an unprivileged user with no capabilities. The signed `/health` answer already shows that the server
@@ -12,12 +12,12 @@ enum SandboxProtection {
     static let tableName = SandboxProfile.web.tableName
 
     /// Ranges the sandbox must never reach (the private4 set of
-    /// `Sandbox/firewall-web.nft` holds more).
+    /// `firewall-web.nft` in tuff-app/sandbox holds more).
     static let privateRanges = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
                                 "169.254.0.0/16", "127.0.0.0/8", "100.64.0.0/10"]
 
     /// Prints the user id and any capability sets of the process running
-    /// /app/server.py, as `Scripts/sandbox_selftest.sh` does.
+    /// /app/server.py, as `scripts/selftest.sh` in tuff-app/sandbox does.
     static let privilegeCheck = """
     import glob
     for path in glob.glob("/proc/[0-9]*/cmdline"):
@@ -131,7 +131,7 @@ enum SandboxProtection {
     }
 
     /// Reads `nft list table inet tuff_sandbox_files` and says what is wrong,
-    /// or nil when it has the shape `Sandbox/firewall-files.nft` gives it:
+    /// or nil when it has the shape `firewall-files.nft` in tuff-app/sandbox gives it:
     /// both hooks drop by default, and the only accepts are loopback, replies
     /// to connections that exist, and the server's port from the gateway.
     static func filesFirewallProblem(_ listing: String) -> String? {
@@ -170,7 +170,7 @@ enum SandboxProtection {
     }
 
     /// Reads `nft list table inet tuff_sandbox_web` and says what is
-    /// wrong, or nil when it has the shape `Sandbox/firewall-web.nft` gives
+    /// wrong, or nil when it has the shape `firewall-web.nft` in tuff-app/sandbox gives
     /// it: both hooks drop by default, every given address is in the blocked
     /// set of its family, the blocked and private ranges are rejected before
     /// anything is accepted, and the only accepts are the ones the file

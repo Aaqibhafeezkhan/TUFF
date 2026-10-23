@@ -2,7 +2,7 @@
 
 I only have one Mac, so TUFF's speed on everything else comes from you. The
 benchmark is built in, takes a few clicks, and the results go on the
-[leaderboard](https://tuff-app.github.io/TUFF/benchmarks/).
+[leaderboard](https://tuff-app.github.io/benchmarks/).
 
 ## Run one
 
@@ -79,8 +79,10 @@ back to the post it came from.
 
 ## For maintainers
 
-The checks live in `Scripts/benchmark_discussions.py` and run from the Pages
-workflow, which also rebuilds the leaderboard from Discussions on every new
-or edited post. No results are stored in the repository. Changing a prompt
+The checks live in `Scripts/benchmark_discussions.py` and run from the
+Benchmark review workflow on every new or edited post. The
+[website](https://github.com/tuff-app/tuff-app.github.io) rebuilds the
+leaderboard from the reviewed posts every hour, so a new result can take up to
+an hour to appear. No results are stored in the repository. Changing a prompt
 or limit in `AppBenchmarkSuite.swift` changes the workload hash; bump the
 suite version and add the new hash to `.github/benchmark-suite.json`.

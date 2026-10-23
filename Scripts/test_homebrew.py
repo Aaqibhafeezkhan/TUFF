@@ -2,15 +2,33 @@
 """Model-free tests for the release cask pinning step."""
 
 import hashlib
-import os
 from pathlib import Path
 import plistlib
-import re
 import tempfile
 import unittest
 import zipfile
 
 import update_homebrew as homebrew
+
+
+# The cask as tuff-app/homebrew-tap keeps it, with an old pin.
+CASK = """cask "tuff" do
+  version "9.4.3"
+  sha256 "676c5da273b610ca055a6a5a0627b8b43313bc07fc63c0d0b8af585e70b83e31"
+
+  url "https://github.com/tuff-app/TUFF/releases/download/v#{version}/TUFF-v#{version}-macos-arm64.zip"
+  name "TUFF"
+  desc "Run local language models, including ones bigger than your memory"
+  homepage "https://tuff-app.github.io/"
+
+  auto_updates true
+  depends_on arch: :arm64
+  depends_on macos: :sequoia
+
+  app "TUFF.app"
+  binary "#{appdir}/TUFF.app/Contents/Resources/bin/tuff"
+end
+"""
 
 
 class HomebrewReleaseTests(unittest.TestCase):
@@ -19,7 +37,7 @@ class HomebrewReleaseTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
         self.cask = self.root / "tuff.rb"
-        self.original = (homebrew.ROOT / "Casks/tuff.rb").read_text()
+        self.original = CASK
         self.cask.write_text(self.original)
         self.archive = self.root / "TUFF-v8.0.0-macos-arm64.zip"
 
@@ -27,19 +45,6 @@ class HomebrewReleaseTests(unittest.TestCase):
         with zipfile.ZipFile(self.archive, "w") as archive:
             archive.writestr("TUFF.app/Contents/Info.plist", plistlib.dumps({
                 "CFBundleShortVersionString": short, "CFBundleVersion": build}))
-
-    def test_repository_cask_has_a_real_pin_and_current_version(self):
-        self.assertRegex(self.original, r'(?m)^  sha256 "[0-9a-f]{64}"$')
-        source = (homebrew.ROOT / "Sources/TUFFModelCatalog/TUFFVersion.swift").read_text()
-        version = re.search(r'static let current\s*=\s*"([^"]+)"', source)[1]
-        if os.environ.get("TUFF_LOCAL_BUILD") == "1":
-            # A locally qualified unreleased app must not repoint Homebrew to
-            # a nonexistent public artifact or invent its release checksum.
-            published = re.search(r'(?m)^  version "([0-9]+\.[0-9]+\.[0-9]+)"$', self.original)[1]
-            self.assertLessEqual(tuple(map(int, published.split('.'))), tuple(map(int, version.split('.'))))
-        else:
-            self.assertIn(f'  version "{version}"', self.original)
-        self.assertIn("/TUFF/releases/download/v#{version}/TUFF-v#{version}-macos-arm64.zip", self.original)
 
     def test_pins_exact_archive_digest_and_preserves_install_artifacts(self):
         self.package()

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Pin the Homebrew cask to a packaged release, without publishing anything."""
+"""Pin the Homebrew cask to a packaged release, without publishing anything.
+
+The cask lives in tuff-app/homebrew-tap. By default this edits a clone of it
+next to this repository (../homebrew-tap); --cask names another file.
+"""
 
 import argparse
 import hashlib
@@ -10,6 +14,7 @@ import zipfile
 
 
 ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_CASK = ROOT.parent / "homebrew-tap" / "Casks" / "tuff.rb"
 
 
 def archive_checksum(version: str, archive: Path) -> str:
@@ -57,9 +62,11 @@ def main() -> int:
     parser.add_argument("version")
     parser.add_argument("archive", type=Path)
     parser.add_argument("--check", action="store_true", help="verify without changing the cask")
+    parser.add_argument("--cask", type=Path, default=DEFAULT_CASK,
+                        help="the cask file (default: ../homebrew-tap/Casks/tuff.rb)")
     args = parser.parse_args()
     try:
-        update(args.version, args.archive, ROOT / "Casks/tuff.rb", args.check)
+        update(args.version, args.archive, args.cask, args.check)
     except (ValueError, OSError, KeyError, zipfile.BadZipFile, plistlib.InvalidFileException) as error:
         parser.exit(1, f"Homebrew cask: {error}\n")
     print(f"Homebrew cask {'verified' if args.check else 'updated'} for {args.version}")

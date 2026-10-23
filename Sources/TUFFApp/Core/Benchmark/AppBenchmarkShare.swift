@@ -5,7 +5,7 @@ import Foundation
 public enum AppBenchmarkShare {
     public static let repository = "tuff-app/TUFF"
     public static let categorySlug = "benchmarks"
-    public static let leaderboardURL = URL(string: "https://tuff-app.github.io/TUFF/benchmarks/")!
+    public static let leaderboardURL = URL(string: "https://tuff-app.github.io/benchmarks/")!
     /// The opening of the fenced block the validator looks for.
     public static let dataFence = "```json tuff-benchmark"
     /// GitHub turns long query strings away; past this the body goes on the

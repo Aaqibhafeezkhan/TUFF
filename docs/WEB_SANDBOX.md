@@ -61,7 +61,7 @@ given a signed answer for 5 seconds, so after a quiet time, or after the
 sandbox has died and another program has taken its port, even a search query
 or a folder id is not sent before that check. Other machines on your network and addresses your Mac gains after
 the start are not covered by the VM's block list. See
-[`Sandbox/README.md`](../Sandbox/README.md) for the full list.
+the [sandbox README](https://github.com/tuff-app/sandbox#readme) for the full list.
 
 ## File search in a sandbox
 
@@ -122,14 +122,14 @@ Documents you attach to a chat are still read by TUFF itself.
 ## Developers
 
 Before an image is published, run a locally built one: build it with
-`Scripts/sandbox_selftest.sh build`, then start TUFF with
+`scripts/selftest.sh build` in [tuff-app/sandbox](https://github.com/tuff-app/sandbox), then start TUFF with
 `TUFF_SANDBOX_DEV_IMAGE=tuff-sandbox:dev` and `TUFF_SANDBOX_DEV_DIGEST` set to
 the image's index digest (`container image inspect tuff-sandbox:dev`, the
 `configuration.descriptor.digest` field). TUFF checks that the local image has
 exactly that digest and never pulls it.
 
 How to publish a new image and change the digest the app pins:
-[`SANDBOX_IMAGE.md`](SANDBOX_IMAGE.md).
+[PUBLISHING.md](https://github.com/tuff-app/sandbox/blob/main/PUBLISHING.md) in the sandbox repository.
 
 When a `container` command fails, its whole output goes to standard error
 (visible when TUFF is started from Terminal) and to the unified log

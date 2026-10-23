@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Reviews benchmark posts in GitHub Discussions and builds the leaderboard.
 
-Two commands, both run by .github/workflows/pages.yml:
+Two commands: review runs in .github/workflows/benchmark-review.yml, and build
+runs in the website's deploy workflow (tuff-app/tuff-app.github.io):
 
   review --discussion N   Validate one post, label it and leave a comment.
   build --output FILE     Collect every accepted post into the leaderboard data.
@@ -384,7 +385,7 @@ def comment_body(review_: Review) -> str:
     lines = [BOT_MARKER]
     if review_.verdict == "community":
         lines.append("Thanks! This result passed the automatic checks and is on the "
-                     "[leaderboard](https://tuff-app.github.io/TUFF/benchmarks/) "
+                     "[leaderboard](https://tuff-app.github.io/benchmarks/) "
                      "(it can take a few minutes to appear).")
     elif review_.verdict == "needs review":
         lines.append("Thanks! This result is held for a maintainer to look at before it "

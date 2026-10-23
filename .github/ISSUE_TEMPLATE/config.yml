@@ -7,7 +7,7 @@ contact_links:
     url: https://github.com/tuff-app/TUFF/discussions/categories/ideas
     about: Float an idea before it is ready to be a feature request.
   - name: Share how fast TUFF runs on your Mac
-    url: https://tuff-app.github.io/TUFF/benchmarks/
+    url: https://tuff-app.github.io/benchmarks/
     about: Run Benchmarks in TUFF and press Share on GitHub. Results go on the leaderboard.
   - name: An update broke TUFF or it will not open
     url: https://github.com/tuff-app/TUFF/blob/main/docs/RELEASE_RECOVERY.md#if-tuff-wont-open

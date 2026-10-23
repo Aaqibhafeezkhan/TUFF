@@ -31,7 +31,8 @@ python3 Scripts/release_recovery.py withdraw --withdrawn 8.1.0 --known-good 8.0.
 This marks the bad release as a prerelease, makes the known-good one latest,
 and adds a notice. It never deletes tags or assets. The **Withdraw defective
 release** workflow runs the same thing; never test it on a real release.
-Withdrawing doesn't change the Homebrew cask, so update `Casks/tuff.rb` too.
+Withdrawing doesn't change the Homebrew cask, so update `Casks/tuff.rb` in
+[homebrew-tap](https://github.com/tuff-app/homebrew-tap) too.
 
 **Prepare a recovery** from a clean checkout:
 

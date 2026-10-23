@@ -3,7 +3,7 @@ import Foundation
 
 /// The two kinds of sandbox the app runs from the same image. They differ in
 /// what is mounted, what the firewall allows, and which endpoints the server
-/// offers (see `Sandbox/server.py`, `SANDBOX_PROFILE`).
+/// offers (see `server.py` in tuff-app/sandbox, `SANDBOX_PROFILE`).
 enum SandboxProfile: String, Sendable, Equatable {
     /// Fetches web pages and search results. Network, no folders.
     case web
@@ -14,7 +14,7 @@ enum SandboxProfile: String, Sendable, Equatable {
     /// The start of every container name of this profile.
     var namePrefix: String { "tuff-sandbox-\(rawValue)-" }
 
-    /// The nft table the VM's entrypoint loads (`Sandbox/firewall-*.nft`).
+    /// The nft table the VM's entrypoint loads (`firewall-*.nft` in tuff-app/sandbox).
     var tableName: String { "tuff_sandbox_\(rawValue)" }
 
     /// What the signed `/health` answer calls this profile.

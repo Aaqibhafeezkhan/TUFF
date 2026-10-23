@@ -1,7 +1,7 @@
 name: Contributor checks
 
 # Deterministic, model-free checks for pull requests from anyone other than
-# the repository owner, including forks. The owner pushes to main directly and
+# the owner (rexmhall09), including forks. The owner pushes to main directly and
 # tests personally, so pushes and owner-authored pull requests are not checked
 # automatically. Every job is gated on the pull request's author, never on the
 # actor, so the owner re-running a contributor's checks still runs them.
@@ -31,7 +31,7 @@ concurrency:
 jobs:
   repository:
     name: Repository checks
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.user.login != github.repository_owner
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.user.login != 'rexmhall09'
     # Match the Xcode 27 / Swift 6.4 toolchain used to validate releases.
     # This is a standard runner, free for this public repository.
     runs-on: xcode-27
@@ -51,18 +51,6 @@ jobs:
           python3 Scripts/test_route_issue.py
           python3 Scripts/test_release_recovery.py
           python3 Scripts/test_homebrew.py
-      # The web sandbox's server, signing and image files. This runner has only
-      # the system python3: the tests that need pypdf or trafilatura skip here.
-      # They run in full in a virtual environment with trafilatura and pypdf
-      # installed (see Sandbox/README.md).
-      - name: Sandbox server regressions
-        if: success() || failure()
-        run: |
-          python3 Sandbox/test_server.py
-          python3 Sandbox/test_signing.py
-          python3 Sandbox/test_infra.py
-          bash -n Scripts/sandbox_selftest.sh
-          sh -n Sandbox/entrypoint.sh
       - name: Ruby harness regressions
         if: success() || failure()
         run: |
@@ -89,7 +77,7 @@ jobs:
 
   swift:
     name: Swift build and tests
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.user.login != github.repository_owner
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.user.login != 'rexmhall09'
     # Match the Xcode 27 / Swift 6.4 toolchain used to validate releases.
     # This is a standard runner, free for this public repository.
     runs-on: xcode-27
@@ -126,7 +114,7 @@ jobs:
   package:
     name: Release build, packaging and updater fixtures
     if: >-
-      (github.event_name == 'workflow_dispatch' || github.event.pull_request.user.login != github.repository_owner)
+      (github.event_name == 'workflow_dispatch' || github.event.pull_request.user.login != 'rexmhall09')
       && (github.event_name == 'workflow_dispatch' || !github.event.pull_request.draft)
     # Match the Xcode 27 / Swift 6.4 toolchain used to validate releases.
     # This is a standard runner, free for this public repository.
@@ -154,7 +142,7 @@ jobs:
 
   summary:
     name: Summary
-    if: always() && (github.event_name == 'workflow_dispatch' || github.event.pull_request.user.login != github.repository_owner)
+    if: always() && (github.event_name == 'workflow_dispatch' || github.event.pull_request.user.login != 'rexmhall09')
     needs: [repository, swift, package]
     runs-on: ubuntu-latest
     steps:

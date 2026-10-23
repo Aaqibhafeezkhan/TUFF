@@ -4,9 +4,9 @@ import Foundation
 import Security
 
 /// The signatures of the sandbox API, as written in the docstring of
-/// Sandbox/server.py. Every request carries one and every answer must carry
+/// server.py in tuff-app/sandbox. Every request carries one and every answer must carry
 /// one, so a program that merely listens on the sandbox's port cannot pass
-/// for the sandbox. `Sandbox/test-vectors/signing.json` holds fixed examples
+/// for the sandbox. `Tests/Vectors/sandbox-signing.json` (a copy of tuff-app/sandbox's `test-vectors/signing.json`) holds fixed examples
 /// that this code and the server both reproduce.
 enum SandboxSigning {
     static let requestLabel = "tuff-sandbox-req-v1"

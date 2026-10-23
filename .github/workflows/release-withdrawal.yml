@@ -17,6 +17,8 @@ concurrency:
   cancel-in-progress: false
 jobs:
   withdraw:
+    # Waits for the owner's approval (Settings > Environments > release).
+    environment: release
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4

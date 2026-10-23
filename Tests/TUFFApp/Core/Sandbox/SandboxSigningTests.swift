@@ -70,7 +70,7 @@ private func signingRepositoryRoot() throws -> URL {
 }
 
 private func loadSigningVectors() throws -> SigningVectors {
-    let file = try signingRepositoryRoot().appendingPathComponent("Sandbox/test-vectors/signing.json")
+    let file = try signingRepositoryRoot().appendingPathComponent("Tests/Vectors/sandbox-signing.json")
     return try JSONDecoder().decode(SigningVectors.self, from: Data(contentsOf: file))
 }
 

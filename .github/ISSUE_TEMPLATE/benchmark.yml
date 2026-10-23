@@ -10,7 +10,7 @@ body:
       value: |
         Just want to share how fast TUFF is on your Mac? Run **Benchmarks** in
         TUFF and press **Share on GitHub** instead. It goes on the
-        [leaderboard](https://tuff-app.github.io/TUFF/benchmarks/).
+        [leaderboard](https://tuff-app.github.io/benchmarks/).
 
         This form is for problems: something got slower, or is far off what
         similar Macs get. Repeated runs help a lot more than one number, and a

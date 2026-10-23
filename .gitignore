@@ -54,4 +54,3 @@ __pycache__/
 !Tests/TUFFEngine/Core/Kernels/Fixtures/qwen4exp/golden.bin
 
 # Built by the Pages workflow from GitHub Discussions; never committed.
-/site/benchmarks/data.json

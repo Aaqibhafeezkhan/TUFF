@@ -10,9 +10,9 @@
 
 <p align="center">
   <a href="https://github.com/tuff-app/TUFF/releases/latest">Download</a> ·
-  <a href="https://tuff-app.github.io/TUFF/">Website</a> ·
-  <a href="https://tuff-app.github.io/TUFF/benchmarks/">Benchmarks</a> ·
-  <a href="CONTRIBUTING.md">Contribute</a> ·
+  <a href="https://tuff-app.github.io/">Website</a> ·
+  <a href="https://tuff-app.github.io/benchmarks/">Benchmarks</a> ·
+  <a href="#contributing">Contribute</a> ·
   <a href="https://github.com/tuff-app/TUFF/discussions">Discussions</a>
 </p>
 
@@ -26,7 +26,7 @@ type leaves your Mac unless you turn on web search.
 Air.** TUFF keeps a mixture-of-experts model's experts on the SSD and reads
 only the few each token needs. GPT-OSS 120B and MiniMax M2.7 run the same
 way. On that Air, Flash Next writes about 1.7 tokens a second; smaller models
-are much faster. The [benchmarks](https://tuff-app.github.io/TUFF/benchmarks/)
+are much faster. The [benchmarks](https://tuff-app.github.io/benchmarks/)
 show how each model runs on real Macs.
 
 ## Install
@@ -42,8 +42,7 @@ TUFF isn't notarized, so the first time, Control-click the app and choose
 Open. Or use Homebrew, which also adds the `tuff` command:
 
 ```sh
-brew tap tuff-app/tuff https://github.com/tuff-app/TUFF.git
-brew install --cask tuff-app/tuff/tuff
+brew install --cask tuff-app/tap/tuff
 ```
 
 TUFF updates itself. If an update stops it from opening, see
@@ -58,7 +57,7 @@ TUFF updates itself. If an update stops it from opening, see
   the web or folders you pick, and cites what it used.
   [How search works](docs/SEARCH.md).
 - **Benchmarks.** Measure any installed model on your Mac and share the result
-  on the [leaderboard](https://tuff-app.github.io/TUFF/benchmarks/).
+  on the [leaderboard](https://tuff-app.github.io/benchmarks/).
   [How benchmarks work](docs/BENCHMARKS.md).
 - **Background API.** A local OpenAI-compatible server for agents and other
   apps. It loads whichever installed model a request names.
@@ -166,20 +165,40 @@ installed copy. `Scripts/test.sh` runs the tests; none need a model.
 [Local 9.0 builds](docs/LOCAL_9.0.md) explains the downloaded family engines,
 isolated app packaging and local qualification.
 [How TUFF works](docs/HOW_TUFF_WORKS.md) explains the engine and maps the
-code.
-
-## Contributing
-
-The easiest way to help is to run a benchmark on your Mac and share it.
-There are also
-[good first issues](https://github.com/tuff-app/TUFF/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22),
-a [roadmap](docs/ROADMAP.md), and [Discussions](https://github.com/tuff-app/TUFF/discussions)
-for questions and ideas. [CONTRIBUTING.md](CONTRIBUTING.md) explains the rest.
+code, and [CONTRIBUTING.md](CONTRIBUTING.md) covers building, testing and the
+rules for this repository.
 
 ## Credits
 
 TUFF began as a fork of [drumih/turbo-fieldfare](https://github.com/drumih/turbo-fieldfare)
 by Andrey Mikhaylov, which built the original Gemma runtime and expert
-streaming. TUFF is [Apache 2.0](LICENSE). Model weights keep their own terms;
-other credits are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-Security issues go to [private reporting](SECURITY.md).
+streaming. Other credits are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Contributing
+
+TUFF is one project split across a few repositories:
+
+| Repository | What's in it |
+| --- | --- |
+| [TUFF](https://github.com/tuff-app/TUFF) | The Mac app, the `tuff` command and the inference engines |
+| [sandbox](https://github.com/tuff-app/sandbox) | The Linux VM that runs web and file search in isolation |
+| [homebrew-tap](https://github.com/tuff-app/homebrew-tap) | The Homebrew cask |
+| [tuff-app.github.io](https://github.com/tuff-app/tuff-app.github.io) | The website and benchmark leaderboard |
+
+They all follow the same
+[contributing guide](https://github.com/tuff-app/.github/blob/main/CONTRIBUTING.md),
+[maintainer roles](https://github.com/tuff-app/.github/blob/main/MAINTAINERS.md)
+and [code of conduct](https://github.com/tuff-app/.github/blob/main/CODE_OF_CONDUCT.md).
+Questions and ideas go in [Discussions](https://github.com/tuff-app/TUFF/discussions).
+
+## Security
+
+Please don't open a public issue for a security problem. Report it privately
+through GitHub's vulnerability reporting on the repository it affects, or on
+[TUFF](https://github.com/tuff-app/TUFF/security/advisories/new) if you're not
+sure which. The [security policy](https://github.com/tuff-app/.github/blob/main/SECURITY.md)
+has the details.
+
+## License
+
+[Apache 2.0](LICENSE). Model weights keep their own terms.

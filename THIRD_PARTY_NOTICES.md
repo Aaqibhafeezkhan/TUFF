@@ -93,9 +93,9 @@ collect their license and NOTICE files from the exact revisions in
 
 ## Sandbox image
 
-The web sandbox image built from [`Sandbox/`](Sandbox/) is a separate artifact,
+The web sandbox image built from [tuff-app/sandbox](https://github.com/tuff-app/sandbox) is a separate artifact,
 not part of the app bundle. It contains the packages below, pinned by hash in
-[`Sandbox/requirements.txt`](Sandbox/requirements.txt), on top of the pinned
+[`requirements.txt`](https://github.com/tuff-app/sandbox/blob/main/requirements.txt), on top of the pinned
 `python:3.12-slim` base image (Debian and CPython, each under its own terms)
 and Debian's `nftables` package (GPL-2.0-only, installed unmodified from a
 dated snapshot). Licenses are those stated in each package's metadata at the

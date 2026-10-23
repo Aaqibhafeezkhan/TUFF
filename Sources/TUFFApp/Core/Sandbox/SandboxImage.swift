@@ -10,7 +10,7 @@ struct SandboxImagePin: Equatable, Sendable {
         /// Pulled from a registry as `reference@digest`.
         case registry
         /// Already in the local image store under `reference`, such as the
-        /// image a developer built from `Sandbox/`. It is never pulled.
+        /// image a developer built from tuff-app/sandbox. It is never pulled.
         case local
     }
 
@@ -34,16 +34,16 @@ struct SandboxImagePin: Equatable, Sendable {
     var isPlaceholder: Bool { digest == Self.placeholderDigest }
 
     /// The image this version of TUFF runs: the index the maintainer's
-    /// workflow (`.github/workflows/sandbox-image.yml`) published as
+    /// workflow (`.github/workflows/image.yml` in tuff-app/sandbox) published as
     /// `ghcr.io/tuff-app/tuff-sandbox:1` from the `sandbox-v1` tag. A new
-    /// image means a new digest here (docs/SANDBOX_IMAGE.md).
+    /// image means a new digest here (PUBLISHING.md in tuff-app/sandbox).
     static let release = SandboxImagePin(
         reference: "ghcr.io/tuff-app/tuff-sandbox",
         digest: "sha256:a30e016db2195bff70db07405e0afc02f861fc216f694bd3184d7fe86248e837", source: .registry)
 
     /// For developers and tests before an image is published: when both
     /// `TUFF_SANDBOX_DEV_IMAGE` (a name in the local image store, such as the
-    /// `tuff-sandbox:dev` that `Scripts/sandbox_selftest.sh build` makes) and
+    /// `tuff-sandbox:dev` that `scripts/selftest.sh build` in tuff-app/sandbox makes) and
     /// `TUFF_SANDBOX_DEV_DIGEST` (its `sha256:` index digest) are set, that
     /// local image is run instead. The image must still have exactly that
     /// digest, and it is never pulled. A person who can set these can already

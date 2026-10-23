@@ -273,7 +273,7 @@ final class FakeContainerWorld: SandboxProcessRunning, @unchecked Sendable {
     }
 
     /// What `nft list table inet tuff_sandbox_files` prints for the table
-    /// `Sandbox/firewall-files.nft` makes.
+    /// `firewall-files.nft` in tuff-app/sandbox makes.
     static func goodFilesNftListing() -> String {
         """
         table inet tuff_sandbox_files {
@@ -295,7 +295,7 @@ final class FakeContainerWorld: SandboxProcessRunning, @unchecked Sendable {
     }
 
     /// What `nft -nn list table inet tuff_sandbox_web` prints for the table
-    /// `Sandbox/firewall-web.nft` makes, with the entrypoint's additions: the
+    /// `firewall-web.nft` in tuff-app/sandbox makes, with the entrypoint's additions: the
     /// blocked addresses and a DNS exception at the top of the output chain.
     static func goodNftListing(blocked: [String]) -> String {
         let four = blocked.filter { !$0.contains(":") }.joined(separator: ", ")

@@ -4,7 +4,7 @@ import Foundation
 import Security
 
 /// The Mac's own network addresses, which the sandbox must never connect to
-/// (Sandbox/server.py and the VM's firewall refuse every address passed in
+/// (server.py in tuff-app/sandbox and the VM's firewall refuse every address passed in
 /// `SANDBOX_BLOCKED_ADDRESSES`).
 enum HostAddresses {
     /// The most the server accepts in its list.
@@ -166,7 +166,7 @@ struct SandboxSecret: Sendable {
     let folder: URL
     /// The content of the secret file: 64 hexadecimal characters. The
     /// signature key is these characters' bytes, not the 32 random bytes
-    /// they spell out (see Sandbox/server.py, `load_secret`).
+    /// they spell out (see server.py in tuff-app/sandbox, `load_secret`).
     let key: Data
 
     /// Makes `base/<random name>/secret`. `base` and the new folder are

@@ -128,7 +128,7 @@ class GitHubConfigTests < Minitest::Test
     fixture do |dir|
       path = contributor_workflow(dir)
       source = File.read(path)
-      gate = "    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.user.login != github.repository_owner\n"
+      gate = "    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.user.login != 'rexmhall09'\n"
       assert_includes source, gate
       File.write(path, source.sub(gate, ''))
       _, err, status = check(dir)

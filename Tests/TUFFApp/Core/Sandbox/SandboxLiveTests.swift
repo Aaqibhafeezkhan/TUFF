@@ -5,7 +5,7 @@ import Testing
 
 /// Starts and stops the real sandbox with Apple's `container`. It only runs
 /// when `TUFF_SANDBOX_LIVE_IMAGE` names an image already in the local store,
-/// such as the one `Scripts/sandbox_selftest.sh build` makes (`tuff-sandbox:dev`):
+/// such as the one `scripts/selftest.sh build` in tuff-app/sandbox makes (`tuff-sandbox:dev`):
 ///
 ///     TUFF_SANDBOX_LIVE_IMAGE=tuff-sandbox:dev Scripts/test.sh --filter SandboxLiveTests
 ///

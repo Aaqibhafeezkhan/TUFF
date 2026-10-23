@@ -60,7 +60,7 @@ struct SandboxDependencies: Sendable {
 }
 
 /// The arguments of `container run` for a sandbox. The flags are the ones
-/// `Scripts/sandbox_selftest.sh start` uses and checks: a read-only root, no
+/// `scripts/selftest.sh start` in tuff-app/sandbox uses and checks: a read-only root, no
 /// capabilities except the four the entrypoint needs to load the firewall and
 /// drop privileges, limits, the secret folder mounted read-only, and the one
 /// published port bound to loopback. The web sandbox is told the Mac's

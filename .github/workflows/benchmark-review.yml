@@ -1,0 +1,40 @@
+name: Benchmark review
+
+# Reviews a new or edited post in the Benchmarks discussion category: its JSON
+# is read as data by Scripts/benchmark_discussions.py, which labels the post and
+# comments with the outcome. Nothing in a post is ever executed. The website
+# (tuff-app/tuff-app.github.io) builds the leaderboard from the reviewed posts
+# every hour.
+on:
+  discussion:
+    types: [created, edited, category_changed]
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    if: >-
+      github.event_name == 'discussion'
+      && github.event.discussion.category.slug == 'benchmarks'
+      && contains(fromJSON('["created", "edited", "category_changed"]'), github.event.action)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      discussions: write
+      issues: write
+    concurrency:
+      group: benchmark-review-${{ github.event.discussion.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/benchmark-suite.json
+            Scripts/benchmark_discussions.py
+          sparse-checkout-cone-mode: false
+      - name: Review the post
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISCUSSION_NUMBER: ${{ github.event.discussion.number }}
+        run: python3 Scripts/benchmark_discussions.py review --discussion "$DISCUSSION_NUMBER"
