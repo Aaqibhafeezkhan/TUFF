@@ -109,9 +109,16 @@ do {
         }
         key = try .init(rawRepresentation: Data(contentsOf: keyURL))
     } else {
+        guard downloadBase == nil else { throw PackageFailure("release engines need the existing release signing key") }
         key = .init()
         guard fm.createFile(atPath: keyURL.path, contents: key.rawRepresentation,
                             attributes: [.posixPermissions: 0o600]) else { throw PackageFailure("cannot create signing key") }
+    }
+    // Published engines are always signed by the one release key, so an app
+    // update never stops trusting the engines users already have.
+    let releasePublicKey = "NhjXokBnXf80eKZd3Mkg/p3ZKtZ71UTzK4ujiljgzuA="
+    guard downloadBase == nil || key.publicKey.rawRepresentation.base64EncodedString() == releasePublicKey else {
+        throw PackageFailure("release engines must be signed by the release key (public key \(releasePublicKey))")
     }
     let families: [(String, Set<String>, Set<String>)] = [
         ("gemma-affine", ["gemma4-e2b", "gemma4-e4b", "gemma4-12b-qat", "gemma4-26b-a4b"], ["affine"]),

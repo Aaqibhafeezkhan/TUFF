@@ -33,6 +33,9 @@ GitHub HTTPS download directory for that release. This produces a public catalog
 with no local file root. Upload the four `.tar` archives and their four signed
 `.json` manifests beside the app archive; the app embeds the catalog and public
 verification key. Private keys stay outside every distribution directory.
+A release build must pass the existing release signing key as the second
+argument. The packager refuses to create a new key or use any other key for a
+release, because changing keys makes installed engines fail verification.
 
 Each engine package version is immutable. After changing helper code, use a new
 version and a new output directory. A host build must run with
