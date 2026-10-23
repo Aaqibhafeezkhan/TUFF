@@ -56,9 +56,15 @@ public actor InferenceEngineDistributionController {
         let current = InferenceEnginePackageReference(packageID: engine.manifest.packageID, version: engine.manifest.version)
         let previous = try await store.knownGood(for: modelID)
         let retained = previous.map { $0.packageID == current.packageID && $0 != current ? [$0] : [] } ?? []
-        try await store.bindModel(modelID, to: [
-            current
-        ] + Array((rollback + retained).prefix(1)), directory: directory)
+        // A rollback engine whose receipt no longer verifies (for example one
+        // signed by an earlier publisher key) can't be used, so it isn't kept.
+        var fallback: [InferenceEnginePackageReference] = []
+        for reference in rollback + retained where fallback.isEmpty {
+            if (try? await store.status(packageID: reference.packageID, version: reference.version))?.verified == true {
+                fallback.append(reference)
+            }
+        }
+        try await store.bindModel(modelID, to: [current] + fallback, directory: directory)
     }
 
     public func markKnownGood(_ modelID: String, engine: InferenceEngineLease) async throws {

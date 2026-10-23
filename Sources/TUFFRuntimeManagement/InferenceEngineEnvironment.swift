@@ -142,7 +142,7 @@ public enum InferenceEngineEnvironment {
         } catch {
             try Task.checkCancellation()
             let controller = try controller()
-            guard let lease = try await controller.acquireKnownGood(bindingID(for: directory),
+            guard let lease = try? await controller.acquireKnownGood(bindingID(for: directory),
                 architectureID: arch.variant.rawValue, quantizationLayout: arch.family == .gptOss ? "mxfp4" : "affine",
                 protocolVersion: protocolVersion, macOSMajorVersion: ProcessInfo.processInfo.operatingSystemVersion.majorVersion) else { throw error }
             installation = InferenceEngineInstallation(lease: lease, controller: controller)

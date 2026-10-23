@@ -257,6 +257,41 @@ import TUFFRuntimeManagement
         try await controller.release(updated)
     }
 
+    @Test func engineUpdateDropsAKnownGoodSignedByARetiredPublisherKey() async throws {
+        let fixture = try fixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try await fixture.store.install(extractedDirectory: fixture.source, signedManifest: fixture.signed)
+        let old = InferenceEnginePackageReference(packageID: "qwen-hybrid", version: fixture.version)
+        try await fixture.store.bindModel("model", to: [old])
+        try await fixture.store.markKnownGood("model", reference: old)
+        // The next release is signed by a new key published under the same key ID.
+        let newKey = Curve25519.Signing.PrivateKey()
+        let next = InferenceEngineVersion(major: 9, minor: 0, patch: 1)
+        var payload = try #require(JSONSerialization.jsonObject(with: fixture.signed.payload) as? [String: Any])
+        payload["version"] = ["major": 9, "minor": 0, "patch": 1]
+        let bytes = try JSONSerialization.data(withJSONObject: payload)
+        let signed = SignedInferenceEngineManifest(publisherKeyID: "test-key", payload: bytes,
+            signature: try newKey.signature(for: SignedInferenceEngineManifest.signatureMessage(for: bytes)))
+        let engines = fixture.root.appendingPathComponent("engines")
+        let rotated = InferenceEngineStore(root: engines,
+            trustedPublisherKeys: ["test-key": newKey.publicKey.rawRepresentation])
+        try await rotated.install(extractedDirectory: fixture.source, signedManifest: signed)
+        let catalog = InferenceEngineCatalog(publisherKeys: ["test-key": newKey.publicKey.rawRepresentation], releases: [
+            .init(packageID: "qwen-hybrid", version: next, architectureIDs: ["ornith-1.5-9b"],
+                minimumMacOSMajorVersion: 15, manifestURL: URL(string: "https://github.com/fixture/manifest")!,
+                archiveURL: URL(string: "https://github.com/fixture/archive")!, archiveBytes: 17, installedBytes: 17)
+        ])
+        let controller = try InferenceEngineDistributionController(root: engines, catalog: catalog)
+        let updated = try await controller.acquire(architectureID: "ornith-1.5-9b", quantizationLayout: "affine",
+            protocolVersion: 3, macOSMajorVersion: 15)
+        try await controller.bindModel("model", engine: updated)
+        #expect(try await rotated.requirements(for: "model") == [.init(packageID: "qwen-hybrid", version: next)])
+        #expect(try await rotated.knownGood(for: "model") == nil)
+        try await controller.markKnownGood("model", engine: updated)
+        #expect(try await rotated.knownGood(for: "model")?.version == next)
+        try await controller.release(updated)
+    }
+
     @Test func aSeparateManagerCannotRemoveAnotherManagersLeasedEngine() async throws {
         let fixture = try fixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
