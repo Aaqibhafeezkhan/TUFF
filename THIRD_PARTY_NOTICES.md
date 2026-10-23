@@ -107,7 +107,7 @@ preserve the license and NOTICE material of its exact contents.
 | Package | Version | License |
 | --- | --- | --- |
 | [trafilatura](https://github.com/adbar/trafilatura) | 2.3.0 | Apache-2.0 |
-| [pypdf](https://github.com/py-pdf/pypdf) | 6.20.0 | BSD-3-Clause |
+| [pypdf](https://github.com/py-pdf/pypdf) | 6.21.2 | BSD-3-Clause |
 | [courlan](https://github.com/adbar/courlan) | 1.4.0 | Apache-2.0 |
 | [htmldate](https://github.com/adbar/htmldate) | 1.11.0 | Apache-2.0 |
 | [jusText](https://github.com/miso-belica/jusText) | 3.0.2 | BSD-2-Clause |
