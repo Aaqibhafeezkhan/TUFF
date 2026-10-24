@@ -75,6 +75,32 @@ extension RawCompletionLoopTests {
             layers: 60, physicalMemory: 16 << 30))
     }
 
+    /// Ornith 1.5 122B's 65 GB of experts outgrow a 16 or 24 GB Mac's file
+    /// cache but not a 64 GB one's. Ornith 35B's 18 GB never do.
+    @Test func expertPayloadsFarLargerThanMemoryReadPastTheFileCache() {
+        let ornith122: UInt64 = 5_308_416, ornith35: UInt64 = 1_769_472
+        #expect(Model.expertPayloadOutgrowsFileCache(expertStride: ornith122, expertsPerLayer: 256,
+            layers: 48, physicalMemory: 16 << 30))
+        #expect(Model.expertPayloadOutgrowsFileCache(expertStride: ornith122, expertsPerLayer: 256,
+            layers: 48, physicalMemory: 24 << 30))
+        #expect(!Model.expertPayloadOutgrowsFileCache(expertStride: ornith122, expertsPerLayer: 256,
+            layers: 48, physicalMemory: 64 << 30))
+        #expect(!Model.expertPayloadOutgrowsFileCache(expertStride: ornith35, expertsPerLayer: 256,
+            layers: 40, physicalMemory: 16 << 30))
+        #expect(Model.expertPayloadOutgrowsFileCache(expertStride: .max, expertsPerLayer: 256,
+            layers: 48, physicalMemory: 16 << 30))
+        #expect(!Model.expertPayloadOutgrowsFileCache(expertStride: ornith122, expertsPerLayer: 0,
+            layers: 48, physicalMemory: 16 << 30))
+        // Only the 122B, where it was measured to help: Flash Next is as large
+        // and decoded slower without the cache.
+        #expect(Model.readsExpertsPastFileCache(variant: .ornith15_122B, expertStride: ornith122,
+            expertsPerLayer: 256, layers: 48, physicalMemory: 16 << 30))
+        #expect(!Model.readsExpertsPastFileCache(variant: .qwen38FlashNext, expertStride: ornith122,
+            expertsPerLayer: 256, layers: 48, physicalMemory: 16 << 30))
+        #expect(!Model.readsExpertsPastFileCache(variant: .ornith15_122B, expertStride: ornith122,
+            expertsPerLayer: 256, layers: 48, physicalMemory: 64 << 30))
+    }
+
     @Test func checkpointCopiesRespectTheBudgetBeforeAllocation() async throws {
         let context = try MetalContext()
         let tokenizer = try await GFTokenizer.load()

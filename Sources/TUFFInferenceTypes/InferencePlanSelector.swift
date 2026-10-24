@@ -58,6 +58,25 @@ public enum InferencePlanSelector {
     /// little paging by another app during an answer must not quarantine a
     /// choice; thrashing pages far more than this.
     public static let significantSwapGrowthBytes: UInt64 = 64 << 20
+    /// One answer that pages this much rules its plan out on its own.
+    public static let severeSwapGrowthBytes: UInt64 = 2 << 30
+    /// How many of a plan's latest runs decide whether it pages.
+    public static let pagingRunsConsidered = 3
+
+    /// Whether a plan's own recent runs rule it out. Memory pressure or one
+    /// severe burst of paging does at once. Ordinary paging is forgiven once:
+    /// a model's first load into an already full Mac can page even when its
+    /// plan fits, and ruling the plan out on that one answer left Ornith 1.5
+    /// 122B on a plan 2.5x slower. A second paging run among its last three
+    /// rules it out.
+    public static func isQuarantined(_ candidateID: String,
+                                     observations: [InferencePlanObservation]) -> Bool {
+        let recent = observations.filter { $0.candidateID == candidateID }.suffix(pagingRunsConsidered)
+        if recent.contains(where: { $0.pressure != .normal || $0.swapGrowthBytes >= severeSwapGrowthBytes }) {
+            return true
+        }
+        return recent.filter { $0.swapGrowthBytes >= significantSwapGrowthBytes }.count >= 2
+    }
 
     public static func select(candidates: [InferencePlanCandidate],
                               observations: [InferencePlanObservation] = [],
@@ -79,8 +98,7 @@ public enum InferencePlanSelector {
         for candidate in legal {
             // Allocation health also matters when prefill was cancelled before
             // any decode token. It is independent of cold/warm speed classes.
-            if observations.contains(where: { $0.candidateID == candidate.id
-                && ($0.pressure != .normal || $0.swapGrowthBytes >= significantSwapGrowthBytes) }) {
+            if isQuarantined(candidate.id, observations: observations) {
                 pressured.insert(candidate.id)
                 continue
             }

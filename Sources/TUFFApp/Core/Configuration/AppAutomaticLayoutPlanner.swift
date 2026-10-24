@@ -213,10 +213,28 @@ enum AppAutomaticLayoutPlanner {
             : min(affordable, max(minimumContext,
                 profile == .balanced && !cacheDominates ? 16_384 : catalog.runtimeDefaults.contextTokens))
         let required = contextOverride ?? AppContextLengthOption.options(for: descriptor).map(\.tokens).last { $0 <= target } ?? 2_048
-        let fallback = affordablePool.filter { $0.selection.contextTokens == required }.sorted {
-            if $0.denseLayers.count != $1.denseLayers.count { return $0.denseLayers.count > $1.denseLayers.count }
-            return $0.selection.peakAllocatedBytes < $1.selection.peakAllocatedBytes
-        }.first ?? pool.min { $0.selection.peakAllocatedBytes < $1.selection.peakAllocatedBytes }!
+        // Once a plan is ruled out for paging, step down to the next one this
+        // order prefers that needs clearly less memory, rather than to the
+        // smallest plan of all. For Ornith 1.5 122B on a 16 GB M2 that kept its
+        // projection layers resident at 8 slots, 1.61 tokens per second
+        // without paging, where the smallest plan streamed them at 0.97.
+        let ruledOut = legal.filter {
+            InferencePlanSelector.isQuarantined($0.selection.id, observations: observations)
+        }
+        let ceiling = ruledOut.map(\.selection.peakAllocatedBytes).min().map { $0 / 10 * 9 }
+        let belowCeiling: (Candidate) -> Bool = { candidate in
+            ceiling.map { candidate.selection.peakAllocatedBytes <= $0 } ?? true
+        }
+        func preferred(_ candidates: [Candidate]) -> Candidate? {
+            candidates.filter { $0.selection.contextTokens == required && belowCeiling($0) }.sorted {
+                if $0.denseLayers.count != $1.denseLayers.count { return $0.denseLayers.count > $1.denseLayers.count }
+                return $0.selection.peakAllocatedBytes < $1.selection.peakAllocatedBytes
+            }.first
+        }
+        // The usual pool holds only the qualified cache size, so a step down
+        // may have to look at every legal plan.
+        let fallback = preferred(affordablePool) ?? (ceiling == nil ? nil : preferred(legal))
+            ?? pool.min { $0.selection.peakAllocatedBytes < $1.selection.peakAllocatedBytes }!
         let objective = InferencePlanningObjective(rawValue: profile.rawValue) ?? .balanced
         guard let selected = try? InferencePlanSelector.select(candidates: legal.map(\.selection),
             observations: observations, workloadKey: workloadKey, objective: objective,

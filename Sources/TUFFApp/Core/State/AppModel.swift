@@ -2996,10 +2996,11 @@ public final class AppModel {
         // can take it; a manual setting is the user's to change.
         if imageTurnNeedsLargerExpertCache {
             let directory = URL(fileURLWithPath: modelPathText)
-            if automaticMemory, let summary = AppAutomaticMemoryPlanner.layoutSummary(at: directory),
+            // The installed layout when it can be read, else the catalog's.
+            if automaticMemory,
                let plan = AppAutomaticMemoryPlanner.plan(for: selectedDescriptor, on: deviceCapabilities,
-                    profile: automaticMemoryProfile, layoutSummary: summary, workloadKey: autoWorkloadKey,
-                    modelDirectory: directory, contextTokens: effectiveMaxContextTokens,
+                    profile: automaticMemoryProfile, workloadKey: autoWorkloadKey,
+                    modelDirectory: directory, useBundledLayout: true, contextTokens: effectiveMaxContextTokens,
                     engineIdentity: (client as? any AppInferenceEngineReporting)?.currentEngineIdentity,
                     imageInput: true),
                plan.expertCacheSlots >= RuntimeConfiguration.minimumExpertCacheSlotsForChunkedPrefill {

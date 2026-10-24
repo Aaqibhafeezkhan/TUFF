@@ -15,8 +15,9 @@ import TUFFRuntimeDescriptions
         .init(unifiedMemoryBytes: 16 << 30, macOSMajorVersion: 26, appleSiliconGeneration: 2)
     }
 
-    /// What happened with Ornith 1.5 122B on a 16 GB M2: the first plan paged,
-    /// so Auto chose 8 slots for text. An image workload keeps 16.
+    /// What happened with Ornith 1.5 122B on a 16 GB M2: the first plan paged
+    /// (twice, since one paging run is forgiven), so Auto chose 8 slots for
+    /// text. An image workload keeps 16.
     @Test func anImageWorkloadKeepsEnoughSlotsAfterPaging() throws {
         let descriptor = AppModelInstallDescriptor(catalog: TUFFModelCatalog.ornith15_122B)
         let summary = try #require(AppAutomaticMemoryPlanner.predictedLayout(for: descriptor))
@@ -28,11 +29,15 @@ import TUFFRuntimeDescriptions
             decodeTokens: 92, decodeSeconds: 56, timeToFirstTokenSeconds: 31,
             swapGrowthBytes: 4_873_977_856)
         let text = try #require(AppAutomaticMemoryPlanner.plan(for: descriptor, on: device,
-            profile: .speed, layoutSummary: summary, observations: [paged], workloadKey: "fixture",
+            profile: .speed, layoutSummary: summary, observations: [paged, paged], workloadKey: "fixture",
             contextTokens: 4_096))
         #expect(text.expertCacheSlots < 16, "the fixture no longer reproduces the fallback")
+        // The step down keeps every projection layer resident and needs
+        // clearly less memory than the plan that paged.
+        #expect(text.denseResidencyPolicy == .resident)
+        #expect(text.estimatedWorkingSetBytes <= first.estimatedWorkingSetBytes / 10 * 9)
         let image = try #require(AppAutomaticMemoryPlanner.plan(for: descriptor, on: device,
-            profile: .speed, layoutSummary: summary, observations: [paged], workloadKey: "fixture",
+            profile: .speed, layoutSummary: summary, observations: [paged, paged], workloadKey: "fixture",
             contextTokens: 4_096, imageInput: true))
         #expect(image.expertCacheSlots >= RuntimeConfiguration.minimumExpertCacheSlotsForChunkedPrefill)
     }
@@ -97,5 +102,47 @@ import TUFFRuntimeDescriptions
 
         model.runtimeOptions.expertCacheSlots = 16
         #expect(!model.imageTurnNeedsLargerExpertCache)
+    }
+
+    /// On Auto, an image message to a session left at 8 slots reloads with a
+    /// cache chunked prefill can use, then sends.
+    @MainActor
+    @Test func autoReloadsWithEnoughSlotsBeforeAnImageTurn() async throws {
+        let directory = try makeVisionReadyModelInstall("image-slots-auto")
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("image-slots-auto-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let client = MockLifecycleInferenceClient()
+        let model = makeAppModel(modelDirectory: directory, client: client,
+            attachmentStore: AppImageAttachmentStore(directoryURL: root.appendingPathComponent("staged")))
+        model.automaticMemory = true
+        model.runtimeOptions.expertCacheSlots = 8
+        model.runtimeOptions.prefillEnabled = false
+
+        let png = root.appendingPathComponent("red.png")
+        try writePNG(to: png)
+        withVisionEnabled { model.addImages([png]) }
+        let deadline = Date().addingTimeInterval(5)
+        while model.isAddingImages, Date() < deadline { try await Task.sleep(nanoseconds: 5_000_000) }
+        try #require(model.imageAttachments.count == 1)
+
+        model.loadState = .ready(modelDirectory: directory, loadSeconds: 1)
+        model.promptText = "What colour is this?"
+        model.run()
+        await client.waitForEnsureLoadedCallCount(1)
+        for _ in 0..<500 where client.generationCallCount() == 0 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let minimum = RuntimeConfiguration.minimumExpertCacheSlotsForChunkedPrefill
+        #expect(try #require(client.ensureLoadedCalls.last).2.expertCacheSlots >= minimum)
+        let request = try #require(client.lastGenerationRequest())
+        #expect(request.imageAttachments.count == 1)
+        #expect(request.runtimeOptions.expertCacheSlots >= minimum)
+        #expect(request.runtimeOptions.prefillEnabled)
+        #expect(model.error == nil)
     }
 }

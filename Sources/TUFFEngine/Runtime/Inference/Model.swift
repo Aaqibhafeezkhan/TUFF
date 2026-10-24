@@ -63,6 +63,33 @@ public struct Model {
         return min(configured, usefulMaximum)
     }
 
+    /// Ornith 1.5 122B's expert reads skip the file cache when its experts are
+    /// more than twice this Mac's memory. On a 16 GB M2 its 65 GB of experts
+    /// went through the cache at the same speed but pushed 0.9 to 1.2 GB to
+    /// swap per 80-token answer, and that paging sent Auto to a plan 2.5x
+    /// slower. Past the cache: 1.90 against 1.83 to 1.87 tokens per second, 0
+    /// to 0.17 GB of swap writes.
+    ///
+    /// Size alone is not the rule. Qwen 3.8 Flash Next has 76 GB of experts,
+    /// never paged with the cache, and decoded 10% slower without it.
+    static func readsExpertsPastFileCache(variant: ModelVariant?, expertStride: UInt64,
+                                          expertsPerLayer: Int, layers: Int,
+                                          physicalMemory: UInt64) -> Bool {
+        variant == .ornith15_122B && expertPayloadOutgrowsFileCache(expertStride: expertStride,
+            expertsPerLayer: expertsPerLayer, layers: layers, physicalMemory: physicalMemory)
+    }
+
+    /// Whether every routed expert together is more than twice this Mac's memory.
+    static func expertPayloadOutgrowsFileCache(expertStride: UInt64, expertsPerLayer: Int,
+                                               layers: Int, physicalMemory: UInt64) -> Bool {
+        guard physicalMemory > 0, expertsPerLayer > 0, layers > 0 else { return false }
+        let perLayer = expertStride.multipliedReportingOverflow(by: UInt64(expertsPerLayer))
+        let allLayers = perLayer.partialValue.multipliedReportingOverflow(by: UInt64(layers))
+        let limit = physicalMemory.multipliedReportingOverflow(by: 2)
+        return perLayer.overflow || allLayers.overflow
+            || (!limit.overflow && allLayers.partialValue > limit.partialValue)
+    }
+
     static func shouldBypassExpertFilesystemCache(expertStride: UInt64, minimumSlots: Int,
                                                  layers: Int, physicalMemory: UInt64) -> Bool {
         guard physicalMemory > 0, minimumSlots > 0, layers > 0 else { return false }
@@ -652,7 +679,11 @@ public struct Model {
                 fileDescriptor: layerFD,
                 bypassFilesystemCache: Self.shouldBypassExpertFilesystemCache(
                     expertStride: packedExpertsLayout.expertStride, minimumSlots: config.topKExperts,
-                    layers: config.numLayers, physicalMemory: ProcessInfo.processInfo.physicalMemory))
+                    layers: config.numLayers, physicalMemory: ProcessInfo.processInfo.physicalMemory)
+                    || Self.readsExpertsPastFileCache(variant: config.variant,
+                        expertStride: packedExpertsLayout.expertStride,
+                        expertsPerLayer: packedExpertsLayout.expertsPerLayer,
+                        layers: config.numLayers, physicalMemory: ProcessInfo.processInfo.physicalMemory))
         }
         streamersBox.layerVerified[L] = true
     }

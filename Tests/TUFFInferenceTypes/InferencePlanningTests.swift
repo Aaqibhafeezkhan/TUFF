@@ -152,7 +152,32 @@ import Testing
             decodeTokens: 100, decodeSeconds: 1, timeToFirstTokenSeconds: 0.1,
             swapGrowthBytes: InferencePlanSelector.significantSwapGrowthBytes)
         #expect(try select(candidates, observations("safe", perToken: 0.1)
-            + [swapping]).candidate.id == "safe")
+            + observations("fast", perToken: 0.01) + [swapping, swapping]).candidate.id == "safe")
+    }
+
+    /// A first load into a full Mac can page once even when the plan fits.
+    /// Ruling the plan out on that one answer left Ornith 1.5 122B on a plan
+    /// 2.5x slower, so one paging run in three is forgiven and no more.
+    @Test func onePagingRunIsForgivenAndASecondIsNot() throws {
+        let candidates = [candidate("safe", bytes: 300), candidate("fast", bytes: 900)]
+        func run(_ swap: UInt64, _ pressure: InferenceMemoryPressure = .normal) -> InferencePlanObservation {
+            .init(candidateID: "fast", workloadKey: "warm-short", decodeTokens: 100,
+                  decodeSeconds: 1, timeToFirstTokenSeconds: 0.1, pressure: pressure, swapGrowthBytes: swap)
+        }
+        let paged = run(InferencePlanSelector.significantSwapGrowthBytes)
+        let clean = run(0)
+        let safe = observations("safe", perToken: 0.1)
+        #expect(try select(candidates, safe + [paged, clean, clean]).candidate.id == "fast")
+        #expect(try select(candidates, safe + [clean, paged, clean]).candidate.id == "fast")
+        #expect(try select(candidates, safe + [paged, clean, paged]).candidate.id == "safe")
+        // Only the last three runs count: an old paging run has aged out.
+        #expect(try select(candidates, safe + [paged, clean, paged, clean, clean]).candidate.id == "fast")
+        // One severe burst, or memory pressure, is enough on its own.
+        #expect(try select(candidates, safe + [clean, clean,
+            run(InferencePlanSelector.severeSwapGrowthBytes)]).candidate.id == "safe")
+        #expect(try select(candidates, safe + [clean, clean, run(0, .warning)]).candidate.id == "safe")
+        #expect(!InferencePlanSelector.isQuarantined("fast", observations: [paged]))
+        #expect(InferencePlanSelector.isQuarantined("fast", observations: [paged, paged]))
     }
 
     /// The swap counters are system-wide. A few pages written by another app
@@ -182,7 +207,8 @@ import Testing
 
     @Test func cancelledColdPrefillQuarantinesAllocationForAWarmRequest() throws {
         let candidates = [candidate("safe", bytes: 300), candidate("fast", bytes: 900)]
-        for paging in [UInt64(0), InferencePlanSelector.significantSwapGrowthBytes] {
+        // Pressure on its own; ordinary paging needs a second run, as above.
+        for paging in [UInt64(0), InferencePlanSelector.severeSwapGrowthBytes] {
             let cancelled = InferencePlanObservation(candidateID: "fast", workloadKey: "cold-short",
                 decodeTokens: 0, decodeSeconds: 0, timeToFirstTokenSeconds: 0,
                 pressure: paging == 0 ? .warning : .normal, swapGrowthBytes: paging)

@@ -60,9 +60,10 @@ public enum AppAutoPerformanceRecords {
             return records.entries.filter { entry in
                 entry.identity == identity && entry.date > cutoff
                     // Pressure quarantines a choice while the environment is
-                    // recovering; it does not permanently ban it.
+                    // recovering; it does not permanently ban it. Paging stays
+                    // on record, so the selector can tell a one-off from a
+                    // plan that keeps paging.
                     && (entry.observation.pressure == .normal
-                        && entry.observation.swapGrowthBytes < InferencePlanSelector.significantSwapGrowthBytes
                         || entry.date > Date().addingTimeInterval(-900))
             }.map(\.observation)
         }
