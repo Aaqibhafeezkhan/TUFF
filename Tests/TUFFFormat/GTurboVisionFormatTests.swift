@@ -195,7 +195,7 @@ private enum VisionFormatFixture {
     /// also what an engine predating the field expects, so a wide pack can
     /// never load into one.
     @Test func qwenTextWidthMustMatchTheMerger() throws {
-        for width in [4_096, 5_120] {
+        for width in [3_072, 4_096, 5_120] {
             let wide = qwenManifest(mergerWidth: UInt64(width), textHiddenSize: width)
             let decoded = try GTurboVisionManifestCodec.decode(
                 try GTurboVisionManifestCodec.encode(wide))

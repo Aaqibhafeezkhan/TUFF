@@ -26,7 +26,7 @@ enum IndexLoader {
         let indexPath  = (snapshotDir as NSString).appendingPathComponent("model.safetensors.index.json")
         let configPath = (snapshotDir as NSString).appendingPathComponent("config.json")
 
-        let weightMap: [String: String]
+        var weightMap: [String: String]
         do {
             let data = try Data(contentsOf: URL(fileURLWithPath: indexPath))
             guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -41,6 +41,11 @@ enum IndexLoader {
         }
 
         let indexSha = try Sha256Stream.hashFile(path: indexPath)
+        // Ornith's 122B MLX index maps its vision tower to a shard that was
+        // never uploaded. The text install never reads those tensors.
+        if indexSha == TUFFModelCatalog.ornith15_122B.source.sourceIndexSHA256 {
+            weightMap = weightMap.filter { $0.value != "model-vision.safetensors" }
+        }
 
         var baseBits = 4
         var baseGroup = 64

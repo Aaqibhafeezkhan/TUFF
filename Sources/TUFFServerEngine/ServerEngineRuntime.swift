@@ -12,7 +12,7 @@ public enum ServerEngineRuntime {
             lock.lock()
             defer { lock.unlock() }
             if let context { return context }
-            let created = try MetalContext()
+            let created = try MetalContext(kernelGroups: [])
             context = created
             return created
         }

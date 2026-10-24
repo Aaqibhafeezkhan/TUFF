@@ -5,10 +5,11 @@ import Testing
 /// Actual pinned publisher/config snapshots, rather than shapes manufactured
 /// from the runtime registry. Provenance is recorded in IMPLEMENTATION_9.0.0.
 @Suite struct Qwen35NewArchitectureTests {
-    @Test func parsesAllFourArchitectureSnapshots() throws {
+    @Test func parsesAllFiveArchitectureSnapshots() throws {
         let cases: [(String, RepackModelVariant, Int, Int, Int)] = [
             ("ornith9", .ornith15_9B, 4096, 32, 0),
             ("ornith35", .ornith15_35B_A3B, 2048, 40, 256),
+            ("ornith122", .ornith15_122B, 3072, 48, 256),
             ("ornith397", .ornith15_397B, 4096, 60, 512),
             ("qwen27", .qwen38_27B, 5120, 64, 0),
         ]

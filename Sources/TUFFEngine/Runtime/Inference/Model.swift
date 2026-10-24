@@ -798,9 +798,9 @@ extension Model {
                 actual: weightsSize)
         }
         let eagerShaStart = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
-        try Sha256Verifier.verifyFile(fileDescriptor: weightsFD,
-                                      named: "model_weights.bin",
-                                      expectedHex: weightsEntry.sha256)
+        try VerifiedFileMemo.standard.verifyFile(fileDescriptor: weightsFD,
+                                                 named: "model_weights.bin",
+                                                 expectedHex: weightsEntry.sha256)
         let layout: PackedExpertsLayout
         if expecting.feedForwardKind == .dense {
             layout = .dense(numLayers: expecting.numLayers)

@@ -50,6 +50,22 @@ public enum TUFFCommandError: Error, Equatable, CustomStringConvertible {
 }
 
 public enum TUFFCommand {
+    /// Every catalog selector, wrapped like the rest of the help.
+    static let modelNames: String = {
+        let names = TUFFModelCatalog.all.map(\.selector)
+        let sentence = "model names: " + names.dropLast().joined(separator: ", ")
+            + ", and " + names.last! + "."
+        var lines: [String] = [], line = ""
+        for word in sentence.split(separator: " ") {
+            if !line.isEmpty, line.count + 1 + word.count > 72 {
+                lines.append(line)
+                line = ""
+            }
+            line += (line.isEmpty ? "" : " ") + word
+        }
+        return (lines + [line]).joined(separator: "\n")
+    }()
+
     public static let usage = """
     TUFF — local model command line
 
@@ -71,8 +87,7 @@ public enum TUFFCommand {
       bench    Benchmark installed models and optionally share the result on
                GitHub Discussions.
 
-    model names include gemma4-e2b, gemma4-e4b, gemma4-12b-qat, gemma4,
-    qwen36, qwen38-flash-next, gpt-oss-20b, gpt-oss-120b, and minimax-m2.7.
+    \(modelNames)
 
     Run `tuff prompt --help`, `tuff serve --help` or `tuff bench --help` for
     command-specific options.

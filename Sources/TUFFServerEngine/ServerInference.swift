@@ -432,10 +432,14 @@ public actor ServerModelSession: ServerInferenceBackend {
         guard FileManager.default.fileExists(atPath: templateURL.path) else {
             throw GFTokenizerError.missingToolTemplate
         }
-        let tokenizer = try await GFTokenizer.load(from: tokenizerFolder)
         // A server that loads and unloads models on demand passes one context
-        // in, so each load does not compile the shader library again.
-        let context = try sharedContext ?? MetalContext()
+        // in, so each load does not compile the shader library again. The
+        // compiler runs while the tokenizer and weights load, and the tokenizer
+        // is read while the weights load.
+        let context = try sharedContext ?? MetalContext(kernelGroups: [])
+        context.prewarmKernels(forModelDirectory: modelDirectory, maxContext: maxContext,
+                               includeVision: VisionRuntime.isSupported(on: context.device))
+        async let loadedTokenizer = GFTokenizer.load(from: tokenizerFolder)
         let runtime = runtimeConfiguration
         let model = try Model.load(
             directoryURL: modelDirectory,
@@ -450,6 +454,7 @@ public actor ServerModelSession: ServerInferenceBackend {
                                            runtimeConfiguration: runtime)
         let scratch = try RawCompletionScratch(context: context, vocab: model.config.vocabSize,
                                                logitSoftcap: Float(model.config.finalLogitSoftcap))
+        let tokenizer = try await loadedTokenizer
         let templateDigest = SHA256.hash(data: try Data(contentsOf: templateURL))
             .map { String(format: "%02x", $0) }
             .joined()

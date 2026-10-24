@@ -13,6 +13,7 @@ public enum TUFFModelID: String, Codable, CaseIterable, Sendable {
     case qwen38FlashNext = "qwen3.8-flash-next"
     case ornith15_9B = "ornith-1.5-9b"
     case ornith15_35B_A3B = "ornith-1.5-35b-a3b"
+    case ornith15_122B = "ornith-1.5-122b"
     case ornith15_397B = "ornith-1.5-397b"
     case qwen38_27B = "qwen3.8-27b"
     case gemma4_26B_Heretic = "gemma4-26b-heretic"
@@ -38,6 +39,7 @@ public enum TUFFArchitectureID: String, Codable, Sendable {
     case qwen38FlashNext = "qwen3.8-flash-next"
     case ornith15_9B = "ornith-1.5-9b"
     case ornith15_35B_A3B = "ornith-1.5-35b-a3b"
+    case ornith15_122B = "ornith-1.5-122b"
     case ornith15_397B = "ornith-1.5-397b"
     case qwen38_27B = "qwen3.8-27b"
 }
@@ -128,6 +130,7 @@ public extension TUFFArchitectureProfile {
 public extension TUFFArchitectureProfile {
     static let ornith15_9B = TUFFArchitectureProfile(id: .ornith15_9B, family: .qwen36, feedForwardKind: .dense, weightLayout: .affine)
     static let ornith15_35B_A3B = TUFFArchitectureProfile(id: .ornith15_35B_A3B, family: .qwen36, feedForwardKind: .mixtureOfExperts, weightLayout: .affine)
+    static let ornith15_122B = TUFFArchitectureProfile(id: .ornith15_122B, family: .qwen36, feedForwardKind: .mixtureOfExperts, weightLayout: .affine)
     static let ornith15_397B = TUFFArchitectureProfile(id: .ornith15_397B, family: .qwen36, feedForwardKind: .mixtureOfExperts, weightLayout: .affine)
     static let qwen38_27B = TUFFArchitectureProfile(id: .qwen38_27B, family: .qwen36, feedForwardKind: .dense, weightLayout: .affine)
 }
@@ -444,7 +447,7 @@ public struct TUFFModelDescriptor: Codable, Equatable, Sendable, Identifiable {
         case .gemma4_E2B, .gemma4_E4B, .gptOss_20B, .gptOss_120B: 131_072
         case .minimaxM27: 204_800
         case .gemma4_12B_QAT, .gemma4_26B_A4B, .gemma4_26B_Heretic, .qwen36_35B_A3B, .qwen38FlashNext,
-             .ornith15_9B, .ornith15_35B_A3B, .ornith15_397B, .qwen38_27B: 262_144
+             .ornith15_9B, .ornith15_35B_A3B, .ornith15_122B, .ornith15_397B, .qwen38_27B: 262_144
         }
     }
 
@@ -1224,6 +1227,46 @@ public enum TUFFModelCatalog {
                 minimumUnifiedMemoryBytes: 16 * oneGiB,
                 minimumAppleSiliconGeneration: 2))])
 
+    public static let ornith15_122B = TUFFModelDescriptor(
+        id: .ornith15_122B, selector: "ornith-122b", apiModelID: "ornith-122b",
+        displayName: "Ornith 1.5 122B Q4", shortName: "Ornith 1.5 122B",
+        summary: "122B MoE, about 10B active. Streams routed experts with a bounded cache.",
+        family: .qwen36, architecture: .ornith15_122B, installDirectoryName: "ornith-122b.gturbo",
+        // The index also names a model-vision.safetensors that was never
+        // uploaded. The installer drops those entries for this pinned index.
+        source: TUFFModelSource(repoID: "ornith-ai/Ornith-1.5-122B-MLX-4bit",
+            revision: "8640002ba242524ee7288ead4a3454dd919e8526",
+            sourceIndexSHA256: "deea07c02a2b760c991d27e5646c3c42bae8d5fa8a4a63be349f95655485f3a1",
+            manifestModelID: "ornith-ai/Ornith-1.5-122B-MLX-4bit",
+            approximateDownloadBytes: 68_740_000_000, installedBytes: 68_800_000_000, reserveBytes: oneGiB),
+        hardware: TUFFModelHardwareRequirements(minimumUnifiedMemoryBytes: 16 * oneGiB),
+        // Summed from the safetensors headers: 3,479,860,224 bytes of resident
+        // weights, 156,303,360 of gated-DeltaNet state, 50,331,648 of KV cache
+        // at 2K and 4,076,863,488 for 16 expert slots, plus the scratch
+        // allowance Flash Next measured.
+        memory: TUFFModelMemoryProfile(qualifiedDefaultWorkingSetBytes: 8_400_000_000,
+            defaultContextTokens: 2_048, expertCacheBytesPerSlot: 254_803_968, kvCache: TUFFKVCacheProfile(fullAttentionBytesPerToken: 24_576)),
+        qualification: .qualified,
+        runtimeDefaults: TUFFModelRuntimeDefaults(contextTokens: 2_048, expertCacheSlots: 16,
+            temperature: 0.7, topK: 20, topP: 0.8),
+        capabilities: [.textGeneration, .imageInput, .reasoning], reasoningControl: .toggleWithPreservation,
+        // The MLX conversion's vision shard is missing, so the pack comes from
+        // Ornith's own BF16 release, as with 9B and 35B.
+        addons: [TUFFModelAddonDescriptor(
+            id: "ornith-122b-image-input",
+            displayName: "Ornith 1.5 122B Image Support",
+            kind: .imageInput,
+            source: TUFFModelSource(repoID: "ornith-ai/Ornith-1.5-122B",
+                revision: "7681ef608624e7532d8164128bcffdbdbaf1b1af",
+                sourceIndexSHA256: "54f60cfac525650a60c4ff0ac034624cce71e94ff0535ca77c9c5e2b7d0f7686",
+                manifestModelID: "ornith-ai/Ornith-1.5-122B",
+                approximateDownloadBytes: 902_581_728,
+                installedBytes: 902_581_728,
+                reserveBytes: oneGiB),
+            hardware: TUFFModelHardwareRequirements(
+                minimumUnifiedMemoryBytes: 16 * oneGiB,
+                minimumAppleSiliconGeneration: 2))])
+
     public static let qwen38_27B = TUFFModelDescriptor(
         id: .qwen38_27B, selector: "qwen38-27b", apiModelID: "qwen38-27b",
         displayName: "Qwen 3.8 27B Q4", shortName: "Qwen 3.8 27B",
@@ -1350,6 +1393,7 @@ public enum TUFFModelCatalog {
         qwen38FlashNext,
         ornith15_9B,
         ornith15_35B_A3B,
+        ornith15_122B,
         ornith15_397B,
         qwen38_27B,
         gemma4_26B_Heretic,

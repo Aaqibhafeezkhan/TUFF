@@ -42,6 +42,7 @@ import TUFFRepackCore
     private let separateImageSources: [TUFFModelID: String] = [
         .ornith15_9B: "ornith-ai/Ornith-1.5-9B",
         .ornith15_35B_A3B: "ornith-ai/Ornith-1.5-35B-A3B",
+        .ornith15_122B: "ornith-ai/Ornith-1.5-122B",
     ]
 
     /// Every image pack's advertised download, pinned to the coalesced range
@@ -70,6 +71,7 @@ import TUFFRepackCore
             // download is exactly the payload.
             .ornith15_9B: 912_020_960,
             .ornith15_35B_A3B: 893_142_496,
+            .ornith15_122B: 902_581_728,
             .ornith15_397B: 912_020_960,
         ]
         for model in TUFFModelCatalog.all {
@@ -167,6 +169,7 @@ import TUFFRepackCore
             "qwen3.8-flash-next",
             "ornith-1.5-9b",
             "ornith-1.5-35b-a3b",
+            "ornith-1.5-122b",
             "ornith-1.5-397b",
             "qwen3.8-27b",
             "gemma4-26b-heretic",
@@ -183,6 +186,7 @@ import TUFFRepackCore
             "qwen38-flash-next.gturbo",
             "ornith-9b.gturbo",
             "ornith-35b.gturbo",
+            "ornith-122b.gturbo",
             "ornith-397b.gturbo",
             "qwen38-27b.gturbo",
             "gemma4-heretic.gturbo",

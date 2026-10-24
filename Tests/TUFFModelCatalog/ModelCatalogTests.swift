@@ -41,7 +41,7 @@ import Testing
     @Test func currentCatalogOrderAndSelectorsAreStable() {
         #expect(TUFFModelCatalog.all.map(\.selector) == [
             "gemma4-e2b", "gemma4-e4b", "gemma4-12b-qat", "gemma4", "qwen36",
-            "gpt-oss-20b", "gpt-oss-120b", "minimax-m2.7", "qwen38-flash-next", "ornith-9b", "ornith-35b", "ornith-397b", "qwen38-27b", "gemma4-heretic",
+            "gpt-oss-20b", "gpt-oss-120b", "minimax-m2.7", "qwen38-flash-next", "ornith-9b", "ornith-35b", "ornith-122b", "ornith-397b", "qwen38-27b", "gemma4-heretic",
         ])
         #expect(TUFFModelCatalog.model(selector: "e2b")?.id == .gemma4_E2B)
         #expect(TUFFModelCatalog.default.id == .gemma4_26B_A4B)

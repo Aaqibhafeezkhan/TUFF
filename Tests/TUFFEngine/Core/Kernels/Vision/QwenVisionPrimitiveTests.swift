@@ -8,6 +8,7 @@ import Testing
     @Test func mergerWidthFollowsTheTextModel() {
         let widths: [(ModelVariant?, Int)] = [
             (nil, 2_048), (.qwen36_35B_A3B, 2_048), (.ornith15_35B_A3B, 2_048),
+            (.ornith15_122B, 3_072),
             (.ornith15_9B, 4_096), (.ornith15_397B, 4_096), (.qwen38_27B, 5_120),
         ]
         for (variant, width) in widths {

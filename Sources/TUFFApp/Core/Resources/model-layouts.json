@@ -1312,6 +1312,314 @@
       },
       "sourceIndexSHA256": "8b2204b5a4741cb323a49d3ad6cfc5523c72c7c8ffa6e668a5627fb36ee13e52"
     },
+    "ornith-1.5-122b": {
+      "layout": {
+        "architectureID": "ornith-1.5-122b",
+        "layout": {
+          "denseGroupBytes": [
+            56246272,
+            56279040,
+            56295424,
+            50610176,
+            56279040,
+            56295424,
+            56279040,
+            50610176,
+            56295424,
+            56279040,
+            56295424,
+            50610176,
+            56279040,
+            56295424,
+            56279040,
+            50610176,
+            56295424,
+            56279040,
+            56295424,
+            50610176,
+            56279040,
+            56295424,
+            56279040,
+            50610176,
+            56295424,
+            56279040,
+            56295424,
+            50610176,
+            56279040,
+            56295424,
+            56279040,
+            50610176,
+            56295424,
+            56279040,
+            56295424,
+            50610176,
+            56279040,
+            56295424,
+            56279040,
+            50610176,
+            56295424,
+            56279040,
+            56262656,
+            50610176,
+            56295424,
+            56279040,
+            56295424,
+            50610176
+          ],
+          "expertLayers": [
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            },
+            {
+              "bytesPerExpert": 5308416,
+              "expertCount": 256,
+              "minimumSlots": 8
+            }
+          ],
+          "fixedResidentBytes": 858226688,
+          "rowAccessTables": []
+        },
+        "manifestSHA256": "16ce79c4e6a5ea0b3dc14eafb1ad3bf4d1b152a53a9af3f5109384e198041a2b",
+        "minimumDenseStagingBytes": 56025088,
+        "modelID": "ornith-ai/Ornith-1.5-122B-MLX-4bit",
+        "packedResidentPayloadBytes": 3479860224,
+        "schemaVersion": 1,
+        "weightsSHA256": "bccda2a0a11cb2d4e46a0e03615c09d9478275741f996d12aa98123348b0265b"
+      },
+      "sourceIndexSHA256": "deea07c02a2b760c991d27e5646c3c42bae8d5fa8a4a63be349f95655485f3a1"
+    },
     "ornith-1.5-35b-a3b": {
       "layout": {
         "architectureID": "ornith-1.5-35b-a3b",

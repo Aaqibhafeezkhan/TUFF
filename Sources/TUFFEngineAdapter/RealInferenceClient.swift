@@ -187,27 +187,33 @@ actor RealInferenceSession {
             }
             var loadSucceeded = false
             defer { if !loadSucceeded { residencyLease = nil } }
-            onState(.loading(.tokenizer))
-            if tokenizer == nil || tokenizerDirectoryCache.shouldReload(for: key.directory) {
-                do {
-                    tokenizer = try await Self.loadTokenizer(for: key.directory)
-                    tokenizerDirectoryCache.markLoaded(for: key.directory)
-                } catch {
-                    throw AppInferenceError.tokenizerUnavailable("\(error)")
-                }
+            // The shader compiler runs while the tokenizer and weights load.
+            let context: MetalContext
+            if let ctx {
+                context = ctx
+            } else {
+                context = try MetalContext(kernelGroups: [])
+                ctx = context
             }
+            context.prewarmKernels(forModelDirectory: key.directory, maxContext: key.maxContext,
+                                   includeVision: VisionRuntime.isSupported(on: context.device))
+            onState(.loading(.tokenizer))
+            // The tokenizer is read while the weights load; neither needs the other.
+            let tokenizerLoad: Task<GFTokenizer, Error>?
+            if tokenizer == nil || tokenizerDirectoryCache.shouldReload(for: key.directory) {
+                let directory = key.directory
+                tokenizerLoad = Task.detached(priority: .userInitiated) {
+                    try await Self.loadTokenizer(for: directory)
+                }
+            } else {
+                tokenizerLoad = nil
+            }
+            defer { tokenizerLoad?.cancel() }
             try Task.checkCancellation()
 
             onState(.loading(.verifyingWeights))
             let runtimeConfiguration = try key.options.resolvedRuntimeConfiguration(
                 forceLogitsHead: key.forceLogitsHead)
-            let context: MetalContext
-            if let ctx {
-                context = ctx
-            } else {
-                context = try MetalContext()
-                ctx = context
-            }
             let loadedModel = try Model.load(
                 directoryURL: key.directory,
                 device: context.device,
@@ -226,6 +232,16 @@ actor RealInferenceSession {
             let loadedScratch = try RawCompletionScratch(context: context,
                                                          vocab: loadedModel.config.vocabSize,
                                                          logitSoftcap: Float(loadedModel.config.finalLogitSoftcap))
+            if let tokenizerLoad {
+                do {
+                    tokenizer = try await tokenizerLoad.value
+                    tokenizerDirectoryCache.markLoaded(for: key.directory)
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    throw AppInferenceError.tokenizerUnavailable("\(error)")
+                }
+            }
             try Task.checkCancellation()
 
             let loadedVisionRuntime: VisionRuntime?

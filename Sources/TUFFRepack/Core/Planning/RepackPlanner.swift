@@ -268,6 +268,10 @@ enum RepackPlanner {
         case "ornith-ai/Ornith-1.5-35B-A3B":
             // Ornith's BF16 release of the 35B: Qwen 3.6's tower and width.
             expected = (333, 893_142_496)
+        case "ornith-ai/Ornith-1.5-122B":
+            // Into a 3,072-wide residual: (3072 - 2048) * 4608 * 2 + (3072 -
+            // 2048) * 2 bytes more than Qwen 3.6.
+            expected = (333, 902_581_728)
         case "ornith-ai/Ornith-1.5-9B", SupportedModelSource.ornith15_397B.modelID:
             // The same tower into a 4,096-wide residual: (4096 - 2048) * 4608
             // * 2 + (4096 - 2048) * 2 bytes more than Qwen 3.6.

@@ -50,6 +50,10 @@ preview_flags=(-Xswiftc -D -Xswiftc TUFF_NO_PREVIEWS)
 # test invocations can still override this when they intentionally cover Qwen.
 export TUFF_MODEL="${TUFF_MODEL:-gemma4}"
 
+# Model loads in tests hash every time instead of leaving verified-file
+# records in the user's Caches folder. VerifiedFileMemoTests use their own.
+export TUFF_VERIFIED_FILE_MEMO="${TUFF_VERIFIED_FILE_MEMO:-off}"
+
 # Link against the current SDK so local test builds are stamped like the
 # packaged app. Without this, SwiftPM stamps the deployment target (15.0) and
 # macOS shows the legacy appearance. See Scripts/package_app.sh.

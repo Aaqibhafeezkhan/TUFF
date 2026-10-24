@@ -308,7 +308,8 @@ private func runVisionInstall(_ arguments: Arguments) async -> Int32? {
         return 2
     }
     // The catalog's image add-on names where the pack comes from. Usually the
-    // text model's own checkpoint; for Ornith 9B and 35B, Ornith's BF16 release.
+    // text model's own checkpoint; for Ornith 9B, 35B and 122B, Ornith's BF16
+    // release.
     let addon = TUFFModelCatalog.model(manifestModelID: textSource.modelID)?
         .addons.first { $0.kind == .imageInput }?.source
     let source = (repoID: addon?.repoID ?? textSource.repoID,

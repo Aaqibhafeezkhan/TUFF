@@ -142,8 +142,8 @@ public struct VisionConfig: Sendable, Equatable {
             poolingKernel = 2
             // Every Qwen 3.5-contract checkpoint carries this tower; the
             // merger projects into whatever residual the text model has:
-            // 2,048 for Qwen 3.6 and Ornith 35B, 4,096 for Ornith 9B and
-            // 397B, 5,120 for Qwen 3.8 27B.
+            // 2,048 for Qwen 3.6 and Ornith 35B, 3,072 for Ornith 122B,
+            // 4,096 for Ornith 9B and 397B, 5,120 for Qwen 3.8 27B.
             textHiddenSize = modelVariant
                 .flatMap { ArchConfig.registeredArchitectures[$0] }
                 .map(\.hiddenSize) ?? 2_048

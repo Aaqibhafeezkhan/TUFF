@@ -24,6 +24,7 @@ enum RepackModelVariant: String, Sendable, Equatable {
     case qwen38FlashNext = "qwen3.8-flash-next"
     case ornith15_9B = "ornith-1.5-9b"
     case ornith15_35B_A3B = "ornith-1.5-35b-a3b"
+    case ornith15_122B = "ornith-1.5-122b"
     case ornith15_397B = "ornith-1.5-397b"
     case qwen38_27B = "qwen3.8-27b"
 }
@@ -588,6 +589,8 @@ struct ArchInfo: Sendable, Equatable {
             }
         } else if try i("hidden_size") == 4096 && i("num_hidden_layers") == 60 {
             selectedVariant = .ornith15_397B
+        } else if try i("hidden_size") == 3072 && i("num_hidden_layers") == 48 {
+            selectedVariant = .ornith15_122B
         } else { selectedVariant = .qwen36_35B_A3B }
         let arch = ArchInfo(
             hiddenSize: try i("hidden_size"),

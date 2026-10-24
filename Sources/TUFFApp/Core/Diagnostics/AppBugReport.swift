@@ -94,6 +94,7 @@ public struct AppBugReport: Sendable {
         case .minimaxM27: "MiniMax M2.7"
         case .ornith15_9B: "Ornith 1.5 9B"
         case .ornith15_35B_A3B: "Ornith 1.5 35B-A3B"
+        case .ornith15_122B: "Ornith 1.5 122B"
         case .ornith15_397B: "Ornith 1.5 397B"
         case .qwen38_27B: "Qwen3.8 27B"
         }

@@ -71,6 +71,11 @@ BENCHMARK_MODELS = {
     sampling: %w[--temperature 0.7 --top-k 20 --top-p 0.8],
     runtime: %w[--expert-cache-slots 16 --prefill on --prefill-chunk-tokens 128 --rdadvise off]
   },
+  "ornith-122b" => {
+    path: "scratch/ornith-122b.gturbo", chat: %w[--thinking off],
+    sampling: %w[--temperature 0.7 --top-k 20 --top-p 0.8],
+    runtime: %w[--expert-cache-slots 16 --prefill on --prefill-chunk-tokens 2048 --rdadvise bounded]
+  },
   "qwen38-27b" => {
     path: "scratch/qwen38-27b.gturbo", chat: %w[--thinking off],
     sampling: %w[--temperature 0.7 --top-k 20 --top-p 0.8],
@@ -95,6 +100,7 @@ BENCHMARK_MODEL_LABELS = {
   "qwen38-flash-next" => "Qwen3.8 Flash Next 4-bit",
   "ornith-9b" => "Ornith 1.5 9B Q4",
   "ornith-35b" => "Ornith 1.5 35B-A3B Q4",
+  "ornith-122b" => "Ornith 1.5 122B Q4",
   "qwen38-27b" => "Qwen3.8 27B Q4",
   "ornith-397b" => "Ornith 1.5 397B Q4"
 }.freeze

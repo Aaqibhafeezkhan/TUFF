@@ -15,8 +15,8 @@ final class VerifiedExpertFile: @unchecked Sendable {
         completion.enter()
         DispatchQueue.global(qos: .userInitiated).async { [self] in
             do {
-                try Sha256Verifier.verifyFile(fileDescriptor: descriptor,
-                                               named: name, expectedHex: expectedSHA256)
+                try VerifiedFileMemo.standard.verifyFile(fileDescriptor: descriptor,
+                                                         named: name, expectedHex: expectedSHA256)
             } catch { failure = error }
             completion.leave()
         }

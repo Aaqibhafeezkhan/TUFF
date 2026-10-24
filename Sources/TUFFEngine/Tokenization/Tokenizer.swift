@@ -176,14 +176,25 @@ public struct GFTokenizer: @unchecked Sendable {
     /// special-token set can be validated against `tokenizer.json` itself.
     /// Same fetch/caching path `AutoTokenizer.from(pretrained:)` uses internally.
     private static func make(from hub: LanguageModelConfigurationFromHub) async throws -> GFTokenizer {
-        guard let tokenizerConfig = try await hub.tokenizerConfig else {
+        guard let declaredConfig = try await hub.tokenizerConfig else {
             throw GFTokenizerError.missingTokenizerConfig
         }
+        let tokenizerConfig = registeredTokenizerClass(declaredConfig)
         let tokenizerData = try await hub.tokenizerData
         let underlying = try AutoTokenizer.from(
             tokenizerConfig: tokenizerConfig, tokenizerData: tokenizerData)
         return try GFTokenizer(tokenizer: underlying, tokenizerData: tokenizerData,
                                chatTemplate: tokenizerConfig.chatTemplate.string())
+    }
+
+    /// Ornith 1.5 122B names its tokenizer `Qwen3_5Tokenizer`, which the
+    /// library doesn't register and refuses in strict mode. It is the same
+    /// byte-level BPE as `Qwen2Tokenizer`, so load it under that name.
+    static func registeredTokenizerClass(_ config: Config) -> Config {
+        guard config.tokenizerClass.string() == "Qwen3_5Tokenizer",
+              var values = config.dictionary() else { return config }
+        values["tokenizer_class"] = Config("Qwen2Tokenizer")
+        return Config(values)
     }
 
     private static func hasTokenizerJSON(in folder: URL, fileManager: FileManager) -> Bool {

@@ -76,4 +76,15 @@ struct DecoderConfigTests {
             try GFTokenizer.verifyDecoderConfiguration(["model": ["type": "BPE"]])
         }
     }
+
+    /// Ornith 1.5 122B's `Qwen3_5Tokenizer` loads as the `Qwen2Tokenizer` it
+    /// is; every other declared class passes through untouched.
+    @Test func qwen35TokenizerClassLoadsAsQwen2() {
+        let ornith: Config = ["tokenizer_class": "Qwen3_5Tokenizer", "eos_token": "<|im_end|>"]
+        let mapped = GFTokenizer.registeredTokenizerClass(ornith)
+        #expect(mapped.tokenizerClass.string() == "Qwen2Tokenizer")
+        #expect(mapped.eosToken.string() == "<|im_end|>")
+        let gemma: Config = ["tokenizer_class": "GemmaTokenizer"]
+        #expect(GFTokenizer.registeredTokenizerClass(gemma).tokenizerClass.string() == "GemmaTokenizer")
+    }
 }

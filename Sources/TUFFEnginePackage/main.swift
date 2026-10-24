@@ -122,7 +122,7 @@ do {
     }
     let families: [(String, Set<String>, Set<String>)] = [
         ("gemma-affine", ["gemma4-e2b", "gemma4-e4b", "gemma4-12b-qat", "gemma4-26b-a4b"], ["affine"]),
-        ("qwen-hybrid-affine", ["qwen36-35b-a3b", "qwen3.8-flash-next", "ornith-1.5-9b", "ornith-1.5-35b-a3b", "ornith-1.5-397b", "qwen3.8-27b"], ["affine"]),
+        ("qwen-hybrid-affine", ["qwen36-35b-a3b", "qwen3.8-flash-next", "ornith-1.5-9b", "ornith-1.5-35b-a3b", "ornith-1.5-122b", "ornith-1.5-397b", "qwen3.8-27b"], ["affine"]),
         ("gpt-oss-mxfp4", ["gpt-oss-20b", "gpt-oss-120b"], ["mxfp4"]),
         ("minimax-affine", ["minimax-m2.7"], ["affine"])
     ]

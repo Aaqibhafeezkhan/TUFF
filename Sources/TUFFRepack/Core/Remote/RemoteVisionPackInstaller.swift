@@ -588,7 +588,8 @@ public final class RemoteVisionPackInstaller {
         case SupportedModelSource.qwen36.repoID: visionFamily = .qwen36
         case SupportedModelSource.qwen38FlashNext.repoID: visionFamily = .qwen4Exp
         case SupportedModelSource.qwen38_27B.repoID, SupportedModelSource.ornith15_397B.repoID,
-             "ornith-ai/Ornith-1.5-9B", "ornith-ai/Ornith-1.5-35B-A3B": visionFamily = .qwen36
+             "ornith-ai/Ornith-1.5-9B", "ornith-ai/Ornith-1.5-35B-A3B",
+             "ornith-ai/Ornith-1.5-122B": visionFamily = .qwen36
         default: visionFamily = .gemma4
         }
         // Qwen 3.6's own width stays implicit, so its packs are unchanged.

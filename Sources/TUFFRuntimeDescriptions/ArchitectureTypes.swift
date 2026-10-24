@@ -45,6 +45,7 @@ public enum ModelVariant: String, Sendable, Equatable {
     case qwen38FlashNext = "qwen3.8-flash-next"
     case ornith15_9B = "ornith-1.5-9b"
     case ornith15_35B_A3B = "ornith-1.5-35b-a3b"
+    case ornith15_122B = "ornith-1.5-122b"
     case ornith15_397B = "ornith-1.5-397b"
     case qwen38_27B = "qwen3.8-27b"
 
@@ -639,6 +640,9 @@ public struct ArchConfig: Sendable, Equatable {
     public static let ornith15_35B_A3B = qwen35Contract(variant: .ornith15_35B_A3B,
         hidden: 2048, layers: 40, intermediate: 512, heads: 16, kvHeads: 2, valueHeads: 32,
         experts: 256, topK: 8)
+    public static let ornith15_122B = qwen35Contract(variant: .ornith15_122B,
+        hidden: 3072, layers: 48, intermediate: 1024, heads: 32, kvHeads: 2, valueHeads: 64,
+        experts: 256, topK: 8)
     public static let ornith15_397B = qwen35Contract(variant: .ornith15_397B,
         hidden: 4096, layers: 60, intermediate: 1024, heads: 32, kvHeads: 2, valueHeads: 64,
         experts: 512, topK: 10)
@@ -862,6 +866,7 @@ public struct ArchConfig: Sendable, Equatable {
         .qwen36_35B_A3B: .qwen36_35B_A3B,
         .ornith15_9B: .ornith15_9B,
         .ornith15_35B_A3B: .ornith15_35B_A3B,
+        .ornith15_122B: .ornith15_122B,
         .ornith15_397B: .ornith15_397B,
         .qwen38_27B: .qwen38_27B,
         .gptOss_20B: .gptOss_20B,

@@ -179,9 +179,9 @@ package struct GTurboVisionManifestV1: Codable, Equatable, Sendable {
     package var resolvedFamily: GTurboVisionFamilyV1 { family ?? .gemma4 }
 
     /// Residual widths of the Qwen-family text models with a qualified image
-    /// pack: Qwen 3.6 and Ornith 35B (2,048), Ornith 9B and 397B (4,096) and
-    /// Qwen 3.8 27B (5,120).
-    package static let qwen36TextHiddenSizes: Set<Int> = [2_048, 4_096, 5_120]
+    /// pack: Qwen 3.6 and Ornith 35B (2,048), Ornith 122B (3,072), Ornith 9B
+    /// and 397B (4,096) and Qwen 3.8 27B (5,120).
+    package static let qwen36TextHiddenSizes: Set<Int> = [2_048, 3_072, 4_096, 5_120]
 }
 
 package enum GTurboVisionManifestCodec {

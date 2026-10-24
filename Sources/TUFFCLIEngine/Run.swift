@@ -88,7 +88,13 @@ public func run(args: Args,
         try validateImageSupport(
             hasImages: input.hasImages,
             family: modelFamily)
+        let loadStarted = ContinuousClock.now
+        // The shader compiler runs while the tokenizer and weights load.
+        let context = try MetalContext(kernelGroups: [])
+        context.prewarmKernels(forModelDirectory: modelURL, maxContext: args.maxContext,
+                               includeVision: input.hasImages)
         let tokenizer = try await GFTokenizer.load(forModelDirectory: modelURL)
+        let tokenizerLoaded = ContinuousClock.now
         let currentDate = HarmonyPromptRenderer.calendarDate()
         var promptIds: [Int32]
         var multimodalMessages: [MultimodalMessage]?
@@ -260,7 +266,6 @@ public func run(args: Args,
             }
         }
 
-        let context = try MetalContext()
         let densePolicy: DenseResidencyPolicy
         if let explicit = args.denseResidencyPolicy { densePolicy = explicit }
         else if architecture.feedForwardKind == .dense {
@@ -278,6 +283,7 @@ public func run(args: Args,
             denseResidency: densePolicy,
             expertCachePolicy: runtime.modelExpertCachePolicy,
             integrityPolicy: .fullSha256)
+        let weightsLoaded = ContinuousClock.now
         if !args.quiet {
             let estimate = AppAutomaticMemoryPlanner.estimatedAllocation(directory: modelURL,
                 context: args.maxContext, options: AppRuntimeOptions(
@@ -304,6 +310,17 @@ public func run(args: Args,
             context: context,
             maxContext: args.maxContext,
             runtimeConfiguration: runtime)
+        if ProcessInfo.processInfo.environment["TUFF_PHASES"] == "1" {
+            let seconds = { (from: ContinuousClock.Instant, to: ContinuousClock.Instant) -> String in
+                let d = from.duration(to: to)
+                return String(format: "%.3f", Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18)
+            }
+            let runnerReady = ContinuousClock.now
+            stderr.write(Data(("[load phases] tokenizer \(seconds(loadStarted, tokenizerLoaded))s, "
+                + "weights \(seconds(tokenizerLoaded, weightsLoaded))s, "
+                + "runner \(seconds(weightsLoaded, runnerReady))s, "
+                + "total \(seconds(loadStarted, runnerReady))s\n").utf8))
+        }
         if ProcessInfo.processInfo.environment["TUFF_KERNEL_BENCH"] == "1" {
             stderr.write(Data(try runner.benchmarkDecodeKernels().utf8))
             return RunResult(exitCode: 0)
@@ -481,6 +498,9 @@ public func run(args: Args,
                     + "\(lookahead.readsIssued) prefetch batches"
                     + (lookahead.enabled ? "" : ", turned off") + "\n"
             }
+            let pipelines = context.pipelineStatistics
+            lines += "  pipelines created: \(pipelines.count) in "
+                + String(format: "%.0f", pipelines.seconds * 1000) + " ms\n"
             stderr.write(Data(lines.utf8))
         }
         if let path = args.runReportPath,

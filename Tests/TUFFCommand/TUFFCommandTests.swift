@@ -270,4 +270,12 @@ struct TUFFCommandTests {
         }
         return arguments[index + 1]
     }
+
+    @Test func helpNamesEveryCatalogModel() {
+        let help = TUFFCommand.usage.replacingOccurrences(of: "\n", with: " ")
+        for model in TUFFModelCatalog.all {
+            #expect(help.contains(model.selector), "\(model.selector) missing from tuff --help")
+        }
+        #expect(TUFFCommand.usage.split(separator: "\n").allSatisfy { $0.count <= 80 })
+    }
 }

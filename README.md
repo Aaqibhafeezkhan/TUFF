@@ -80,6 +80,7 @@ TUFF updates itself. If an update stops it from opening, see
 | Qwen 3.8 Flash Next Q4 | 110.9 GB | 16 GB, M2 or newer | Optional |
 | Ornith 1.5 9B Q4 | 5.1 GB | 8 GB | Optional, 16 GB |
 | Ornith 1.5 35B-A3B Q4 | 19.6 GB | 8 GB | Optional, 16 GB |
+| Ornith 1.5 122B Q4 | 68.7 GB | 16 GB | Optional |
 | Ornith 1.5 397B Q4 | 239 GB | 16 GB | Optional |
 | Qwen3.8 27B Q4 | 16.2 GB | 8 GB | Optional, 16 GB |
 | Gemma 4 26B-A4B Heretic Q4 | 15.0 GB | 8 GB | Optional |
