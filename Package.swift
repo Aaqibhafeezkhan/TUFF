@@ -29,7 +29,9 @@ let package = Package(
         .executable(name: "TUFFServer", targets: ["TUFFServer"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/huggingface/swift-transformers", from: "1.3.0"),
+        // swift-transformers 1.3.3, patched to load tokenizers faster.
+        // See Vendor/swift-transformers/README.md.
+        .package(path: "Vendor/swift-transformers"),
         .package(url: "https://github.com/apple/swift-nio.git", exact: "2.101.3"),
         .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.2"),
         // SwiftMath 1.7.3, patched to find its fonts inside a packaged app.
