@@ -2,6 +2,7 @@ import Darwin
 import Foundation
 import Testing
 @testable import TUFFEngine
+import TUFFModelMetadata
 
 @Suite struct VerifiedFileMemoTests {
     private func scratch() throws -> URL {

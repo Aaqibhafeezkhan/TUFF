@@ -1,4 +1,5 @@
 import Foundation
+import TUFFModelMetadata
 import Synchronization
 import Testing
 @testable import TUFFRepackCore
@@ -234,7 +235,8 @@ func remoteOptions(outputDir: String,
                            repoID: String = "owner/model",
                            revision: String = "main",
                            rangeChunkBytes: Int = 4096,
-                           copyAuditPath: String? = nil) -> RemoteStreamingRepackOptions {
+                           copyAuditPath: String? = nil,
+                           verifiedFileMemo: VerifiedFileMemo = VerifiedFileMemo(directory: nil)) -> RemoteStreamingRepackOptions {
     RemoteStreamingRepackOptions(
         repoID: repoID,
         revision: revision,
@@ -248,7 +250,8 @@ func remoteOptions(outputDir: String,
         downloadSession: session,
         baseURL: URL(string: "https://hf.test")!,
         rangeRetryAttempts: rangeRetryAttempts,
-        retryBaseDelayNs: 0)
+        retryBaseDelayNs: 0,
+        verifiedFileMemo: verifiedFileMemo)
 }
 
 final class InstallProgressRecorder: Sendable {

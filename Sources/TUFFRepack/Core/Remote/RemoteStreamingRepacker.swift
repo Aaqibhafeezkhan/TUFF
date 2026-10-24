@@ -1,4 +1,6 @@
 import Foundation
+import TUFFModelMetadata
+
 public struct RemoteStreamingRepackOptions: Sendable {
     public let repoID: String
     public let revision: String
@@ -16,6 +18,9 @@ public struct RemoteStreamingRepackOptions: Sendable {
     public let baseURL: URL
     public let rangeRetryAttempts: Int
     public let retryBaseDelayNs: UInt64
+    /// Where the hashes of the installed files are recorded, so the engine's
+    /// first load of the model doesn't hash them again.
+    public let verifiedFileMemo: VerifiedFileMemo
 
     public init(repoID: String,
                 revision: String,
@@ -32,7 +37,8 @@ public struct RemoteStreamingRepackOptions: Sendable {
                 downloadSession: RemoteDownloadSession = RemoteDownloadSession(),
                 baseURL: URL = URL(string: "https://huggingface.co")!,
                 rangeRetryAttempts: Int = 4,
-                retryBaseDelayNs: UInt64 = 1_000_000_000) {
+                retryBaseDelayNs: UInt64 = 1_000_000_000,
+                verifiedFileMemo: VerifiedFileMemo = .standard) {
         self.repoID = repoID
         self.revision = revision
         self.outputDir = outputDir
@@ -49,6 +55,7 @@ public struct RemoteStreamingRepackOptions: Sendable {
         self.baseURL = baseURL
         self.rangeRetryAttempts = rangeRetryAttempts
         self.retryBaseDelayNs = retryBaseDelayNs
+        self.verifiedFileMemo = verifiedFileMemo
     }
 }
 
@@ -505,11 +512,18 @@ public final class RemoteStreamingRepacker {
         let fd = try Posix.openRead(path)
         defer { close(fd) }
         let size = try Posix.fileSize(fd: fd, path: path)
+        let before = VerifiedFileMemo.Identity(fileDescriptor: fd)
         let sha = try WriterCore.hashEntireFile(path: path,
                                                 size: size,
                                                 audit: audit,
                                                 cancellationCheck: Task.checkCancellation)
         audit.outputFiles.append(.init(relativePath: relativePath, size: size, sha256: sha))
+        // These hashes become the manifest's. Nothing writes the file after
+        // this, and finalizing renames only its folder, so the engine sees the
+        // same identity on its first load and needn't hash it again.
+        if let before, VerifiedFileMemo.Identity(fileDescriptor: fd) == before {
+            options.verifiedFileMemo.record(before, hashedTo: sha)
+        }
     }
 
     private func writeSmall(path: String, data: Data) throws {

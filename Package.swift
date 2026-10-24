@@ -64,7 +64,7 @@ let package = Package(
         ),
         .target(
             name: "TUFFModelMetadata",
-            dependencies: ["TUFFRuntimeDescriptions", "TUFFInferenceTypes", "TUFFFormat"],
+            dependencies: ["TUFFModelCatalog", "TUFFRuntimeDescriptions", "TUFFInferenceTypes", "TUFFFormat"],
             path: "Sources/TUFFModelMetadata"
         ),
         .target(

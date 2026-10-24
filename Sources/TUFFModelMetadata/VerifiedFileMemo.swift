@@ -1,7 +1,6 @@
 import Darwin
 import Foundation
 import TUFFModelCatalog
-import TUFFModelMetadata
 
 /// Remembers files that passed a full SHA-256 check, so loading the same
 /// unchanged model again doesn't read every weight byte just to hash it.
@@ -11,21 +10,27 @@ import TUFFModelMetadata
 /// permission change moves the change time, and nothing outside the kernel can
 /// set it back, so a changed file is always hashed again. Records are keyed by
 /// the expected hash. A missing or stale record only means hashing as before.
-struct VerifiedFileMemo: Sendable {
-    let directory: URL?
+///
+/// The engine reads records when it loads a model; the installer writes them
+/// for the files it has just hashed, so the first load after an install skips
+/// the hash too.
+public struct VerifiedFileMemo: Sendable {
+    public let directory: URL?
 
-    static let standard = VerifiedFileMemo(directory: defaultDirectory())
+    public init(directory: URL?) { self.directory = directory }
+
+    public static let standard = VerifiedFileMemo(directory: defaultDirectory())
 
     /// `Caches/TUFF/VerifiedFiles`, beside the prefix snapshots.
     /// `TUFF_VERIFIED_FILE_MEMO=off` hashes every load, as before 9.5.0.
-    static func defaultDirectory(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL? {
+    public static func defaultDirectory(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL? {
         if environment["TUFF_VERIFIED_FILE_MEMO"] == "off" { return nil }
         return TUFFPrefixSnapshotLocation.rootDirectory(environment: environment)?
             .deletingLastPathComponent()
             .appendingPathComponent("VerifiedFiles", isDirectory: true)
     }
 
-    struct Identity: Codable, Equatable {
+    public struct Identity: Codable, Equatable, Sendable {
         let device: Int64
         let inode: UInt64
         let size: Int64
@@ -34,7 +39,7 @@ struct VerifiedFileMemo: Sendable {
         let changedSeconds: Int
         let changedNanoseconds: Int
 
-        init?(fileDescriptor fd: Int32) {
+        public init?(fileDescriptor fd: Int32) {
             var info = stat()
             guard fstat(fd, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { return nil }
             device = Int64(info.st_dev)
@@ -49,7 +54,7 @@ struct VerifiedFileMemo: Sendable {
 
     /// Same contract as `Sha256Verifier.verifyFile`, without the read when
     /// this exact file already matched `expectedHex`.
-    func verifyFile(fileDescriptor fd: Int32, named name: String, expectedHex: String) throws {
+    public func verifyFile(fileDescriptor fd: Int32, named name: String, expectedHex: String) throws {
         let key = expectedHex.lowercased()
         let before = Identity(fileDescriptor: fd)
         if let before, recorded(key) == before { return }
@@ -67,6 +72,12 @@ struct VerifiedFileMemo: Sendable {
         guard let url = url(for: key),
               let data = try? Data(contentsOf: url), data.count <= 4_096 else { return nil }
         return try? JSONDecoder().decode(Identity.self, from: data)
+    }
+
+    /// Records that the file with `identity` hashed to `hex`. The caller
+    /// hashed it itself and checked the identity didn't change meanwhile.
+    public func record(_ identity: Identity, hashedTo hex: String) {
+        record(hex.lowercased(), identity)
     }
 
     private func record(_ key: String, _ identity: Identity) {
