@@ -2950,6 +2950,15 @@ public final class AppModel {
         conversationStore.startNewConversation(modelID: modelID)
     }
 
+    /// Whether this turn sends an image to a session whose expert cache is
+    /// too small for the chunked prefill images need.
+    var imageTurnNeedsLargerExpertCache: Bool {
+        guard selectedDescriptor.usesExpertCache,
+              (loadedRuntimeKey ?? currentRuntimeKey).expertCacheSlots
+                < RuntimeConfiguration.minimumExpertCacheSlotsForChunkedPrefill else { return false }
+        return !imageAttachments.isEmpty || conversation.contains { !$0.images.isEmpty }
+    }
+
     public func run() {
         guard canRun else { return }
         if automaticMemory, let summary = AppAutomaticMemoryPlanner.layoutSummary(at: URL(fileURLWithPath: modelPathText)) {
@@ -2980,6 +2989,34 @@ public final class AppModel {
                 beginLoad()
                 return
             }
+        }
+        // Image spans need chunked prefill, and chunked prefill needs 16 expert
+        // slots. Auto can settle below that to avoid paging, and the image then
+        // failed partway through its prompt. Auto reloads with a cache that
+        // can take it; a manual setting is the user's to change.
+        if imageTurnNeedsLargerExpertCache {
+            let directory = URL(fileURLWithPath: modelPathText)
+            if automaticMemory, let summary = AppAutomaticMemoryPlanner.layoutSummary(at: directory),
+               let plan = AppAutomaticMemoryPlanner.plan(for: selectedDescriptor, on: deviceCapabilities,
+                    profile: automaticMemoryProfile, layoutSummary: summary, workloadKey: autoWorkloadKey,
+                    modelDirectory: directory, contextTokens: effectiveMaxContextTokens,
+                    engineIdentity: (client as? any AppInferenceEngineReporting)?.currentEngineIdentity,
+                    imageInput: true),
+               plan.expertCacheSlots >= RuntimeConfiguration.minimumExpertCacheSlotsForChunkedPrefill {
+                maxContextTokens = plan.contextTokens
+                runtimeOptions.expertCacheSlots = plan.expertCacheSlots
+                runtimeOptions.prefillChunkTokens = plan.prefillChunkTokens
+                runtimeOptions.prefillEnabled = true
+                runtimeOptions.denseResidencyPolicy = plan.denseResidencyPolicy
+                runtimeOptions.retainedConversationBytes = plan.retainedConversationBytes
+                runsAfterCurrentLoad = true
+                beginLoad()
+                return
+            }
+            error = .invalidRequest(automaticMemory
+                ? "Images need at least \(RuntimeConfiguration.minimumExpertCacheSlotsForChunkedPrefill) expert cache slots, and they don't fit safely on this Mac right now. Close other apps and try again, or remove the image."
+                : "Images need at least \(RuntimeConfiguration.minimumExpertCacheSlotsForChunkedPrefill) expert cache slots. Raise Slots to \(RuntimeConfiguration.minimumExpertCacheSlotsForChunkedPrefill) in this model's settings, or remove the image.")
+            return
         }
         if automaticMemory, let loadedRuntimeKey, loadedRuntimeKey != currentRuntimeKey {
             runsAfterCurrentLoad = true

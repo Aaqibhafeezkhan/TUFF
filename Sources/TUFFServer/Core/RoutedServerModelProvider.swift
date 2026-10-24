@@ -200,9 +200,13 @@ public struct ServerInstalledModels: Sendable {
         let directory = directory(for: descriptor)
         guard let summary = AppAutomaticMemoryPlanner.layoutSummary(at: directory) else { return nil }
         let planning = planningDescriptor(for: descriptor)
+        // Any request may carry an image once the pack is installed, and an
+        // image needs the cache size chunked prefill does.
+        let imageInput = visionCapability(for: descriptor) == "ready"
         func plan(_ profile: AppAutomaticMemoryProfile, contextTokens: Int? = nil) -> AppAutomaticMemoryPlan? {
             AppAutomaticMemoryPlanner.plan(for: planning, on: device, profile: profile,
-                layoutSummary: summary, modelDirectory: directory, contextTokens: contextTokens)
+                layoutSummary: summary, modelDirectory: directory, contextTokens: contextTokens,
+                imageInput: imageInput)
         }
         guard let saved = AppModelSettingsProfile.saved(forKey: planning.settingsProfileKey,
                                                         modelsRoot: modelsRoot) else { return plan(.balanced) }

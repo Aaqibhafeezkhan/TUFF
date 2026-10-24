@@ -109,7 +109,8 @@ public enum AppAutomaticMemoryPlanner {
         modelDirectory: URL? = nil,
         useBundledLayout: Bool = false,
         contextTokens: Int? = nil,
-        engineIdentity: String? = nil
+        engineIdentity: String? = nil,
+        imageInput: Bool = false
     ) -> AppAutomaticMemoryPlan? {
         guard let id = descriptor.planningCatalogID,
               let catalog = TUFFModelCatalog.model(id: id) else { return nil }
@@ -117,13 +118,14 @@ public enum AppAutomaticMemoryPlanner {
             ?? (useBundledLayout ? predictedLayout(for: descriptor) : nil) {
             let identity = AppAutoPerformanceRecords.identity(summary: layoutSummary, device: device,
                 engineIdentity: engineIdentity, modelDirectory: modelDirectory)
-            let key = "\(identity):\(profile.rawValue):\(contextTokens ?? 0):\(workloadKey):\(AppAutoMemoryPressureMonitor.shared.snapshot.pressure.rawValue):\(AppAutoPerformanceRecords.revisionToken)"
+            let key = "\(identity):\(profile.rawValue):\(contextTokens ?? 0):\(workloadKey):\(imageInput):\(AppAutoMemoryPressureMonitor.shared.snapshot.pressure.rawValue):\(AppAutoPerformanceRecords.revisionToken)"
             if observations.isEmpty, let cached = plans.withLock({ $0[key] }) { return cached }
             let selected = AppAutomaticLayoutPlanner.plan(catalog: catalog, descriptor: descriptor,
                 device: device, profile: profile, summary: layoutSummary,
                 observations: observations.isEmpty
                     ? AppAutoPerformanceRecords.observations(identity: identity)
-                    : observations, workloadKey: workloadKey, contextOverride: contextTokens)
+                    : observations, workloadKey: workloadKey, contextOverride: contextTokens,
+                imageInput: imageInput)
             if observations.isEmpty, let selected {
                 plans.withLock { if $0.count >= 128 { $0.removeAll() }; $0[key] = selected }
             }

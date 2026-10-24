@@ -146,7 +146,8 @@ enum AppAutomaticLayoutPlanner {
     static func plan(catalog: TUFFModelDescriptor, descriptor: AppModelInstallDescriptor,
                      device: TUFFDeviceCapabilities, profile: AppAutomaticMemoryProfile,
                      summary: ModelWeightLayoutSummary, observations: [InferencePlanObservation],
-                     workloadKey: String, contextOverride: Int? = nil) -> AppAutomaticMemoryPlan? {
+                     workloadKey: String, contextOverride: Int? = nil,
+                     imageInput: Bool = false) -> AppAutomaticMemoryPlan? {
         do { try summary.layout.validate() } catch { return nil }
         let minimumSlots = summary.layout.expertLayers.map(\.minimumSlots).max() ?? 0
         var minimumExpertBytes: UInt64 = 0
@@ -166,9 +167,16 @@ enum AppAutomaticLayoutPlanner {
         let pressure = AppAutoMemoryPressureMonitor.shared.snapshot.pressure
         let budget = pressure == .normal ? normalBudget
             : normalBudget / 100 * (pressure == .critical ? 65 : 80)
-        let legal = candidates(catalog: catalog, descriptor: descriptor, summary: summary, budget: budget,
+        let all = candidates(catalog: catalog, descriptor: descriptor, summary: summary, budget: budget,
             contextOverride: contextOverride, recommendedChunk: catalog.recommendedPrefillChunkTokens(on: device),
             retainConversation: profile != .speed && !cacheDominates)
+        // Image spans only run under chunked prefill, which needs 16 expert
+        // slots. Below that an image prompt fails partway through, so an
+        // image workload only gets a smaller cache when nothing larger fits.
+        let imageSlots = RuntimeConfiguration.minimumExpertCacheSlotsForChunkedPrefill
+        let legal = imageInput && !summary.layout.expertLayers.isEmpty
+            && all.contains(where: { $0.slots >= imageSlots })
+            ? all.filter { $0.slots >= imageSlots } : all
         guard !legal.isEmpty else { return nil }
         let qualifiedSlots = cacheDominates ? minimumSlots
             : max(minimumSlots, catalog.runtimeDefaults.expertCacheSlots)

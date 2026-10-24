@@ -39,7 +39,8 @@ public func run(args: Args, stdout: FileHandle = .standardOutput,
                     workloadKey: AppAutoPerformanceRecords.workloadKey(
                         promptTokens: 0, reusedPrefix: false, imageInput: !args.images.isEmpty,
                         sampled: args.temperature > 0),
-                    modelDirectory: directory, contextTokens: args.maxContext) else {
+                    modelDirectory: directory, contextTokens: args.maxContext,
+                    imageInput: !args.images.isEmpty) else {
                 throw CocoaError(.fileReadInvalidFileName, userInfo: [NSLocalizedDescriptionKey:
                     "No safe automatic allocation at this context. Lower --max-context."])
             }
