@@ -183,6 +183,53 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
             .first.map(String.init) ?? head.uri
     }
 
+    // A web page can point its own domain at 127.0.0.1 (DNS rebinding), and
+    // the browser then sends that domain as Host and Origin. Only this Mac's
+    // loopback names are served, and only `http` or `https` pages on them.
+    // A request without Host (HTTP/1.0, or a non-browser client) cannot come
+    // from a browser and passes.
+    static let loopbackHosts: Set<String> = ["127.0.0.1", "localhost", "[::1]"]
+
+    static func acceptsCaller(_ head: HTTPRequestHead) -> Bool {
+        let hosts = head.headers["host"]
+        guard hosts.count <= 1 else { return false }
+        if let host = hosts.first, !isLoopback(authority: host) { return false }
+        return head.headers["origin"].allSatisfy(isLoopback(origin:))
+    }
+
+    // Compares the name without case, a trailing dot or a numeric port.
+    // Anything else after the name, such as `@` or a path, is refused.
+    static func isLoopback(authority: String) -> Bool {
+        var name = Substring(authority.trimmingCharacters(in: .whitespaces).lowercased())
+        if name.hasPrefix("[") {
+            guard let close = name.firstIndex(of: "]") else { return false }
+            let port = name[name.index(after: close)...]
+            guard port.isEmpty || isPort(port) else { return false }
+            name = name[...close]
+        } else if let colon = name.firstIndex(of: ":") {
+            guard isPort(name[colon...]) else { return false }
+            name = name[..<colon]
+        }
+        if name.count > 1, name.hasSuffix(".") { name = name.dropLast() }
+        return loopbackHosts.contains(String(name))
+    }
+
+    // `null`, every other scheme and every other site are refused.
+    static func isLoopback(origin: String) -> Bool {
+        let lowered = origin.trimmingCharacters(in: .whitespaces).lowercased()
+        for scheme in ["http://", "https://"] where lowered.hasPrefix(scheme) {
+            return isLoopback(authority: String(lowered.dropFirst(scheme.count)))
+        }
+        return false
+    }
+
+    // A colon and one to five digits.
+    private static func isPort(_ text: Substring) -> Bool {
+        let digits = text.dropFirst()
+        return text.first == ":" && (1...5).contains(digits.count)
+            && digits.allSatisfy { $0.isASCII && $0.isNumber }
+    }
+
     static func carriesChatBody(_ head: HTTPRequestHead) -> Bool {
         head.method == .POST
             && InferenceAPI.forPath(requestPath(head)) != nil
@@ -200,12 +247,20 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
             // The parser stages inline images to disk, so it is created only
             // once the request is known to carry a chat body. A body sent
             // elsewhere is counted and dropped.
-            bodyParser = Self.carriesChatBody(head)
+            let accepted = Self.acceptsCaller(head)
+            bodyParser = accepted && Self.carriesChatBody(head)
                 ? StreamingChatRequestBody(attachmentRoot: attachmentRoot,
                                            visionCapability: provider.parserVisionCapability)
                 : nil
             bodyError = nil
             receivedBodyBytes = 0
+            if !accepted {
+                // Answered at .end, so a refused body is never parsed or staged.
+                bodyError = ServerRequestError.invalid(
+                    message: "Host or Origin is not a loopback name "
+                        + "(127.0.0.1, localhost or [::1])",
+                    param: nil, code: "forbidden_host")
+            }
         case .body(var part):
             guard !discardingUntilClose else { return }
             receivedBodyBytes += part.readableBytes
@@ -833,7 +888,9 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                             _ error: OpenAIErrorEnvelope,
                             closeAfter: Bool = false) {
         if errorAPI == .messages {
-            let object: [String: Any] = ["type": "error", "error": ["type": status.code >= 500 ? "api_error" : error.error.type, "message": error.error.message]]
+            let type = status.code >= 500 ? "api_error"
+                : error.error.code == "forbidden_host" ? "permission_error" : error.error.type
+            let object: [String: Any] = ["type": "error", "error": ["type": type, "message": error.error.message]]
             guard let data = try? JSONSerialization.data(withJSONObject: object) else { return }
             writeData(context, status: status, data: data, closeAfter: closeAfter)
         } else {
@@ -955,6 +1012,8 @@ private extension ServerRequestError {
             switch code {
             case "request_too_large", "image_too_large", "too_many_images":
                 .payloadTooLarge
+            case "forbidden_host":
+                .forbidden
             default:
                 .badRequest
             }
