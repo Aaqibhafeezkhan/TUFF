@@ -120,6 +120,21 @@ private func runner(_ client: ScriptedBenchmarkClient) -> AppBenchmarkRunner {
     }
 }
 
+@Suite struct AppBenchmarkProgressTests {
+    /// The Benchmarks screen reads the runner's `--progress-json` lines with
+    /// the result decoder. `modelID` used to come back as `modelId`, so every
+    /// event failed to decode and the screen stayed at 0%.
+    @Test func progressEventsRoundTripThroughTheStream() throws {
+        let event = AppBenchmarkProgress(kind: .stepFinished, modelIndex: 9, modelCount: 12,
+            modelID: "ornith-1.5-397b", modelName: "Ornith 1.5 397B Q4", stepIndex: 2,
+            stepCount: 8, workload: .long, trial: 1, status: nil, message: nil)
+        let data = try AppBenchmarkResult.encoder().encode(event)
+        let json = String(decoding: data, as: UTF8.self)
+        #expect(json.contains("\"model_id\":\"ornith-1.5-397b\""))
+        #expect(try AppBenchmarkResult.decoder().decode(AppBenchmarkProgress.self, from: data) == event)
+    }
+}
+
 @Suite struct AppBenchmarkRunnerTests {
     @Test func runsEachModelThenUnloadsAndKeepsGoingAfterAFailure() async {
         let client = ScriptedBenchmarkClient()

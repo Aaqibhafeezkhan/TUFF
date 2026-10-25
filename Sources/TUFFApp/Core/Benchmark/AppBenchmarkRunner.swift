@@ -53,6 +53,15 @@ public struct AppBenchmarkProgress: Codable, Equatable, Sendable {
     public var trial: Int?
     public var status: AppBenchmarkResult.Status?
     public var message: String?
+
+    // Spelled so the snake_case strategies round-trip `modelID` as
+    // `model_id`. The default spelling decoded back as `modelId`, so the
+    // Benchmarks screen dropped every event and sat at 0% for a whole run.
+    private enum CodingKeys: String, CodingKey {
+        case kind, modelIndex, modelCount
+        case modelID = "modelId"
+        case modelName, stepIndex, stepCount, workload, trial, status, message
+    }
 }
 
 /// Runs the suite through the same inference client chat uses, one model at
