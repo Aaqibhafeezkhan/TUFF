@@ -2,7 +2,10 @@
 
 TUFF can serve your installed models to other apps, scripts and coding
 agents through an OpenAI-compatible API. It only listens on `127.0.0.1` and
-has no authentication, so keep it that way.
+has no authentication, so keep it that way. It also refuses requests whose
+`Host` or `Origin` isn't `127.0.0.1`, `localhost` or `[::1]`, so a web page
+can't reach it through DNS rebinding. A proxy in front of it has to pass the
+original `Host`.
 
 ## Start it
 
