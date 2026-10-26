@@ -16,6 +16,10 @@ import TUFFValidationSupport
         (4, 32, true, 70),    // Qwen 3.8 Flash Next shared expert
         (8, 64, false, 70),   // Gemma 4 12B dense MLP
         (4, 64, true, 129),   // Qwen 3.6 shared expert, partial tiles
+        (4, 64, true, 2),     // shortest batched block, 8-row tile
+        (4, 64, false, 13),   // short prompt, 16-row tile
+        (4, 32, true, 26),    // short follow-up, 32-row tile
+        (8, 64, false, 31),   // just under one 32-row tile
     ])
     func batchedMatchesPerTokenRows(_ c: (Int, Int, Bool, Int)) throws {
         let (bits, group, silu, tokens) = c
@@ -62,7 +66,7 @@ import TUFFValidationSupport
 
     /// Speculative verification blocks stay on the decode kernels, so their
     /// numerics are unchanged.
-    @Test func shortBlocksKeepThePerTokenKernels() throws {
+    @Test func speculativeVerificationKeepsThePerTokenKernels() throws {
         let ctx = try MetalContext()
         let batched = try PrefillSharedExpert(context: ctx, weightBits: 4)
         let perToken = try PrefillSharedExpert(context: ctx, weightBits: 4, allowBatched: false)
@@ -70,7 +74,7 @@ import TUFFValidationSupport
         let gate = Self.projection(ctx, rows: Self.f, cols: Self.d, bits: 4, group: 64, rng: &rng)
         let up = Self.projection(ctx, rows: Self.f, cols: Self.d, bits: 4, group: 64, rng: &rng)
         let down = Self.projection(ctx, rows: Self.d, cols: Self.f, bits: 4, group: 64, rng: &rng)
-        let tokens = PrefillSharedExpert.minimumBatchedTokens - 1
+        let tokens = 4
         let x = (0..<(tokens * Self.d)).map { _ in Float16(rng.uniform(-0.5, 0.5)) }
         var outputs: [[Float16]] = []
         for expert in [batched, perToken] {
@@ -84,7 +88,8 @@ import TUFFValidationSupport
                                    gate: gate, up: up, down: down,
                                    scratchGate: g, scratchUp: u, scratchAct: a,
                                    queryCount: tokens, d: Self.d, intermediate: Self.f,
-                                   xStrideElements: Self.d, yStrideElements: Self.d)
+                                   xStrideElements: Self.d, yStrideElements: Self.d,
+                                   speculativeVerification: true)
             cb.commit()
             cb.waitUntilCompleted()
             try checkCommandBufferError(cb)

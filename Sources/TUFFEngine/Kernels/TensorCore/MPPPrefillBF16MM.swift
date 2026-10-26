@@ -14,6 +14,9 @@ final class MPPPrefillBF16MM {
     static let tileK = 64
 
     private let tiles: [(rows: Int, columns: Int, pso: MTLComputePipelineState)]
+    /// Projections this instance has encoded. Tests read it to confirm which
+    /// path a prefill took.
+    private(set) var encodedProjections = 0
 
     init?(context: MetalContext) {
         guard let library = try? MetalContext.privateLibrary(device: context.device,
@@ -47,6 +50,7 @@ final class MPPPrefillBF16MM {
               let encoder = commandBuffer.makeComputeCommandEncoder()
         else { return false }
         let tile = tiles.first { m <= $0.rows } ?? tiles[tiles.count - 1]
+        encodedProjections += 1
         encoder.setComputePipelineState(tile.pso)
         encoder.setBuffer(weights.buffer, offset: weightsOffset, index: 0)
         if let bias {

@@ -97,6 +97,30 @@ internal enum PrefillProjectionDispatch: Sendable, Equatable {
     case qmm
 }
 
+/// Which prefill blocks run the batched MPP projections and MLPs.
+///
+/// A block of two or more prompt tokens reads each weight tile once for the
+/// whole block. The per-token GEMV rereads the whole matrix for every token,
+/// so a 26-token prompt on Ornith 1.5 9B took 1.3 s of GPU time that way and
+/// 0.33 s batched, on a 16 GB M2. One token is a decode step either way.
+/// Speculative verification keeps the per-token decode kernels its
+/// acceptance checks compare against.
+internal enum PrefillBatchingPolicy {
+    static let minimumTokens = 2
+
+    static func batchesProjections(tokenCount: Int, speculativeVerification: Bool) -> Bool {
+        !speculativeVerification && tokenCount >= minimumTokens
+    }
+
+    /// Routed experts keep the 32-token threshold. A short block gives each
+    /// expert only a row or two, so batching them has not been measured to pay.
+    static let minimumRoutedTokens = 32
+
+    static func batchesRoutedExperts(tokenCount: Int, speculativeVerification: Bool) -> Bool {
+        !speculativeVerification && tokenCount >= minimumRoutedTokens
+    }
+}
+
 internal enum PrefillProjectionDispatchPolicy {
     static func selectedDispatch(for family: PrefillProjectionFamily,
                                  chunkTokens: Int) -> PrefillProjectionDispatch {

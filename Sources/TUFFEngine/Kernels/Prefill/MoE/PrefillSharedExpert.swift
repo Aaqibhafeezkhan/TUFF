@@ -10,12 +10,6 @@ final class PrefillSharedExpert {
     private let smallBlock: DequantInt4SmallBlock?
     private let activationPSO: MTLComputePipelineState
 
-    /// Fewest tokens that take the batched path: the threshold TUFF's batched
-    /// projections already use. Below it, including every speculative
-    /// verification block, the per-token kernels decode uses keep their
-    /// numerics.
-    static let minimumBatchedTokens = 32
-
     init(context: MetalContext, weightBits: Int = 8,
          siluActivation: Bool = false,
          groupSize: Int = Quantization.groupSize,
@@ -69,6 +63,7 @@ final class PrefillSharedExpert {
                             xStrideElements: Int,
                             yStrideElements: Int,
                             allowSmallBlock: Bool = false,
+                            speculativeVerification: Bool = false,
                             outputGate: MTLBuffer? = nil, outputGateOffset: Int = 0) throws {
         precondition(queryCount >= 0, "queryCount must be non-negative")
         precondition(d > 0, "d must be positive")
@@ -90,18 +85,8 @@ final class PrefillSharedExpert {
                 throw SharedExpertError.scratchTooSmall("prefill scalar gates exceed buffer")
             }
         }
-        if queryCount >= Self.minimumBatchedTokens,
-           xStrideElements == d, yStrideElements == d,
-           try encodeBatched(commandBuffer: cb, x: x, xOffset: xOffset,
-                             y: y, yOffset: yOffset,
-                             gate: gate, up: up, down: down,
-                             scratchGate: scratchGate, scratchGateOffset: scratchGateOffset,
-                             scratchUp: scratchUp, scratchUpOffset: scratchUpOffset,
-                             scratchAct: scratchAct, scratchActOffset: scratchActOffset,
-                             queryCount: queryCount, d: d, intermediate: intermediate,
-                             outputGate: outputGate, outputGateOffset: outputGateOffset) {
-            return
-        }
+        // The opt-in small-block experiment keeps its 2-31 token blocks, so it
+        // can still be compared with the batched path on the same build.
         if outputGate == nil, allowSmallBlock,
            try encodeSmallBlock(commandBuffer: cb, x: x, xOffset: xOffset,
                                 y: y, yOffset: yOffset,
@@ -112,6 +97,19 @@ final class PrefillSharedExpert {
                                 queryCount: queryCount, d: d, intermediate: intermediate,
                                 xStrideElements: xStrideElements,
                                 yStrideElements: yStrideElements) {
+            return
+        }
+        if PrefillBatchingPolicy.batchesProjections(tokenCount: queryCount,
+                                                   speculativeVerification: speculativeVerification),
+           xStrideElements == d, yStrideElements == d,
+           try encodeBatched(commandBuffer: cb, x: x, xOffset: xOffset,
+                             y: y, yOffset: yOffset,
+                             gate: gate, up: up, down: down,
+                             scratchGate: scratchGate, scratchGateOffset: scratchGateOffset,
+                             scratchUp: scratchUp, scratchUpOffset: scratchUpOffset,
+                             scratchAct: scratchAct, scratchActOffset: scratchActOffset,
+                             queryCount: queryCount, d: d, intermediate: intermediate,
+                             outputGate: outputGate, outputGateOffset: outputGateOffset) {
             return
         }
         for row in 0..<queryCount {

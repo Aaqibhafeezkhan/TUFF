@@ -25,6 +25,9 @@ final class MPPPrefillAffineQMM {
     /// Pipelines by tile shape, smallest M first. A routed expert sees a
     /// handful of rows per chunk, where a 64-row tile is mostly padding.
     private let tiles: [(rows: Int, columns: Int, pso: MTLComputePipelineState)]
+    /// Projections this instance has encoded. Tests read it to confirm which
+    /// path a prefill took.
+    private(set) var encodedProjections = 0
 
     init?(context: MetalContext, bits: Int, groupSize: Int,
           shapes: [(suffix: String, rows: Int, columns: Int)] = MPPPrefillAffineQMM.shapes) {
@@ -102,6 +105,7 @@ final class MPPPrefillAffineQMM {
                 y: MTLBuffer, yOffset: Int,
                 m: Int, n: Int, k: Int) {
         let tile = tiles.first { m <= $0.rows } ?? tiles[tiles.count - 1]
+        encodedProjections += 1
         encoder.setComputePipelineState(tile.pso)
         encoder.setBuffer(weights, offset: weightsOffset, index: 0)
         encoder.setBuffer(scales, offset: scalesOffset, index: 1)

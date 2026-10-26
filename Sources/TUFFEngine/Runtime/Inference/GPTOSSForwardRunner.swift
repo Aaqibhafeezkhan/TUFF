@@ -100,6 +100,8 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
     private(set) var totalCb2Nanos: UInt64 = 0
     private(set) var totalHeadNanos: UInt64 = 0
     private(set) var prefillExpertGroupCount = 0
+    /// Attention projections the batched MPP path has encoded.
+    var batchedPrefillProjections: Int { prefillProjection?.encodedProjections ?? 0 }
     /// Decode-only routed-expert traffic. A read is a cache miss that required
     /// an SSD-backed expert fetch; cache hits are reported separately.
     private(set) var totalRoutedExpertReads: UInt64 = 0
@@ -564,7 +566,8 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
         for layer in 0..<config.numLayers {
             try Task.checkCancellation()
             try await executePrefillLayer(
-                layer, startPosition: startPosition, queryCount: queryCount)
+                layer, startPosition: startPosition, queryCount: queryCount,
+                speculativeVerification: speculativeTargetTokens != nil)
         }
         for _ in 0..<queryCount { kv.advance() }
 
@@ -589,7 +592,8 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
 
     private func executePrefillLayer(_ layer: Int,
                                      startPosition: Int,
-                                     queryCount: Int) async throws {
+                                     queryCount: Int,
+                                     speculativeVerification: Bool) async throws {
         let views = layers[layer]
         let hiddenSize = config.hiddenSize
         let qRows = config.numHeads * config.headDim
@@ -597,9 +601,8 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
         let halfBytes = MemoryLayout<Float16>.stride
 
         let cb1 = context.queue.makeCommandBuffer()!
-        // Below the batched threshold (every speculative verification block)
-        // the decode kernels keep decode's numerics.
-        let batchedChunk = queryCount >= PrefillSharedExpert.minimumBatchedTokens
+        let batchedChunk = PrefillBatchingPolicy.batchesProjections(
+            tokenCount: queryCount, speculativeVerification: speculativeVerification)
 
         func project(_ weights: TensorView, bias: TensorView, input: MTLBuffer,
                      output: MTLBuffer, rows: Int, columns: Int) {
@@ -763,10 +766,9 @@ final class GPTOSSForwardRunner: ChunkedPrefillRunner, ContextWindowReporting,
         let groupSize = max(1, min(availableSlots, orderedExperts.count))
 
         // The batched path wants each expert's pairs contiguous, in the same
-        // order the fetch groups walk the experts. Below the batched threshold
-        // (every speculative verification block) the per-pair kernels keep
-        // decode's numerics.
-        let batched = queryCount >= PrefillSharedExpert.minimumBatchedTokens
+        // order the fetch groups walk the experts.
+        let batched = PrefillBatchingPolicy.batchesRoutedExperts(
+            tokenCount: queryCount, speculativeVerification: speculativeVerification)
             ? batchedExperts : nil
         var pairsByExpert: [Int: (start: Int, count: Int)] = [:]
         var sortedPairsBuffer: MTLBuffer?

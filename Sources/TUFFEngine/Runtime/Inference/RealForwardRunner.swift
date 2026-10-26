@@ -827,6 +827,11 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
     var smallBlockEncodedProjections: Int {
         smallBlockProjection?.encodedProjections ?? 0
     }
+    /// Attention and GDN projections the batched MPP path has encoded, for
+    /// tests that check which path a short prefill block took.
+    var batchedPrefillProjections: Int {
+        prefillMPPAffine?.encodedProjections ?? 0
+    }
     /// The Qwen Gated-DeltaNet state is recurrent rather than rewindable KV,
     /// so this POC advertises verification only for the fused-head affine
     /// path without linear-attention layers.
@@ -1507,25 +1512,9 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                                   tokenCount: Int,
                                   xStrideElements: Int,
                                   yStrideElements: Int) {
-            // Every dense projection with contiguous rows takes the MPP
-            // path; a shape MPP cannot tile falls through to the QMM below.
-            if tokenCount >= 32,
-               family != .routed,
-               xStrideElements == columns, yStrideElements == rows,
-               let mpp = prefillMPPAffine,
-               mpp.encode(commandBuffer: commandBuffer,
-                              weights: weights.buffer,
-                              weightsOffset: Int(weights.offset),
-                              scales: weights.buffer,
-                              scalesOffset: Int(weights.scaleOffset),
-                              biases: weights.buffer,
-                              biasesOffset: Int(weights.biasOffset),
-                              x: x, y: y,
-                              m: tokenCount, n: rows, k: columns) {
-                return
-            }
             // Opt-in: 2-31 token blocks read each weight row once per tile
-            // instead of once per token. A refused shape falls through.
+            // instead of once per token. It runs ahead of MPP so the two can
+            // be compared on one build. A refused shape falls through.
             if smallBlockPrefill.admits(family: family, tokenCount: tokenCount,
                                         speculativeVerification: isSpeculativeVerification),
                let smallBlockProjection,
@@ -1543,6 +1532,26 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                                            rows: rows,
                                            columns: columns,
                                            tokenCount: tokenCount) {
+                return
+            }
+            // Every dense projection of two or more tokens with contiguous rows
+            // takes the MPP path; a shape MPP cannot tile falls through to the
+            // QMM below.
+            if PrefillBatchingPolicy.batchesProjections(
+                   tokenCount: tokenCount,
+                   speculativeVerification: isSpeculativeVerification),
+               family != .routed,
+               xStrideElements == columns, yStrideElements == rows,
+               let mpp = prefillMPPAffine,
+               mpp.encode(commandBuffer: commandBuffer,
+                              weights: weights.buffer,
+                              weightsOffset: Int(weights.offset),
+                              scales: weights.buffer,
+                              scalesOffset: Int(weights.scaleOffset),
+                              biases: weights.buffer,
+                              biasesOffset: Int(weights.biasOffset),
+                              x: x, y: y,
+                              m: tokenCount, n: rows, k: columns) {
                 return
             }
             if PrefillProjectionDispatchPolicy.selectedDispatch(for: family,
@@ -2207,7 +2216,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                     queryCount: t, d: D, intermediate: cfg.intermediateSize,
                     xStrideElements: D, yStrideElements: D,
                     allowSmallBlock: smallBlockPrefill.admits(family: .shared, tokenCount: t,
-                        speculativeVerification: isSpeculativeVerification))
+                        speculativeVerification: isSpeculativeVerification),
+                    speculativeVerification: isSpeculativeVerification)
                 elementwise!.encodeResidualAdd(commandBuffer: cb, hidden: scratch.hidden,
                                                delta: scratch.h1, count: t * D)
                 try finishStagedDenseChunkLayer(L)
@@ -2252,7 +2262,8 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                     yStrideElements: D,
                     allowSmallBlock: smallBlockPrefill.admits(
                         family: .shared, tokenCount: t,
-                        speculativeVerification: isSpeculativeVerification))
+                        speculativeVerification: isSpeculativeVerification),
+                    speculativeVerification: isSpeculativeVerification)
                 prefillRMS.encodeBF16W(
                     commandBuffer: cb,
                     x: scratch.h1,
@@ -2516,6 +2527,7 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                                                         allowSmallBlock: smallBlockPrefill.admits(
                                                             family: .shared, tokenCount: t,
                                                             speculativeVerification: isSpeculativeVerification),
+                                                        speculativeVerification: isSpeculativeVerification,
                                                         outputGate: sharedGateBeforeHalf ? scratch.sharedScalarGate : nil)
                     if cfg.ffnSandwichNorms {
                         let postF1 = sharedProj.postF1!
@@ -2701,10 +2713,9 @@ public final class RealForwardRunner: ChunkedPrefillRunner, MultimodalPrefillRun
                             "prefill start=\(startPosition) count=\(tokens.count) layer=\(L) phase=routed_tile") else {
                             throw ModelError.residentBufferWrapFailed
                         }
-                        // Below the batched threshold (every speculative
-                        // verification block) the per-pair kernels keep
-                        // decode's numerics.
-                        if tokens.count >= PrefillSharedExpert.minimumBatchedTokens,
+                        if PrefillBatchingPolicy.batchesRoutedExperts(
+                               tokenCount: tokens.count,
+                               speculativeVerification: isSpeculativeVerification),
                            let batchedRouted = prefillBatchedRouted,
                            let batchedScratch = prefillBatchedRoutedScratch {
                             let groupStart = Int(tile.groupStart)

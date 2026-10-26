@@ -414,6 +414,16 @@ public final class ModelForwardRunner: ChunkedPrefillRunner,
         #endif
         }
     }
+    var batchedPrefillProjections: Int {
+        switch backend {
+        #if !TUFF_ENGINE_GPT_OSS
+        case .affine(let runner): return runner.batchedPrefillProjections
+        #endif
+        #if !TUFF_ENGINE_AFFINE_ONLY
+        case .gptOss(let runner): return runner.batchedPrefillProjections
+        #endif
+        }
+    }
     /// Diagnostic kernel timing report; see `RealForwardRunner.benchmarkDecodeKernels`.
     public func benchmarkDecodeKernels() throws -> String {
         switch backend {
